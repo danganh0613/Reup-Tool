@@ -109,6 +109,12 @@ class QueuePanel(ctk.CTkFrame):
         self.state.on("active_changed", self._highlight)
         self.rebuild()
 
+    def destroy(self) -> None:
+        # panel bị dựng lại khi đổi theme → gỡ listener cũ, không thì mỗi sự kiện gọi vào widget đã hủy (TclError + log)
+        self.state.off("videos_changed", self.rebuild)
+        self.state.off("active_changed", self._highlight)
+        super().destroy()
+
     # ── Thêm / xoá ───────────────────────────────────────────────────────
     def add_files(self) -> None:
         self._add_files()

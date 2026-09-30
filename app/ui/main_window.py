@@ -122,8 +122,9 @@ class MainWindow(_Root):
             self.after(300, lambda: messagebox.showwarning(
                 APP_NAME, "Không tìm thấy ffmpeg/ffprobe.\nĐặt ffmpeg.exe + ffprobe.exe vào thư mục bin/ "
                           "hoặc chọn đường dẫn trong Cài đặt."))
-        self.log(f"{APP_NAME} sẵn sàng · {self.ffmpeg.version()[:40] or 'chưa có ffmpeg'}"
-                 + (" · kéo thả: bật" if _HAS_DND else ""))
+        dnd = " · kéo thả: bật" if _HAS_DND else ""
+        self.run_bg(self.ffmpeg.version,          # chạy `ffmpeg -version` trong nền, không chặn lúc mở app
+                    lambda v, _e: self.log(f"{APP_NAME} sẵn sàng · {(v or '')[:40] or 'chưa có ffmpeg'}{dnd}"))
 
     # ── Dựng giao diện ────────────────────────────────────────────────────
     def _set_icon(self) -> None:
@@ -305,7 +306,10 @@ class MainWindow(_Root):
         self.modules[key].grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         self.modules[key].on_shown()
         self.after(30, self.modules[key].scroll_top)
+        prev = self._current_module
         for k, b in self._rail_buttons.items():
+            if prev and prev in self._rail_buttons and k not in (prev, key):
+                continue              # chỉ vẽ lại 2 nút đổi trạng thái (mỗi configure vẽ lại cả nút CTk)
             b.configure(fg_color=T.ACCENT_SOFT if k == key else "transparent",
                         text_color=T.ACCENT if k == key else T.TEXT_DIM,
                         image=icon(MODULE_ICONS.get(k, "grid"), 20, T.ACCENT if k == key else T.TEXT_DIM))

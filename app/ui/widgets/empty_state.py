@@ -66,6 +66,22 @@ class EmptyStateArt:
         k, s = self.k, _SS
         px = round(self.TILE * k)
         m = round(18 * k)                                        # lề cho bóng + phần xoay lòi ra
+        base = self._tile_base(name)
+        if angle:
+            base = base.rotate(angle, resample=Image.BICUBIC)   # PIL: dương = ngược chiều kim đồng hồ (CSS ngược lại)
+        small = base.resize((px + 2 * m, px + 2 * m), Image.LANCZOS)
+        img = ImageTk.PhotoImage(small)
+        self._imgs[key] = img
+        return img
+
+    def _tile_base(self, name: str) -> Image.Image:
+        """Ô chưa xoay (bóng mờ Gaussian + thân + icon) — dựng một lần mỗi icon, các góc xoay chỉ còn rotate + resize."""
+        cache = self.__dict__.setdefault("_bases", {})
+        if name in cache:
+            return cache[name]
+        k, s = self.k, _SS
+        px = round(self.TILE * k)
+        m = round(18 * k)
         big = (px + 2 * m) * s
         r = self.RADIUS * k * s
         base = Image.new("RGBA", (big, big), (0, 0, 0, 0))
@@ -81,12 +97,8 @@ class EmptyStateArt:
         ic = glyph_image(name, round(self.ICON * k) * s, T.TEXT_DIM)
         if ic is not None:
             base.alpha_composite(ic, ((big - ic.width) // 2, (big - ic.height) // 2))
-        if angle:
-            base = base.rotate(angle, resample=Image.BICUBIC)   # PIL: dương = ngược chiều kim đồng hồ (CSS ngược lại)
-        small = base.resize((px + 2 * m, px + 2 * m), Image.LANCZOS)
-        img = ImageTk.PhotoImage(small)
-        self._imgs[key] = img
-        return img
+        cache[name] = base
+        return base
 
     def _tile_state(self, i: int, t: float) -> tuple[float, float, float]:
         """(dx, dy, góc PIL) của ô thứ i (0 trái · 1 giữa · 2 phải) theo mức hover t."""

@@ -36,6 +36,7 @@ class BaseModule(ctk.CTkScrollableFrame):
         button(head, "Hướng dẫn", icon_name="info", variant="ghost", size="sm", command=lambda: self.window.toggle_help(self.key), icon_color=T.TEXT_DIM).pack(side="right")
         self.build()
         self.refresh()
+        self._fresh = True        # vừa refresh trong __init__ → lần on_shown đầu tiên khỏi refresh lại
 
     # ── Ghi đè ────────────────────────────────────────────────────────────
     def build(self) -> None:
@@ -49,6 +50,9 @@ class BaseModule(ctk.CTkScrollableFrame):
 
     def on_shown(self) -> None:
         """Module vừa được hiện lên bảng điều khiển: đổ lại giá trị (module khác có thể đã đổi cấu hình)."""
+        if getattr(self, "_fresh", False):
+            self._fresh = False
+            return
         self.refresh()
 
     def on_hidden(self) -> None:

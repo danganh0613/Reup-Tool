@@ -233,13 +233,16 @@ class FFmpeg:
         return Image.open(io.BytesIO(res.stdout)).convert("RGB")
 
     def extract_frame_graph(self, path: str | Path, t: float, graph: str, *, max_width: int = 960,
-                            cwd: str | Path | None = None, inputs: list[list[str]] | None = None) -> Image.Image:
+                            cwd: str | Path | None = None, inputs: list[list[str]] | None = None,
+                            on_proc: Callable[[subprocess.Popen], None] | None = None) -> Image.Image:
         """Như ``extract_frame`` nhưng dùng filter_complex ``graph`` (đầu vào [0:v], đầu ra [vout]).
 
         ``inputs``: các input phụ (logo, mask…) đúng thứ tự chỉ số mà graph tham chiếu.
+        ``on_proc``: nhận tiến trình ffmpeg để nơi gọi có thể ``kill()`` khi yêu cầu đã cũ.
+        Xuất BMP qua pipe (không nén) — nhanh hơn PNG cả phía ffmpeg lẫn PIL.
         """
         self.require()
-        full = f"{graph};[vout]scale='min({max_width},iw)':-2[pv]"
+        full = f"{graph};[vout]scale='min({max_width},iw)':-2,format=rgb24[pv]"
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
                "-ss", f"{max(0.0, t):.3f}", "-i", str(path)]
         for extra in inputs or []:
@@ -247,13 +250,21 @@ class FFmpeg:
                 i = extra.index("-stream_loop")
                 extra = extra[:i] + extra[i + 2:]
             cmd += extra
-        cmd += ["-filter_complex", full, "-map", "[pv]", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
-        res = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW,
-                             cwd=str(cwd) if cwd else None, timeout=60)
-        if res.returncode != 0 or not res.stdout:
-            err = res.stderr.decode("utf-8", "replace").strip()[-400:]
+        cmd += ["-filter_complex", full, "-map", "[pv]", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "bmp", "-"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW,
+                                cwd=str(cwd) if cwd else None)
+        if on_proc is not None:
+            on_proc(proc)
+        try:
+            out, err_b = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError("Không trích được khung hình: quá thời gian (60 giây)")
+        if proc.returncode != 0 or not out:
+            err = err_b.decode("utf-8", "replace").strip()[-400:]
             raise RuntimeError(f"Không trích được khung hình: {err}")
-        return Image.open(io.BytesIO(res.stdout)).convert("RGB")
+        return Image.open(io.BytesIO(out)).convert("RGB")
 
     # ── Âm thanh ──────────────────────────────────────────────────────────
     def decode_pcm(self, path: str | Path, *, sample_rate: int = 24000, tempo: float = 1.0) -> bytes:

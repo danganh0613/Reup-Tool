@@ -186,6 +186,12 @@ class TTSModule(BaseModule):
 
     def _load_voices(self, force: bool = False) -> None:
         cfg = self.state.tts
+        # mỗi lần mở tab TTS đều refresh → chỉ tải lại (mạng / đọc cache) khi đổi nhà cung cấp hoặc cài đặt (API key…)
+        sig = (cfg.tts_provider, repr(self.state.settings))
+        if not force and self._voices and getattr(self, "_voices_sig", None) == sig:
+            self._fill_voice_lists()
+            return
+        self._voices_sig = None
         self.voice_status.info("Đang tải danh sách giọng…")
         self.voice.set_values(["Đang tải danh sách giọng…"], keep=False)
         self.voice.menu.configure(state="disabled")
@@ -207,6 +213,7 @@ class TTSModule(BaseModule):
                 self.voice.set_values(["(lỗi — bấm Tải danh sách giọng)"], keep=False)
                 return
             self._voices = result or []
+            self._voices_sig = sig
             self._fill_voice_lists()
             self.voice_status.info(f"{len(self._voices)} giọng khả dụng.")
             if cfg.tts_provider == "ElevenLabs":

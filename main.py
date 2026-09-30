@@ -104,6 +104,9 @@ def main() -> int:
     logger = logging.getLogger("main")
     logger.info("Khởi động %s…", APP_NAME)
 
+    from app.services.sysinfo import prewarm_gpu_name
+    prewarm_gpu_name()
+
     from app.core.state import AppState
     state = AppState()
     state.load_settings()

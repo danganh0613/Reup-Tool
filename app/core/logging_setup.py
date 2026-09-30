@@ -47,7 +47,7 @@ def setup_logging(level: int = logging.INFO) -> None:
         sh.setFormatter(logging.Formatter(_FMT))
         root.addHandler(sh)
 
-    uh = _UIHandler()
+    uh = _UIHandler(logging.WARNING)      # UI chỉ hiện cảnh báo/lỗi → khỏi định dạng mọi dòng INFO
     uh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S"))
     root.addHandler(uh)
 

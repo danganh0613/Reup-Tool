@@ -85,22 +85,34 @@ class STTModule(BaseModule):
             self.status.info("Chưa có file SRT — tạo xong rồi bấm «Mở SRT».")
 
     def _update_cuda_hint(self, ready: bool | None = None) -> None:
-        from app.services.sysinfo import gpu_name
-        from app.services.whisper_stt import cuda_ready
+        """Dò GPU (nvidia-smi/PowerShell) + nạp thử DLL CUDA trong nền — không làm đơ giao diện khi mở module."""
+        def work():
+            from app.services.sysinfo import gpu_name
+            from app.services.whisper_stt import cuda_ready
 
-        if "NVIDIA" not in gpu_name().upper():
+            name = gpu_name()
+            if "NVIDIA" not in name.upper():
+                return name, False, False
+            return name, True, (cuda_ready() if ready is None else ready)
+
+        self.window.run_bg(work, self._show_cuda_hint)
+
+    def _show_cuda_hint(self, result, error) -> None:
+        if error or result is None:
+            return
+        name, nvidia, ready = result
+        if not nvidia:
             self.cuda_hint.configure(text="Không có GPU NVIDIA → Whisper chạy trên CPU (int8).")
             self.cuda_btn.pack_forget()
             return
-        ready = cuda_ready() if ready is None else ready
         if ready:
-            self.cuda_hint.configure(text=f"✓ CUDA sẵn sàng — Whisper chạy trên {gpu_name()}.")
+            self.cuda_hint.configure(text=f"✓ CUDA sẵn sàng — Whisper chạy trên {name}.")
             self.cuda_btn.pack_forget()
         elif getattr(sys, "frozen", False):
-            self.cuda_hint.configure(text=f"⚠ Có {gpu_name()} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
+            self.cuda_hint.configure(text=f"⚠ Có {name} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
                                           "Bấm nút dưới để tải về (một lần, ~1.3 GB, cần Internet) — hoặc cài bản Setup đủ (có sẵn CUDA).")
         else:
-            self.cuda_hint.configure(text=f"⚠ Có {gpu_name()} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
+            self.cuda_hint.configure(text=f"⚠ Có {name} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
                                           "Bấm nút dưới để cài (pip, không cần CUDA Toolkit).")
 
     def _install_cuda(self) -> None:

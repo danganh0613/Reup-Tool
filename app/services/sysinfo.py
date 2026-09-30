@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from functools import lru_cache
 
 
@@ -33,3 +34,13 @@ def gpu_name() -> str:
     except Exception:
         pass
     return "GPU không xác định"
+
+
+def gpu_name_nowait() -> str | None:
+    """Tên GPU nếu đã dò xong, không thì None — dùng trên luồng UI (lần dò đầu chạy nvidia-smi/PowerShell, 1–10 giây)."""
+    return gpu_name() if gpu_name.cache_info().currsize else None
+
+
+def prewarm_gpu_name() -> None:
+    """Dò tên GPU trong nền ngay khi khởi động để các màn hình sau lấy được ngay."""
+    threading.Thread(target=gpu_name, name="gpu-name", daemon=True).start()

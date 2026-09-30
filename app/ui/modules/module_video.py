@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.config import theme as T
 from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIOS, RESOLUTIONS, VIDEO_CODECS
-from app.services.sysinfo import gpu_name
+from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
 from app.ui.queue_panel import QueuePanel
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, SwitchRow, hint, pack_rows
@@ -52,7 +52,11 @@ class VideoModule(BaseModule):
         sec = Section(self, "Hình ảnh & GPU")
         sec.pack(fill="x", pady=4)
         self.flip = SwitchRow(sec.body, "Lật ngang video (mirror)", on_change=s(cfg, "flip_h"))
-        self.gpu = SwitchRow(sec.body, f"Tăng tốc GPU ({gpu_name()})", on_change=s(cfg, "use_gpu", preview=False))
+        self.gpu = SwitchRow(sec.body, f"Tăng tốc GPU ({gpu_name_nowait() or 'đang dò…'})",
+                             on_change=s(cfg, "use_gpu", preview=False))
+        if gpu_name_nowait() is None:
+            self.window.run_bg(gpu_name, lambda name, _err: self.gpu.switch.configure(
+                text=f"Tăng tốc GPU ({name or 'GPU không xác định'})"))
         self.gpu_hint = hint(sec.body, "")
         self.backend = OptionRow(sec.body, "Bộ mã hóa", GPU_BACKENDS, on_change=s(cfg, "gpu_backend", preview=False))
         self.codec = OptionRow(sec.body, "Chuẩn nén", VIDEO_CODECS, on_change=s(cfg, "video_codec", preview=False))
@@ -132,12 +136,12 @@ class VideoModule(BaseModule):
 
         ff = getattr(self.window, "ffmpeg", None)
         if ff is None or not ff.available:
-            self.gpu_hint.configure(text=f"⚡ {gpu_name()} · chưa tìm thấy ffmpeg nên chưa kiểm tra được bộ mã hóa.")
+            self.gpu_hint.configure(text=f"⚡ {gpu_name_nowait() or 'GPU'} · chưa tìm thấy ffmpeg nên chưa kiểm tra được bộ mã hóa.")
             return
         if getattr(self, "_gpu_probe_running", False):
             return
         self._gpu_probe_running = True
-        self.gpu_hint.configure(text=f"⚡ {gpu_name()} · đang kiểm tra bộ mã hóa phần cứng…")
+        self.gpu_hint.configure(text=f"⚡ {gpu_name_nowait() or 'GPU'} · đang kiểm tra bộ mã hóa phần cứng…")
 
         def done(result, error):
             self._gpu_probe_running = False
@@ -155,7 +159,11 @@ class VideoModule(BaseModule):
             text += " Không có GPU phù hợp sẽ về CPU."
             self.gpu_hint.configure(text=text)
 
-        self.window.run_bg(lambda: available_encoders(ff), done)
+        def work():
+            gpu_name()               # dò tên GPU luôn trong nền → done() lấy từ cache, không chặn UI
+            return available_encoders(ff)
+
+        self.window.run_bg(work, done)
 
     def _fps_changed(self, label: str) -> None:
         self.set_value(self.state.video, "fps", _FPS_BY_LABEL.get(label, "Giữ nguyên"), preview=False)

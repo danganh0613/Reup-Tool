@@ -318,6 +318,7 @@ class SettingsWindow(ctk.CTkToplevel):
             return
 
         def work():
+            gpu_name()               # dò trong nền → done() lấy từ cache
             ok = [b for b in ("nvenc", "qsv", "amf") if ff.encoder_works(f"h264_{b}")]
             return ok
 

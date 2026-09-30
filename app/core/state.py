@@ -435,6 +435,12 @@ class AppState:
     def on(self, event: str, cb: Callable[..., None]) -> None:
         self._listeners.setdefault(event, []).append(cb)
 
+    def off(self, event: str, cb: Callable[..., None]) -> None:
+        try:
+            self._listeners.get(event, []).remove(cb)
+        except ValueError:
+            pass
+
     def emit(self, event: str, *args: Any) -> None:
         for cb in list(self._listeners.get(event, [])):
             try:

@@ -259,11 +259,14 @@ class Popover(tk.Toplevel):
         box.pack()
         self._box = box
         self._filter_var = tk.StringVar()
+        self._fill_after: str | None = None
+        self._chunk_after: str | None = None
+        self._pending: list[str] = []
         if len(self._values) > 12:
             e = ctk.CTkEntry(box, textvariable=self._filter_var, placeholder_text="Gõ để lọc…", height=30, width=self._pw - 12,
                              corner_radius=8, font=T.font(12))
             e.pack(padx=6, pady=(6, 2))
-            self._filter_var.trace_add("write", lambda *_a: self._fill())
+            self._filter_var.trace_add("write", lambda *_a: self._schedule_fill())
             self._entry = e
         else:
             self._entry = None
@@ -288,15 +291,45 @@ class Popover(tk.Toplevel):
         self.bind("<ButtonPress-1>", self._click)
         self.after(20, self._grab)
 
+    CHUNK = 30          # số dòng dựng mỗi nhịp: danh sách dài (font hệ thống, ~400 giọng Edge) hiện ngay, phần sau dựng dần
+
+    def _schedule_fill(self) -> None:
+        """Gõ ô lọc: đợi ngừng gõ ~150 ms rồi mới dựng lại danh sách."""
+        if self._fill_after is not None:
+            self.after_cancel(self._fill_after)
+        self._fill_after = self.after(150, self._fill)
+
+    def _cancel_pending(self) -> None:
+        for attr in ("_fill_after", "_chunk_after"):
+            aid = getattr(self, attr, None)
+            if aid is not None:
+                try:
+                    self.after_cancel(aid)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
+
     def _fill(self) -> None:
+        self._cancel_pending()
         for w in self.list.winfo_children():
             w.destroy()
         q = self._filter_var.get().strip().lower()
-        check = icon("check", 14, T.ACCENT, dy=ICON_DY)
         shown = [v for v in self._values if not q or q in self._labels.get(v, v).lower()]
+        if not shown:
+            ctk.CTkLabel(self.list, text="Không có mục nào", font=T.font(12), text_color=T.TEXT_MUTED).pack(pady=8)
+            return
+        self._pending = shown[:400]
+        self._render_chunk()
+
+    def _render_chunk(self) -> None:
+        self._chunk_after = None
+        if not self.winfo_exists():
+            return
+        batch, self._pending = self._pending[:self.CHUNK], self._pending[self.CHUNK:]
+        check = icon("check", 14, T.ACCENT, dy=ICON_DY)
         row_w = self._pw - 16
         avail = row_w - 24 - 22                              # trừ đệm hai bên + chỗ dấu ✓
-        for v in shown[:400]:
+        for v in batch:
             cur = v == self._current
             label = self._labels.get(v, v)
             b = ctk.CTkButton(self.list, text=label, anchor="w", height=self.ROW_H, width=row_w, corner_radius=6,
@@ -306,8 +339,8 @@ class Popover(tk.Toplevel):
             b.pack(fill="x", padx=2, pady=1)
             if text_width(label, self._row_font) > avail:         # nhãn dài hơn khung → rê chuột thấy đủ
                 Tooltip(b, label, delay=300)
-        if not shown:
-            ctk.CTkLabel(self.list, text="Không có mục nào", font=T.font(12), text_color=T.TEXT_MUTED).pack(pady=8)
+        if self._pending:
+            self._chunk_after = self.after(1, self._render_chunk)
 
     def _grab(self) -> None:
         try:
@@ -336,6 +369,7 @@ class Popover(tk.Toplevel):
         self._on_pick(v)
 
     def close(self) -> None:
+        self._cancel_pending()
         try:
             self.grab_release()
             self.destroy()

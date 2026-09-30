@@ -9,8 +9,10 @@ canvas 106 px → lộ nền tối. Trả về số thực (84.8) thì vẽ đú
 from __future__ import annotations
 
 import math
+import tkinter
 
 from customtkinter.windows.widgets.core_rendering import DrawEngine
+from customtkinter.windows.widgets.ctk_scrollable_frame import CTkScrollableFrame
 from customtkinter.windows.widgets.scaling import CTkScalingBaseClass
 
 
@@ -37,6 +39,35 @@ def _draw_rounded_rect_with_border(self, width, height, corner_radius, border_wi
     return _orig_draw(self, width, height, corner_radius, border_width, overwrite_preferred_drawing_method)
 
 
+# CTkScrollableFrame đăng ký 5 handler toàn cục (bind_all: lăn chuột, Shift) mà destroy() không gỡ → mỗi popup /
+# hộp thoại / lần đổi theme để lại handler «mồ côi»; mọi lần lăn chuột chạy hết chúng và giữ widget cũ trong bộ nhớ.
+def _sf_bind_all(self, sequence=None, func=None, add=None):
+    funcid = tkinter.Misc.bind_all(self, sequence, func, add)
+    if funcid:
+        self.__dict__.setdefault("_es_all_binds", []).append((sequence, funcid))
+    return funcid
+
+
+_orig_sf_destroy = CTkScrollableFrame.destroy
+
+
+def _sf_destroy(self):
+    for sequence, funcid in self.__dict__.pop("_es_all_binds", []):
+        try:
+            script = self.tk.call("bind", "all", sequence)
+            keep = "\n".join(line for line in str(script).split("\n") if line.strip() and funcid not in line)
+            self.tk.call("bind", "all", sequence, keep)
+            self.tk.deletecommand(funcid)
+            # Python ≥ 3.12 ghi lệnh bind_all vào danh sách dọn dẹp của cửa sổ gốc → gỡ ra, tránh xoá lần hai khi đóng app
+            for owner in (self._root(), self):
+                cmds = getattr(owner, "_tclCommands", None)
+                if cmds and funcid in cmds:
+                    cmds.remove(funcid)
+        except Exception:
+            pass
+    _orig_sf_destroy(self)
+
+
 def apply() -> None:
     if getattr(CTkScalingBaseClass, "_es_patched", False):
         return
@@ -44,4 +75,6 @@ def apply() -> None:
     DrawEngine._round_width_to_even_numbers = False
     DrawEngine._round_height_to_even_numbers = False
     DrawEngine.draw_rounded_rect_with_border = _draw_rounded_rect_with_border
+    CTkScrollableFrame.bind_all = _sf_bind_all
+    CTkScrollableFrame.destroy = _sf_destroy
     CTkScalingBaseClass._es_patched = True

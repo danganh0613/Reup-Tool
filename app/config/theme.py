@@ -9,6 +9,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -185,13 +186,19 @@ def apply_theme(name: str = DEFAULT_THEME, accent: str = "") -> None:
 
 # ── Font helper ───────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=None)
 def font(size: int = 13, weight: str = "normal", family: str | None = None) -> ctk.CTkFont:
-    """weight: normal · medium (semibold face, dùng cho nút/nhãn nổi) · bold (tiêu đề)."""
+    """weight: normal · medium (semibold face, dùng cho nút/nhãn nổi) · bold (tiêu đề).
+
+    Dùng chung một CTkFont cho mỗi (cỡ, độ đậm, họ) — mỗi CTkFont là một named font của Tk; tạo mới mỗi lần gọi
+    thì sau vài lần mở cửa sổ / đổi theme có hàng nghìn font. Không ``configure`` font trả về (sẽ đổi mọi nơi dùng).
+    """
     if weight == "medium":
         return ctk.CTkFont(family=family or UI_FONT_MEDIUM, size=size, weight="normal")
     return ctk.CTkFont(family=family or UI_FONT, size=size, weight=weight)
 
 
+@lru_cache(maxsize=None)
 def mono(size: int = 12) -> ctk.CTkFont:
     return ctk.CTkFont(family=MONO_FONT, size=size)
 

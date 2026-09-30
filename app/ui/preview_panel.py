@@ -58,6 +58,14 @@ class PreviewPanel(ctk.CTkFrame):
         self._frame: Image.Image | None = None          # khung đã render (filter)
         self._live: Image.Image | None = None           # khung khi phát
         self._photo: ImageTk.PhotoImage | None = None
+        self._img_id: int | None = None                 # item ảnh duy nhất trên canvas (đổi ảnh bằng paste/itemconfig)
+        self._shown_key: tuple | None = None            # (ảnh nguồn, dw, dh) đang hiển thị → khỏi resize lại
+        self._configure_after: str | None = None
+        self._poll_id: str | None = None
+        self._cursor = ""
+        self._last_text: dict[str, str] = {}
+        self._last_slider_t = -1.0
+        self._frame_proc = None                         # ffmpeg đang trích khung xem trước (giết khi có yêu cầu mới)
         self._req = 0
         self._after_id: str | None = None
         self.tool = "V"
@@ -71,7 +79,9 @@ class PreviewPanel(ctk.CTkFrame):
         self._redo: list[dict] = []
         self._wave_img: Image.Image | None = None
         self._wave_photo: ImageTk.PhotoImage | None = None
-        self.player = Player(window.ffmpeg, self._on_live_frame, self._on_play_end)
+        self._wave_w = 0
+        self._wave_line: int | None = None
+        self.player = Player(window.ffmpeg, None, self._on_play_end)
         self._cues_cache: list[Cue] = []
 
         self.grid_rowconfigure(2, weight=1)
@@ -87,7 +97,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._build_toolbar()
         self._layout_top()
         self.top.bind("<Configure>", lambda _e: self._layout_top())
-        self.canvas.bind("<Configure>", lambda _e: self._redraw())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._motion)
         self.canvas.bind("<ButtonRelease-1>", self._release)
@@ -299,15 +309,17 @@ class PreviewPanel(ctk.CTkFrame):
         self.t = 0.0
         self._frame = self._live = None
         self._wave_img = self._wave_photo = None
+        self._wave_w = 0
+        self._wave_line = None
         self.wave.delete("all")
         self.player.set_source(item.path if item else None)
         if item is None:
-            self.canvas.delete("all")
+            self._clear_canvas()
             self._meta_text = ""
             self.meta.configure(text="")
             self._relayout_top()
-            self.time_label.configure(text="00:00:00 / 00:00:00")
-            self.cue_label.configure(text="")
+            self._set_text(self.time_label, "00:00:00 / 00:00:00")
+            self._set_text(self.cue_label, "")
             self._redraw()
             return
         self._draw_message("Đang tải…")
@@ -337,7 +349,8 @@ class PreviewPanel(ctk.CTkFrame):
                 self.after_cancel(self._after_id)
             except Exception:
                 pass
-        self._after_id = self.after(max(1, delay_ms), self.refresh)
+        # tối thiểu ~60 ms: gom các yêu cầu dồn dập (giữ phím ←/→, J/L, kéo thanh trượt cài đặt) thành một lần trích khung
+        self._after_id = self.after(max(60, delay_ms), self.refresh)
 
     def refresh(self) -> None:
         self._after_id = None
@@ -373,24 +386,42 @@ class PreviewPanel(ctk.CTkFrame):
                                       pre_stages=mods.pre_stages, src_stages=mods.src_stages, include_fps=False,
                                       t0=t / speed, preview=True,
                                       first_extra_input=1)
+            if req != self._req:           # đã có yêu cầu mới hơn → khỏi chạy ffmpeg
+                return req, None, cue_text, cues
             img = self.window.ffmpeg.extract_frame_graph(item.path, t, vg.graph.text(), max_width=1280,
-                                                         cwd=PREVIEW_CACHE_DIR, inputs=vg.graph.extra_inputs)
+                                                         cwd=PREVIEW_CACHE_DIR, inputs=vg.graph.extra_inputs,
+                                                         on_proc=self._track_frame_proc)
             return req, img, cue_text, cues
 
         def done(result, error):
             if error:
+                if req != self._req:        # ffmpeg của yêu cầu cũ bị dừng chủ động
+                    return
                 logger.warning("Preview lỗi: %s", error)
                 self._draw_message(f"Xem trước lỗi:\n{str(error)[-300:]}")
                 return
             r, img, cue_text, cues = result
-            if r != self._req:
+            if r != self._req or img is None:
                 return
             self._frame = img
             self._cues_cache = cues
-            self.cue_label.configure(text=cue_text)
+            self._set_text(self.cue_label, cue_text)
             self._redraw()
 
+        self._kill_frame_proc()
         self.window.run_bg(work, done)
+
+    def _track_frame_proc(self, proc) -> None:
+        self._frame_proc = proc
+
+    def _kill_frame_proc(self) -> None:
+        """Yêu cầu khung mới → dừng ffmpeg của yêu cầu cũ (kết quả của nó sẽ bị bỏ), khỏi tranh CPU."""
+        proc, self._frame_proc = self._frame_proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
     def seek(self, t: float) -> None:
         if self.info is None:
@@ -400,7 +431,7 @@ class PreviewPanel(ctk.CTkFrame):
         self.slider.set(self.t)
         self._update_time()
         if was_playing:
-            self.player.play(self.t, max_width=960)
+            self._play_from(self.t)
         else:
             self.schedule_refresh(0)
 
@@ -412,7 +443,8 @@ class PreviewPanel(ctk.CTkFrame):
                         text_color=T.ON_ACCENT if k == key else T.TEXT,
                         image=button_icon(self._tool_icons[k], size="sm", color=T.ON_ACCENT if k == key else T.TEXT,
                                           with_text=not self._compact))
-        self.canvas.configure(cursor={"V": "fleur", "T": "hand2", "B": "crosshair"}.get(key, "arrow"))
+        self._cursor = {"V": "fleur", "T": "hand2", "B": "crosshair"}.get(key, "arrow")
+        self.canvas.configure(cursor=self._cursor)
         self._redraw()
 
     def _toggle_sub(self) -> None:
@@ -432,6 +464,7 @@ class PreviewPanel(ctk.CTkFrame):
     def set_zoom(self, z: float | None) -> None:
         self.zoom = z
         self.pan = [0, 0]
+        self._update_fit_box()
         self.zoom_label.configure(text="Fit" if z is None else f"{int(z * 100)}%")
         self._redraw()
 
@@ -458,14 +491,19 @@ class PreviewPanel(ctk.CTkFrame):
     def _current_image(self) -> Image.Image | None:
         return self._live if self.player.playing and self._live is not None else self._frame
 
-    def _draw_message(self, text: str) -> None:
+    def _clear_canvas(self) -> None:
         self.canvas.delete("all")
+        self._img_id = None
+        self._shown_key = None
+
+    def _draw_message(self, text: str) -> None:
+        self._clear_canvas()
         self.canvas.create_text(max(1, self.canvas.winfo_width()) // 2, max(1, self.canvas.winfo_height()) // 2,
                                 text=text, fill=T.TEXT_MUTED, font=(T.UI_FONT, 12), justify="center")
 
     def _draw_empty(self) -> None:
         """Chưa có video: thẻ EmptyState kiểu shadcn — 3 ô icon nghiêng, di chuột thì xoè ra; 2 nút thật của app."""
-        self.canvas.delete("all")
+        self._clear_canvas()
         cw, ch = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
         if not getattr(self, "_empty_btns", None):
             self._empty_btns = [
@@ -483,25 +521,73 @@ class PreviewPanel(ctk.CTkFrame):
             self._empty_art.on_hover = lambda on: self.canvas.configure(cursor="hand2" if on else "arrow")
         self._empty_art.draw(cw, ch)
 
+    def _on_canvas_configure(self, _e=None) -> None:
+        """Kéo giãn cửa sổ bắn hàng chục <Configure>/giây → gom lại, vẽ một lần."""
+        if self._configure_after is not None:
+            try:
+                self.after_cancel(self._configure_after)
+            except Exception:
+                pass
+        self._configure_after = self.after(40, self._configured)
+
+    def _configured(self) -> None:
+        self._configure_after = None
+        self._update_fit_box()
+        self._redraw()
+
+    def _update_fit_box(self) -> None:
+        cw, ch = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
+        self.player.fit_box = (cw - 8, ch - 8) if self.zoom is None else None
+
     def _redraw(self) -> None:
+        """Ảnh: một item duy nhất, chỉ resize/chuyển PhotoImage khi ảnh hoặc cỡ đổi; lớp phủ (tag «ov») vẽ lại riêng."""
         img = self._current_image()
-        self.canvas.delete("all")
         self._badges = []
         if img is None:
+            self._clear_canvas()
             if self.item is None:
                 self._draw_empty()
             return
-        cw, ch = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
+        cv = self.canvas
+        if self._img_id is None:
+            cv.delete("all")          # xoá chữ «Đang tải…» / thẻ trống
+        else:
+            cv.delete("ov")
+        cw, ch = max(1, cv.winfo_width()), max(1, cv.winfo_height())
         scale = self.zoom if self.zoom is not None else self._fit_scale()
         dw, dh = max(1, int(img.width * scale)), max(1, int(img.height * scale))
+        if self.zoom is None and abs(dw - img.width) <= 2 and abs(dh - img.height) <= 2:
+            dw, dh = img.size         # khung phát đã được thu đúng cỡ trong thread → khỏi resize
         ox, oy = (cw - dw) // 2 + self.pan[0], (ch - dh) // 2 + self.pan[1]
         self._fit = (ox, oy, dw, dh)
-        shown = img.resize((dw, dh), Image.BILINEAR) if (dw, dh) != img.size else img
-        self._photo = ImageTk.PhotoImage(shown)
-        self.canvas.create_image(ox, oy, image=self._photo, anchor="nw")
+        # giữ chính ảnh nguồn trong khoá (so bằng «is»): id() có thể bị tái dùng sau khi ảnh cũ bị giải phóng
+        sk = self._shown_key
+        if sk is None or sk[0] is not img or sk[1:] != (dw, dh) or self._img_id is None:
+            shown = img.resize((dw, dh), Image.BILINEAR) if (dw, dh) != img.size else img
+            if self._photo is not None and self._img_id is not None and \
+                    (self._photo.width(), self._photo.height()) == (dw, dh):
+                self._photo.paste(shown)
+            else:
+                self._photo = ImageTk.PhotoImage(shown)
+                if self._img_id is not None:
+                    cv.itemconfigure(self._img_id, image=self._photo)
+            self._shown_key = (img, dw, dh)
+        if self._img_id is None:
+            self._img_id = cv.create_image(ox, oy, image=self._photo, anchor="nw")
+        else:
+            cv.coords(self._img_id, ox, oy)
         if self.player.playing:
             self._draw_live_subtitle(ox, oy, dw, dh)
         self._draw_overlays(ox, oy, dw, dh)
+
+    def _ov_text(self, *a, **kw) -> int:
+        return self.canvas.create_text(*a, tags="ov", **kw)
+
+    def _ov_rectangle(self, *a, **kw) -> int:
+        return self.canvas.create_rectangle(*a, tags="ov", **kw)
+
+    def _ov_oval(self, *a, **kw) -> int:
+        return self.canvas.create_oval(*a, tags="ov", **kw)
 
     def _draw_live_subtitle(self, ox, oy, dw, dh) -> None:
         if not (self.state.subtitle.enable_subtitle and self.show_sub):
@@ -514,8 +600,8 @@ class PreviewPanel(ctk.CTkFrame):
         x = ox + int((cfg.box_x + cfg.box_w / 2) * dw)
         y = oy + int((cfg.box_y + cfg.box_h) * dh)
         font = (cfg.sub_font or "Arial", size, "bold" if cfg.sub_bold else "normal")
-        self.canvas.create_text(x + 2, y + 2, text=c.plain, fill="#000000", font=font, anchor="s", width=int(cfg.box_w * dw))
-        self.canvas.create_text(x, y, text=c.plain, fill=cfg.sub_color, font=font, anchor="s", width=int(cfg.box_w * dw))
+        self._ov_text(x + 2, y + 2, text=c.plain, fill="#000000", font=font, anchor="s", width=int(cfg.box_w * dw))
+        self._ov_text(x, y, text=c.plain, fill=cfg.sub_color, font=font, anchor="s", width=int(cfg.box_w * dw))
 
     def _draw_overlays(self, ox, oy, dw, dh) -> None:
         cv = self.canvas
@@ -530,8 +616,8 @@ class PreviewPanel(ctk.CTkFrame):
                     continue
                 active = i == self.state.blur.active_index
                 col = "#F59E0B" if active else "#FDE68A"
-                cv.create_rectangle(x0, y0, x1, y1, outline=col, width=3 if active else 1, dash=() if active else (4, 3))
-                cv.create_text(x0 + 6, y0 + 4, text=f"Blur {i + 1}", fill=col, anchor="nw", font=(T.UI_FONT, 10, "bold"))
+                self._ov_rectangle(x0, y0, x1, y1, outline=col, width=3 if active else 1, dash=() if active else (4, 3))
+                self._ov_text(x0 + 6, y0 + 4, text=f"Blur {i + 1}", fill=col, anchor="nw", font=(T.UI_FONT, 10, "bold"))
                 if active and self.tool == "B":
                     self._draw_handles(x0, y0, x1, y1, col)
                     self._draw_delete_badge("blur", i, x1, y0)
@@ -539,8 +625,8 @@ class PreviewPanel(ctk.CTkFrame):
             cfg = self.state.subtitle
             x0, y0 = ox + cfg.box_x * dw, oy + cfg.box_y * dh
             x1, y1 = x0 + cfg.box_w * dw, y0 + cfg.box_h * dh
-            cv.create_rectangle(x0, y0, x1, y1, outline="#22D3EE", width=2, dash=(6, 3))
-            cv.create_text(x0 + 6, y0 - 4, text="Khung phụ đề", fill="#22D3EE", anchor="sw", font=(T.UI_FONT, 10, "bold"))
+            self._ov_rectangle(x0, y0, x1, y1, outline="#22D3EE", width=2, dash=(6, 3))
+            self._ov_text(x0 + 6, y0 - 4, text="Khung phụ đề", fill="#22D3EE", anchor="sw", font=(T.UI_FONT, 10, "bold"))
             if self.tool == "T":
                 self._draw_handles(x0, y0, x1, y1, "#22D3EE")
                 self._draw_delete_badge("sub", 0, x1, y0)
@@ -549,14 +635,14 @@ class PreviewPanel(ctk.CTkFrame):
         """Nút ✕ tròn ở góc trên-phải khung đang chọn; bấm để xóa vùng / tắt phụ đề."""
         r = 11
         cx, cy = x + 4, y - 4
-        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=T.DANGER, outline="#000000")
-        self.canvas.create_text(cx, cy, text="✕", fill="#FFFFFF", font=(T.UI_FONT, 10, "bold"))
+        self._ov_oval(cx - r, cy - r, cx + r, cy + r, fill=T.DANGER, outline="#000000")
+        self._ov_text(cx, cy, text="✕", fill="#FFFFFF", font=(T.UI_FONT, 10, "bold"))
         self._badges.append((kind, idx, cx, cy, r + 3))
 
     def _draw_handles(self, x0, y0, x1, y1, col) -> None:
         for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1),
                        (x0, (y0 + y1) / 2), (x1, (y0 + y1) / 2)):
-            self.canvas.create_rectangle(hx - HANDLE, hy - HANDLE, hx + HANDLE, hy + HANDLE, fill=col, outline="#000000")
+            self._ov_rectangle(hx - HANDLE, hy - HANDLE, hx + HANDLE, hy + HANDLE, fill=col, outline="#000000")
 
     # ── Chuột ─────────────────────────────────────────────────────────────
     def _to_frac(self, x: int, y: int) -> tuple[float, float]:
@@ -747,7 +833,9 @@ class PreviewPanel(ctk.CTkFrame):
         else:
             cur = {"move": "fleur", "nw": "size_nw_se", "se": "size_nw_se", "ne": "size_ne_sw", "sw": "size_ne_sw",
                    "n": "size_ns", "s": "size_ns", "w": "size_we", "e": "size_we"}.get(hit[2], "fleur")
-        self.canvas.configure(cursor=cur)
+        if cur != self._cursor:
+            self._cursor = cur
+            self.canvas.configure(cursor=cur)
 
     # ── Xóa vùng chọn ─────────────────────────────────────────────────────
     def delete_selection(self, kind: str | None = None, idx: int | None = None) -> None:
@@ -833,29 +921,49 @@ class PreviewPanel(ctk.CTkFrame):
         if self.item is None or self.info is None:
             return
         self._cues_cache = self.window.pipeline.subtitle_cues(self.item)
-        self.player.play(self.t, max_width=960)
+        self._play_from(self.t)
         self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+
+    def _play_from(self, t: float) -> None:
+        self._kill_frame_proc()
+        self._update_fit_box()
+        self.player.play(t, max_width=960)
+        if self._poll_id is None:
+            self._poll_id = self.after(15, self._poll_live)
 
     def stop_play(self) -> None:
         if self.player.playing:
             self.player.stop()
+        if self._poll_id is not None:
+            try:
+                self.after_cancel(self._poll_id)
+            except Exception:
+                pass
+            self._poll_id = None
         self.play_btn.configure(text="Phát", image=button_icon("play", size="sm", color=T.ON_ACCENT))
         self._live = None
         if self.item is not None:
             self.schedule_refresh(0)
 
-    def _on_live_frame(self, img: Image.Image, t: float) -> None:
-        def ui():
-            if not self.player.playing:
-                return
+    def _poll_live(self) -> None:
+        """Nhịp UI khi phát: lấy khung mới nhất từ player (nếu có) rồi vẽ; không có khung mới thì không làm gì."""
+        self._poll_id = None
+        if not self.player.playing:
+            return
+        f = self.player.take_frame()
+        if f is not None:
+            img, t = f
             self._live = img
             self.t = t
-            self.slider.set(t)
-            self._update_time()
+            # thanh trượt / nhãn giờ là widget CTk (vẽ lại cả canvas) → cập nhật ~5 lần/giây là đủ
+            if abs(t - self._last_slider_t) >= 0.2 or t < self._last_slider_t:
+                self._last_slider_t = t
+                self.slider.set(t)
+                self._update_time()
             c = cue_at(self._cues_cache, t)
-            self.cue_label.configure(text=c.plain if c else "")
+            self._set_text(self.cue_label, c.plain if c else "")
             self._redraw()
-        self.window.ui_call(ui)
+        self._poll_id = self.after(15, self._poll_live)
 
     def _on_play_end(self) -> None:
         self.window.ui_call(self.stop_play)
@@ -864,7 +972,7 @@ class PreviewPanel(ctk.CTkFrame):
         self.player.muted = not self.player.muted
         self.mute_btn.configure(image=button_icon("mute" if self.player.muted else "speaker", size="sm", with_text=False))
         if self.player.playing:
-            self.player.play(self.t, max_width=960)
+            self._play_from(self.t)
 
     def _vol(self, v: float) -> None:
         self.player.volume = max(0.0, min(1.5, v / 100.0))
@@ -873,6 +981,7 @@ class PreviewPanel(ctk.CTkFrame):
     def load_waveform(self) -> None:
         if self.item is None or not self.info or not self.info.has_audio:
             self.wave.delete("all")
+            self._wave_img, self._wave_w, self._wave_line = None, 0, None
             self.wave.create_text(10, 24, text="Không có dữ liệu sóng âm", fill=T.TEXT_MUTED, anchor="w", font=(T.UI_FONT, 10))
             return
         width = max(300, self.wave.winfo_width())
@@ -883,6 +992,7 @@ class PreviewPanel(ctk.CTkFrame):
                 return
             try:
                 self._wave_img = Image.open(result).convert("RGB")
+                self._wave_w = 0
                 self._draw_wave()
             except Exception:
                 pass
@@ -890,20 +1000,30 @@ class PreviewPanel(ctk.CTkFrame):
         self.window.run_bg(lambda: waveform_png(self.window.ffmpeg, path, width, 48, T.ACCENT), done)
 
     def _draw_wave(self) -> None:
-        self.wave.delete("all")
+        """Ảnh sóng âm dựng lại chỉ khi đổi độ rộng; vạch vị trí chỉ dời bằng coords."""
         img = self._wave_img
         if img is None:
+            self.wave.delete("all")
+            self._wave_w, self._wave_line = 0, None
             self.wave.create_text(10, 24, text="Chưa có dữ liệu sóng âm (Audio Waveform) — bấm “Sóng âm”",
                                   fill=T.TEXT_MUTED, anchor="w", font=(T.UI_FONT, 10))
             return
         w = max(1, self.wave.winfo_width())
-        if img.width != w:
-            img = img.resize((w, 48))
-        self._wave_photo = ImageTk.PhotoImage(img)
-        self.wave.create_image(0, 0, image=self._wave_photo, anchor="nw")
-        if self.info and self.info.duration > 0:
-            x = int(w * self.t / self.info.duration)
-            self.wave.create_line(x, 0, x, 48, fill="#F59E0B", width=2)
+        if w != self._wave_w or self._wave_line is None:
+            self.wave.delete("all")
+            if img.width != w:
+                img = img.resize((w, 48))
+            self._wave_photo = ImageTk.PhotoImage(img)
+            self.wave.create_image(0, 0, image=self._wave_photo, anchor="nw")
+            self._wave_line = self.wave.create_line(0, 0, 0, 48, fill="#F59E0B", width=2)
+            self._wave_w = w
+        self._move_wave_line()
+
+    def _move_wave_line(self) -> None:
+        if self._wave_line is None:
+            return
+        x = int(self._wave_w * self.t / self.info.duration) if self.info and self.info.duration > 0 else 0
+        self.wave.coords(self._wave_line, x, 0, x, 48)
 
     def _wave_click(self, e) -> None:
         if self.info and self.info.duration > 0:
@@ -911,11 +1031,21 @@ class PreviewPanel(ctk.CTkFrame):
             self.seek(self.info.duration * e.x / w)
 
     # ── Khác ─────────────────────────────────────────────────────────────
+    def _set_text(self, widget, text: str) -> None:
+        """configure(text=…) của CTk vẽ lại widget → chỉ gọi khi chữ thực sự đổi."""
+        key = str(widget)
+        if self._last_text.get(key) != text:
+            self._last_text[key] = text
+            widget.configure(text=text)
+
     def _update_time(self) -> None:
         total = self.info.duration if self.info else 0
-        self.time_label.configure(text=f"{format_ts(self.t, '.')[:8]} / {format_ts(total, '.')[:8]}")
+        self._set_text(self.time_label, f"{format_ts(self.t, '.')[:8]} / {format_ts(total, '.')[:8]}")
         if self._wave_img is not None:
-            self._draw_wave()
+            if self._wave_line is None:
+                self._draw_wave()
+            else:
+                self._move_wave_line()
 
     def _slid(self, v: float) -> None:
         self.t = float(v)
