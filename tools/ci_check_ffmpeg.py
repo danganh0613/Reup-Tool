@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
-    ffmpeg = sys.argv[1]
+    ffmpeg = str(Path(sys.argv[1]).resolve())        # bước render chạy trong thư mục tạm → cần đường dẫn tuyệt đối
     need_encoders = sys.argv[2:]
     filters = subprocess.run([ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True).stdout
     if not any(line.split()[1:2] == ["ass"] for line in filters.splitlines() if len(line.split()) > 1):
