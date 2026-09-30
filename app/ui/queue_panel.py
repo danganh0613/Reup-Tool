@@ -1,0 +1,182 @@
+"""Hàng đợi video: thêm/xoá, chọn video đang làm việc, theo dõi tiến độ."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from tkinter import filedialog
+from typing import TYPE_CHECKING
+
+import customtkinter as ctk
+
+from app.config import theme as T
+from app.ui.widgets.ui import button
+from app.core.state import VideoItem
+from app.services.srt_utils import format_ts
+
+if TYPE_CHECKING:
+    from app.ui.main_window import MainWindow
+
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
+_STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING}
+
+
+class QueueRow(ctk.CTkFrame):
+    def __init__(self, master, panel: QueuePanel, index: int, item: VideoItem) -> None:
+        super().__init__(master, fg_color=T.BG_CARD, corner_radius=8, border_width=1, border_color=T.BORDER_SOFT)
+        self.panel, self.index, self.item = panel, index, item
+        self.grid_columnconfigure(1, weight=1)
+        self.num = ctk.CTkLabel(self, text=f"{index + 1}", width=26, font=T.font(12, "bold"), text_color=T.TEXT_MUTED)
+        self.num.grid(row=0, column=0, rowspan=2, padx=(8, 4), pady=6)
+        self.name = ctk.CTkLabel(self, text=item.name, font=T.font(12, "bold"), anchor="w")
+        self.name.grid(row=0, column=1, sticky="ew", pady=(6, 0))
+        self.info = ctk.CTkLabel(self, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w")
+        self.info.grid(row=1, column=1, sticky="ew", pady=(0, 6))
+        self.status = ctk.CTkLabel(self, text=item.status, font=T.font(11, "bold"), width=110, anchor="e")
+        self.status.grid(row=0, column=2, padx=8, pady=(6, 0), sticky="e")
+        self.bar = ctk.CTkProgressBar(self, width=110, height=8)
+        self.bar.grid(row=1, column=2, padx=8, pady=(0, 6), sticky="e")
+        self.bar.set(0)
+        self.remove_btn = button(self, "", icon_name="close", variant="ghost", size="sm", command=self._remove, icon_color=T.TEXT_DIM, width=28,
+                                 tip="Bỏ video này khỏi hàng đợi")
+        self.remove_btn.grid(row=0, column=3, rowspan=2, padx=(0, 8))
+        for w in (self, self.num, self.name, self.info, self.status):
+            w.bind("<Button-1>", lambda _e: self.panel.state.set_active(self.index))
+            w.bind("<Double-Button-1>", lambda _e: self._open_output())
+        self.update_view()
+
+    def _remove(self) -> None:
+        self.panel.state.remove_video(self.index)
+
+    def _open_output(self) -> None:
+        p = self.item.output_path or self.item.path
+        if p and Path(p).exists():
+            os.startfile(p)
+
+    def update_view(self) -> None:
+        it = self.item
+        parts = []
+        if it.width:
+            parts.append(f"{it.width}×{it.height}")
+        if it.duration:
+            parts.append(format_ts(it.duration, ".")[:8])
+        flags = []
+        if it.srt_path:
+            flags.append("SRT")
+        if it.srt_translated_path:
+            flags.append("Dịch")
+        if it.voice_path:
+            flags.append("Giọng")
+        if flags:
+            parts.append(" · ".join(flags))
+        if it.message and it.status in ("Đang xử lý", "Lỗi"):
+            parts.append(it.message)
+        self.info.configure(text="  |  ".join(parts) if parts else "Chưa đọc thông tin")
+        self.status.configure(text=it.status, text_color=_STATUS_COLOR.get(it.status, T.TEXT))
+        self.bar.set(max(0.0, min(1.0, it.progress)))
+        active = self.panel.state.active_index == self.index
+        self.configure(border_color=T.ACCENT if active else T.BORDER_SOFT, border_width=2 if active else 1)
+
+
+class QueuePanel(ctk.CTkFrame):
+    def __init__(self, master, window: MainWindow, *, compact: bool = False, height: int = 220) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.window = window
+        self.state = window.app_state
+        self.rows: list[QueueRow] = []
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.count_label = ctk.CTkLabel(head, text="HÀNG ĐỢI", font=T.font(11, "bold"), anchor="w", text_color=T.TEXT_DIM)
+        self.count_label.pack(side="left")
+        self.count_right = ctk.CTkLabel(head, text="0 video", font=T.font(11), text_color=T.TEXT_MUTED)
+        self.count_right.pack(side="right")
+        if not compact:
+            button(head, "Xoá hết", icon_name="trash", variant="destructive", size="sm", command=self._clear).pack(
+                side="right", padx=(4, 0))
+            button(head, "Thư mục", icon_name="add", size="sm", command=self._add_folder).pack(side="right", padx=(4, 0))
+            button(head, "Thêm video", icon_name="add", variant="primary", size="sm", command=self._add_files).pack(side="right")
+
+        self.list = ctk.CTkScrollableFrame(self, fg_color=T.BG_INPUT, corner_radius=8, height=height)
+        self.list.grid(row=1, column=0, sticky="nsew")
+        self.list.grid_columnconfigure(0, weight=1)
+        self.empty = ctk.CTkLabel(self.list, text="Chưa có video — bấm Nạp video hoặc kéo thả vào cửa sổ.",
+                                  text_color=T.TEXT_MUTED, font=T.font(12))
+
+        self.state.on("videos_changed", self.rebuild)
+        self.state.on("active_changed", self._highlight)
+        self.rebuild()
+
+    # ── Thêm / xoá ───────────────────────────────────────────────────────
+    def add_files(self) -> None:
+        self._add_files()
+
+    def add_folder(self) -> None:
+        self._add_folder()
+
+    def clear(self) -> None:
+        self._clear()
+
+    def _add_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Chọn video", filetypes=[("Video", " ".join(f"*{e}" for e in sorted(VIDEO_EXTS))), ("Tất cả", "*.*")])
+        if paths:
+            self.add_paths(list(paths))
+
+    def _add_folder(self) -> None:
+        d = filedialog.askdirectory(title="Chọn thư mục chứa video")
+        if d:
+            self.add_paths([str(p) for p in sorted(Path(d).iterdir()) if p.suffix.lower() in VIDEO_EXTS])
+
+    def add_paths(self, paths: list[str]) -> None:
+        vids: list[str] = []
+        for p in paths:
+            pp = Path(p)
+            if pp.is_dir():
+                vids.extend(str(x) for x in sorted(pp.iterdir()) if x.suffix.lower() in VIDEO_EXTS)
+            elif pp.suffix.lower() in VIDEO_EXTS:
+                vids.append(str(pp))
+        added = self.state.add_videos(vids)
+        if added:
+            # tự tìm SRT cùng tên cạnh video
+            for it in added:
+                srt = Path(it.path).with_suffix(".srt")
+                if srt.exists():
+                    it.srt_path = str(srt)
+            self.state.set_active(len(self.state.videos) - len(added))
+            self.state.emit("active_changed")
+            self.window.log(f"Đã thêm {len(added)} video.")
+
+    def _clear(self) -> None:
+        if self.window.runner.running:
+            self.window.log("Đang render — dừng trước khi xoá hàng đợi.")
+            return
+        self.state.clear_videos()
+
+    # ── Vẽ ────────────────────────────────────────────────────────────────
+    def rebuild(self) -> None:
+        for r in self.rows:
+            r.destroy()
+        self.rows.clear()
+        self.empty.grid_forget()
+        vids = self.state.videos
+        self.count_right.configure(text=f"{len(vids)} video")
+        if not vids:
+            self.empty.grid(row=0, column=0, pady=20)
+            return
+        for i, it in enumerate(vids):
+            row = QueueRow(self.list, self, i, it)
+            row.grid(row=i, column=0, sticky="ew", pady=2, padx=2)
+            self.rows.append(row)
+
+    def _highlight(self) -> None:
+        for r in self.rows:
+            r.update_view()
+
+    def update_row(self, item: VideoItem) -> None:
+        for r in self.rows:
+            if r.item is item:
+                r.update_view()
+                return

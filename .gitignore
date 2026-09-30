@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+/bin/*.exe
+/output/
+/cache/
+/models/
+/logs/
+/settings.json
+/build/
+/dist/
+
+release/
