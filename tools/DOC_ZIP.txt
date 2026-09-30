@@ -1,0 +1,24 @@
+EDIT STUDIO — BẢN ZIP (Windows 10/11 64-bit)
+============================================
+
+CÀI ĐẶT
+  1. Giải nén file .zip ra một thư mục bất kỳ, ví dụ D:\Apps\EditStudio
+     (chuột phải → Extract All… / Giải nén tất cả). Đừng chạy thẳng trong file zip.
+  2. Mở thư mục EditStudio → chạy EditStudio.exe.
+  3. Nếu Windows hiện "Windows đã bảo vệ PC của bạn": bấm "Thông tin khác" → "Vẫn chạy".
+     (Phần mềm chưa có chứng chỉ ký số nên SmartScreen cảnh báo.)
+  4. Muốn có lối tắt: chuột phải EditStudio.exe → Send to → Desktop (create shortcut).
+
+MÁY CẦN GÌ?
+  • Không cần cài Python hay FFmpeg — đã có sẵn trong thư mục (bin\ffmpeg.exe, bin\ffprobe.exe).
+  • Bản zip này là bản gọn (không kèm CUDA): Whisper nhận dạng giọng nói chạy bằng CPU.
+    Máy có card NVIDIA vẫn dùng GPU để RENDER video (NVENC). Muốn Whisper chạy GPU: trong module STT
+    bấm «Tải CUDA runtime cho Whisper GPU» (một lần, ~1.3 GB).
+  • Internet: cần khi tải model Whisper lần đầu, khi dịch AI / giọng cloud.
+  • API key (Gemini, ElevenLabs, Google…): nhập trong Cài đặt, lưu ở settings.json cạnh EditStudio.exe.
+
+CẬP NHẬT
+  Giải nén bản mới đè lên thư mục cũ. settings.json, output\, models\ được giữ nguyên.
+
+GỠ
+  Xoá thư mục. Phần mềm không ghi gì vào Registry.

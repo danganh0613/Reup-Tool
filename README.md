@@ -78,6 +78,17 @@ presets/  cache/  models/  logs/  voices/(giọng clone)
 build.bat        # PyInstaller → dist/EditStudio/EditStudio.exe (kèm bin/ffmpeg, app/assets, presets)
 ```
 
+### Bản ZIP tự build trên GitHub
+
+Workflow `.github/workflows/build-windows.yml` build bản gọn (không CUDA) trên máy Windows của GitHub Actions,
+chạy thử `EditStudio.exe --selftest` rồi nén thành `EditStudio-<ver>-win64-Lite.zip` (kèm FFmpeg):
+
+- Mỗi pull request / push lên `main`: tab **Actions** → lần chạy **Build Windows** → mục **Artifacts** → tải ZIP (giữ 7 ngày).
+- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP, tải lâu dài.
+- Chạy tay: **Actions** → **Build Windows** → **Run workflow**.
+
+Người dùng chỉ cần giải nén rồi chạy `EditStudio.exe` (hướng dẫn trong `DOC_TRUOC.txt` của bản ZIP).
+
 - Thư mục `dist/EditStudio` (~690 MB) copy đi máy khác chạy được; mỗi lần build lại PyInstaller **xoá và tạo mới**
   thư mục này, nên `output/`, `models/`, `settings.json` trong đó sẽ mất — giữ bản gốc ở nơi khác.
 - Bản .exe **không có VieNeu và Demucs** (cần torch ~2 GB) và không tự `pip install` được; muốn dùng thì chạy bản
