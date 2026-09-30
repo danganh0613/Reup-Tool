@@ -144,7 +144,13 @@ class SRTEditorDialog(ctk.CTkToplevel):
 
 
 class ManualTranslateDialog(ctk.CTkToplevel):
-    """Bảng dịch tay: mỗi cue một ô nhập bản dịch; có thể dịch AI các cue đã chọn."""
+    """Bảng dịch tay: mỗi cue một ô nhập bản dịch; có thể dịch AI các cue đã chọn.
+
+    SRT dài (hàng nghìn cue) → chia trang ``PAGE`` cue; các dòng widget dựng một lần rồi đổ dữ liệu trang mới vào
+    (dựng 4 widget CTk × mọi cue một lúc làm cửa sổ mở mất nhiều giây). Dữ liệu thật nằm ở ``translated`` / ``checked``.
+    """
+
+    PAGE = 50
 
     def __init__(self, window, item: VideoItem, on_saved: Callable[[], None] | None = None) -> None:
         super().__init__(window)
@@ -162,9 +168,10 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         if item.srt_translated_path and Path(item.srt_translated_path).exists():
             tr = load_srt(item.srt_translated_path)
             for i, c in enumerate(tr[:len(self.cues)]):
-                self.translated[i] = c.text
-        self.checks: list[ctk.BooleanVar] = []
-        self.entries: list[ctk.CTkEntry] = []
+                self.translated[i] = c.text.replace("\n", " ")
+        self.checked: list[bool] = [False] * len(self.cues)
+        self.page = 0
+        self.pages = max(1, (len(self.cues) + self.PAGE - 1) // self.PAGE)
 
         head = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=8)
         head.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
@@ -179,30 +186,84 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         self.list.grid(row=1, column=0, sticky="nsew", padx=10)
         self.list.grid_columnconfigure(2, weight=1)
         self.list.grid_columnconfigure(3, weight=1)
-        for i, c in enumerate(self.cues):
+        self._rows: list[dict] = []
+        for r in range(min(self.PAGE, len(self.cues))):
             var = ctk.BooleanVar(value=False)
-            self.checks.append(var)
-            ctk.CTkCheckBox(self.list, text="", variable=var, width=24).grid(row=i, column=0, padx=(0, 4), pady=2)
-            ctk.CTkLabel(self.list, text=f"{i + 1}\n{format_ts(c.start, '.')[:8]}", font=T.mono(10), text_color=T.TEXT_MUTED,
-                         width=80, anchor="w", justify="left").grid(row=i, column=1, sticky="w", pady=2)
-            ctk.CTkLabel(self.list, text=c.plain, font=T.font(11), anchor="w", justify="left", wraplength=460,
-                         text_color=T.TEXT_DIM).grid(row=i, column=2, sticky="ew", padx=(0, 8), pady=2)
+            chk = ctk.CTkCheckBox(self.list, text="", variable=var, width=24)
+            idx = ctk.CTkLabel(self.list, text="", font=T.mono(10), text_color=T.TEXT_MUTED, width=80, anchor="w", justify="left")
+            src = ctk.CTkLabel(self.list, text="", font=T.font(11), anchor="w", justify="left", wraplength=460,
+                               text_color=T.TEXT_DIM)
             e = ctk.CTkEntry(self.list, height=32, font=T.font(12))
-            e.insert(0, self.translated[i].replace("\n", " "))
-            e.grid(row=i, column=3, sticky="ew", pady=2)
-            self.entries.append(e)
+            self._rows.append({"var": var, "widgets": [(chk, dict(row=r, column=0, padx=(0, 4), pady=2)),
+                                                       (idx, dict(row=r, column=1, sticky="w", pady=2)),
+                                                       (src, dict(row=r, column=2, sticky="ew", padx=(0, 8), pady=2)),
+                                                       (e, dict(row=r, column=3, sticky="ew", pady=2))],
+                               "idx": idx, "src": src, "entry": e})
 
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        nav = ctk.CTkFrame(foot, fg_color="transparent")
+        nav.pack(side="left")
+        self.prev_btn = ctk.CTkButton(nav, text="‹ Trước", width=80, height=32, command=lambda: self._show_page(self.page - 1),
+                                      **T.secondary_button())
+        self.prev_btn.pack(side="left")
+        self.page_label = ctk.CTkLabel(nav, text="", font=T.font(11), width=170)
+        self.page_label.pack(side="left", padx=6)
+        self.next_btn = ctk.CTkButton(nav, text="Sau ›", width=80, height=32, command=lambda: self._show_page(self.page + 1),
+                                      **T.secondary_button())
+        self.next_btn.pack(side="left")
+        if self.pages <= 1:
+            nav.pack_forget()
         self.status = ctk.CTkLabel(foot, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w")
-        self.status.pack(side="left", fill="x", expand=True)
+        self.status.pack(side="left", fill="x", expand=True, padx=(10, 0))
         button(foot, "Lưu bản dịch", icon_name="save", variant="primary", command=self._save).pack(side="right")
         button(foot, "Dịch AI đã chọn", icon_name="sparkle", command=self._ai_selected).pack(side="right", padx=8)
         ctk.CTkButton(foot, text="Đóng", width=90, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
+        self._show_page(0, sync=False)
+
+    # ── Trang ─────────────────────────────────────────────────────────────
+    def _page_range(self) -> range:
+        a = self.page * self.PAGE
+        return range(a, min(a + self.PAGE, len(self.cues)))
+
+    def _sync_page(self) -> None:
+        """Ghi ô nhập / ô tick của trang đang hiện về dữ liệu."""
+        for row, i in zip(self._rows, self._page_range()):
+            self.translated[i] = row["entry"].get()
+            self.checked[i] = bool(row["var"].get())
+
+    def _show_page(self, page: int, *, sync: bool = True) -> None:
+        if sync:
+            self._sync_page()
+        self.page = max(0, min(self.pages - 1, page))
+        idxs = self._page_range()
+        for r, row in enumerate(self._rows):
+            if r < len(idxs):
+                i = idxs[r]
+                c = self.cues[i]
+                row["var"].set(self.checked[i])
+                row["idx"].configure(text=f"{i + 1}\n{format_ts(c.start, '.')[:8]}")
+                row["src"].configure(text=c.plain)
+                row["entry"].delete(0, "end")
+                row["entry"].insert(0, self.translated[i])
+                for w, kw in row["widgets"]:
+                    w.grid(**kw)
+            else:
+                for w, _kw in row["widgets"]:
+                    w.grid_remove()
+        if idxs:
+            self.page_label.configure(text=f"Trang {self.page + 1}/{self.pages} · cue {idxs[0] + 1}–{idxs[-1] + 1}")
+        self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
+        self.next_btn.configure(state="normal" if self.page < self.pages - 1 else "disabled")
+        try:
+            self.list._parent_canvas.yview_moveto(0)
+        except Exception:
+            pass
 
     def _check_all(self, v: bool) -> None:
-        for c in self.checks:
-            c.set(v)
+        self.checked = [v] * len(self.cues)
+        for row in self._rows:
+            row["var"].set(v)
 
     def _copy_source(self) -> None:
         self.clipboard_clear()
@@ -217,15 +278,17 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         import re
 
         lines = [re.sub(r"^\s*\d+[.)]\s*", "", ln).strip() for ln in text.splitlines() if ln.strip()]
+        self._sync_page()
         n = 0
-        for i, ln in enumerate(lines[:len(self.entries)]):
-            self.entries[i].delete(0, "end")
-            self.entries[i].insert(0, ln)
+        for i, ln in enumerate(lines[:len(self.cues)]):
+            self.translated[i] = ln
             n += 1
+        self._show_page(self.page, sync=False)
         self.status.configure(text=f"Đã dán {n} dòng.")
 
     def _ai_selected(self) -> None:
-        idxs = [i for i, v in enumerate(self.checks) if v.get()]
+        self._sync_page()
+        idxs = [i for i, v in enumerate(self.checked) if v]
         if not idxs:
             messagebox.showinfo("Dịch AI", "Tick các cue cần dịch trước.")
             return
@@ -244,17 +307,19 @@ class ManualTranslateDialog(ctk.CTkToplevel):
             if error:
                 self.status.configure(text=f"Lỗi: {error}")
                 return
+            self._sync_page()           # giữ những gì người dùng gõ trong lúc chờ dịch
             for i, c in zip(idxs, result):
-                self.entries[i].delete(0, "end")
-                self.entries[i].insert(0, c.plain)
+                self.translated[i] = c.plain
+            self._show_page(self.page, sync=False)
             self.status.configure(text=f"Đã dịch AI {len(idxs)} cue — kiểm tra rồi bấm Lưu.")
 
         self.window.run_task("Dịch AI đã chọn", work, done)
 
     def _save(self) -> None:
+        self._sync_page()
         out: list[Cue] = []
         for i, c in enumerate(self.cues):
-            t = self.entries[i].get().strip() or c.text
+            t = self.translated[i].strip() or c.text
             out.append(Cue(c.index, c.start, c.end, t, dict(c.meta)))
         p = self.item.srt_translated_path or str(SUBS_DIR / f"{self.item.stem}.dich.srt")
         save_srt(out, p)

@@ -265,9 +265,11 @@ class MainWindow(_Root):
             if cur:
                 self.show_module(cur)
         panel_w = int(max(360, min(470, w * 0.30)))
-        self.panel.configure(width=panel_w)
         help_w = int(max(300, min(400, w * 0.26)))
-        self.help.set_width(help_w)
+        if getattr(self, "_panel_help_w", None) != (panel_w, help_w):     # configure(width) vẽ lại cả khung CTk
+            self._panel_help_w = (panel_w, help_w)
+            self.panel.configure(width=panel_w)
+            self.help.set_width(help_w)
         room_for_help = w - 94 - panel_w - help_w - 60 >= 560
         if self._help_open and not room_for_help:
             self._help_wanted = True
@@ -279,7 +281,11 @@ class MainWindow(_Root):
             self.open_guide(self.help.key)
         preview_w = w - 94 - panel_w - (help_w if self._help_open else 0) - 60
         self.preview.set_compact(preview_w < 760)
-        self.after(60, self._repaint_all)
+        # ẩn/hiện lại các khung (vẽ lại toàn bộ) chỉ khi bố cục thực sự đổi, không phải mỗi lần _apply_layout được gọi
+        sig = (round(w), round(h), panel_w, help_w, self._help_open)
+        if sig != getattr(self, "_layout_sig", None):
+            self._layout_sig = sig
+            self.after(60, self._repaint_all)
 
     def _repaint_all(self) -> None:
         """Widget CTk co lại để lại vệt vẽ cũ trên nền frame cha → ẩn/hiện lại các khung để Tk vẽ lại toàn bộ."""
@@ -404,7 +410,15 @@ class MainWindow(_Root):
     def open_settings(self, tab: str | None = None) -> None:
         from app.ui.widgets.settings_window import SettingsWindow
 
-        SettingsWindow(self, tab=tab)
+        win = getattr(self, "_settings_win", None)
+        if win is not None and win.winfo_exists():       # đang mở → đưa lên trước, khỏi dựng lại cả cửa sổ
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+            if tab == "shortcuts":
+                win._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn")
+            return
+        self._settings_win = SettingsWindow(self, tab=tab)
 
     def apply_theme_live(self, name: str) -> None:
         """Đổi theme ngay lập tức: chốt bảng màu mới rồi dựng lại toàn bộ giao diện (state giữ nguyên)."""
@@ -434,6 +448,7 @@ class MainWindow(_Root):
         self.modules.clear()
         self._rail_buttons.clear()
         self._current_module = None
+        self._panel_help_w = self._layout_sig = None     # khung mới dựng lại → phải đặt lại kích thước / vẽ lại
         self._help_open = False
         self._compact_header = False
         self.configure(fg_color=T.BG)

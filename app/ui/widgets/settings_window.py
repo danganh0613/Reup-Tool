@@ -87,9 +87,8 @@ class SettingsWindow(ctk.CTkToplevel):
                      width=90, height=30).pack(side="right")
 
         self.page_settings = ctk.CTkFrame(self, fg_color="transparent")
-        self.page_guide = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.page_guide: ctk.CTkScrollableFrame | None = None     # dựng khi mở tab hướng dẫn lần đầu (~150 widget)
         self._build_settings(self.page_settings, st)
-        self._build_guide(self.page_guide)
 
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 12))
@@ -100,9 +99,14 @@ class SettingsWindow(ctk.CTkToplevel):
         self._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn" if tab == "shortcuts" else "⚙ Cài Đặt Hệ Thống & API")
 
     def _switch_tab(self, name: str) -> None:
+        guide = "Phím" in name
+        if guide and self.page_guide is None:
+            self.page_guide = ctk.CTkScrollableFrame(self, fg_color="transparent")
+            self._build_guide(self.page_guide)
         self.page_settings.grid_forget()
-        self.page_guide.grid_forget()
-        (self.page_guide if "Phím" in name else self.page_settings).grid(row=1, column=0, sticky="nsew", padx=14)
+        if self.page_guide is not None:
+            self.page_guide.grid_forget()
+        (self.page_guide if guide else self.page_settings).grid(row=1, column=0, sticky="nsew", padx=14)
 
     # ── Trang cài đặt ────────────────────────────────────────────────────
     def _card(self, parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
@@ -313,6 +317,9 @@ class SettingsWindow(ctk.CTkToplevel):
     # ── Hành động ────────────────────────────────────────────────────────
     def _scan_encoders(self) -> None:
         ff = FFmpeg(self.ffmpeg.get(), self.ffprobe.get())
+        main_ff = getattr(self.window, "ffmpeg", None)
+        if main_ff is not None and (ff.ffmpeg, ff.ffprobe) == (main_ff.ffmpeg, main_ff.ffprobe):
+            ff = main_ff             # cùng ffmpeg với cửa sổ chính → dùng lại kết quả dò encoder đã cache
         if not ff.available:
             self.enc_status.configure(text="✖ Không tìm thấy ffmpeg/ffprobe", fg_color="#3B1D1D", text_color=T.DANGER)
             return

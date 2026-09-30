@@ -27,6 +27,7 @@ class StoryEditor(ctk.CTkToplevel):
         self.project: StoryProject | None = None
         self.scene: Scene | None = None
         self._rows: list[ctk.CTkButton] = []
+        self._row_state: list[tuple[str, bool]] = []     # (chữ, đang chọn) đã vẽ của từng dòng → chỉ configure khi đổi
         self._preview_img: ctk.CTkImage | None = None
         self.title("Trình soạn kịch bản — Edit Studio")
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -294,25 +295,53 @@ class StoryEditor(ctk.CTkToplevel):
             self.scene = None
             self._fill_scene()
 
+    @staticmethod
+    def _row_text(i: int, sc: Scene) -> str:
+        flags = ("🔊" if sc.audio_path and Path(sc.audio_path).exists() else "·") + \
+                ("🎬" if sc.video_path and Path(sc.video_path).exists() else
+                 ("🖼" if sc.image_path and Path(sc.image_path).exists() else "·"))
+        return f"{i + 1:>3} {flags} {sc.narration[:38]}{'…' if len(sc.narration) > 38 else ''}"
+
+    def _set_row(self, i: int, text: str, active: bool) -> None:
+        if self._row_state[i] != (text, active):
+            self._row_state[i] = (text, active)
+            self._rows[i].configure(text=text, fg_color=T.ACCENT_SOFT if active else "transparent")
+
     def _rebuild_list(self) -> None:
-        for b in self._rows:
-            b.destroy()
-        self._rows.clear()
+        """Dùng lại các nút đã có (chỉ đổi chữ/màu dòng thay đổi), chỉ tạo/xoá phần chênh lệch số cảnh."""
         pr = self.project
+        scenes = pr.scenes if pr is not None else []
+        for b in self._rows[len(scenes):]:
+            b.destroy()
+        del self._rows[len(scenes):]
+        del self._row_state[len(scenes):]
         if pr is None:
             self.summary.configure(text="Chưa có dự án.")
             return
         self.summary.configure(text=pr.progress_summary())
-        for i, sc in enumerate(pr.scenes):
-            flags = ("🔊" if sc.audio_path and Path(sc.audio_path).exists() else "·") + \
-                    ("🎬" if sc.video_path and Path(sc.video_path).exists() else
-                     ("🖼" if sc.image_path and Path(sc.image_path).exists() else "·"))
-            text = f"{i + 1:>3} {flags} {sc.narration[:38]}{'…' if len(sc.narration) > 38 else ''}"
+        for i, sc in enumerate(scenes):
+            text, active = self._row_text(i, sc), sc is self.scene
+            if i < len(self._rows):
+                self._set_row(i, text, active)
+                continue
             b = ctk.CTkButton(self.list, text=text, anchor="w", height=32, font=T.font(11),
-                              fg_color=T.ACCENT_SOFT if sc is self.scene else "transparent", hover_color=T.BG_HOVER,
+                              fg_color=T.ACCENT_SOFT if active else "transparent", hover_color=T.BG_HOVER,
                               text_color=T.TEXT, command=lambda i=i: self.select_scene(i))
             b.grid(row=i, column=0, sticky="ew", pady=1)
             self._rows.append(b)
+            self._row_state.append((text, active))
+
+    def _refresh_row(self, sc: Scene) -> None:
+        """Sửa một cảnh → chỉ cập nhật dòng của cảnh đó (+ dòng tóm tắt tiến độ)."""
+        pr = self.project
+        if pr is None or sc not in pr.scenes:
+            return
+        self.summary.configure(text=pr.progress_summary())
+        i = pr.scenes.index(sc)
+        if i < len(self._rows):
+            self._set_row(i, self._row_text(i, sc), sc is self.scene)
+        else:
+            self._rebuild_list()
 
     def _refresh_speakers(self) -> None:
         if self.project:
@@ -326,8 +355,10 @@ class StoryEditor(ctk.CTkToplevel):
             return
         self._text_changed()
         self.scene = pr.scenes[index]
-        for i, b in enumerate(self._rows):
-            b.configure(fg_color=T.ACCENT_SOFT if i == index else "transparent")
+        for i in range(len(self._rows)):
+            text, active = self._row_state[i]
+            if active != (i == index):
+                self._set_row(i, text, i == index)
         self._fill_scene()
 
     def _fill_scene(self) -> None:
@@ -385,7 +416,7 @@ class StoryEditor(ctk.CTkToplevel):
             setattr(self.scene, key, value)
             if key == "speaker":
                 self.scene.audio_path = ""
-            self._rebuild_list()
+            self._refresh_row(self.scene)
 
     def _text_changed(self) -> None:
         sc = self.scene
@@ -402,7 +433,7 @@ class StoryEditor(ctk.CTkToplevel):
             sc.image_prompt = prompt
             changed = True
         if changed:
-            self._rebuild_list()
+            self._refresh_row(sc)
 
     def _add_scene(self) -> None:
         pr = self.project

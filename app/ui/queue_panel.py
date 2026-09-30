@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
+_UNSET = object()
 _STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING}
 
 
@@ -25,6 +26,7 @@ class QueueRow(ctk.CTkFrame):
     def __init__(self, master, panel: QueuePanel, index: int, item: VideoItem) -> None:
         super().__init__(master, fg_color=T.BG_CARD, corner_radius=8, border_width=1, border_color=T.BORDER_SOFT)
         self.panel, self.index, self.item = panel, index, item
+        self._shown: dict[str, object] = {}       # giá trị đã vẽ → configure (vẽ lại widget CTk) chỉ khi đổi
         self.grid_columnconfigure(1, weight=1)
         self.num = ctk.CTkLabel(self, text=f"{index + 1}", width=26, font=T.font(12, "bold"), text_color=T.TEXT_MUTED)
         self.num.grid(row=0, column=0, rowspan=2, padx=(8, 4), pady=6)
@@ -43,6 +45,7 @@ class QueueRow(ctk.CTkFrame):
         for w in (self, self.num, self.name, self.info, self.status):
             w.bind("<Button-1>", lambda _e: self.panel.state.set_active(self.index))
             w.bind("<Double-Button-1>", lambda _e: self._open_output())
+        self._shown.update(num=f"{index + 1}", name=item.name)
         self.update_view()
 
     def _remove(self) -> None:
@@ -52,6 +55,18 @@ class QueueRow(ctk.CTkFrame):
         p = self.item.output_path or self.item.path
         if p and Path(p).exists():
             os.startfile(p)
+
+    def _put(self, key: str, value: object, apply) -> None:
+        if self._shown.get(key, _UNSET) != value:
+            self._shown[key] = value
+            apply(value)
+
+    def assign(self, index: int, item: VideoItem) -> None:
+        """Dùng lại dòng cho video khác / vị trí khác (khỏi hủy và dựng lại cả dòng)."""
+        self.index, self.item = index, item
+        self._put("num", f"{index + 1}", lambda v: self.num.configure(text=v))
+        self._put("name", item.name, lambda v: self.name.configure(text=v))
+        self.update_view()
 
     def update_view(self) -> None:
         it = self.item
@@ -71,11 +86,12 @@ class QueueRow(ctk.CTkFrame):
             parts.append(" · ".join(flags))
         if it.message and it.status in ("Đang xử lý", "Lỗi"):
             parts.append(it.message)
-        self.info.configure(text="  |  ".join(parts) if parts else "Chưa đọc thông tin")
-        self.status.configure(text=it.status, text_color=_STATUS_COLOR.get(it.status, T.TEXT))
-        self.bar.set(max(0.0, min(1.0, it.progress)))
+        self._put("info", "  |  ".join(parts) if parts else "Chưa đọc thông tin", lambda v: self.info.configure(text=v))
+        self._put("status", it.status, lambda v: self.status.configure(text=v, text_color=_STATUS_COLOR.get(v, T.TEXT)))
+        self._put("progress", round(max(0.0, min(1.0, it.progress)), 3), self.bar.set)
         active = self.panel.state.active_index == self.index
-        self.configure(border_color=T.ACCENT if active else T.BORDER_SOFT, border_width=2 if active else 1)
+        self._put("active", active, lambda v: self.configure(border_color=T.ACCENT if v else T.BORDER_SOFT,
+                                                              border_width=2 if v else 1))
 
 
 class QueuePanel(ctk.CTkFrame):
@@ -163,16 +179,20 @@ class QueuePanel(ctk.CTkFrame):
 
     # ── Vẽ ────────────────────────────────────────────────────────────────
     def rebuild(self) -> None:
-        for r in self.rows:
-            r.destroy()
-        self.rows.clear()
-        self.empty.grid_forget()
+        """Đồng bộ danh sách dòng với hàng đợi: dùng lại dòng cũ, chỉ tạo/xoá phần chênh lệch."""
         vids = self.state.videos
+        for r in self.rows[len(vids):]:
+            r.destroy()
+        del self.rows[len(vids):]
         self.count_right.configure(text=f"{len(vids)} video")
         if not vids:
             self.empty.grid(row=0, column=0, pady=20)
             return
+        self.empty.grid_forget()
         for i, it in enumerate(vids):
+            if i < len(self.rows):
+                self.rows[i].assign(i, it)
+                continue
             row = QueueRow(self.list, self, i, it)
             row.grid(row=i, column=0, sticky="ew", pady=2, padx=2)
             self.rows.append(row)
