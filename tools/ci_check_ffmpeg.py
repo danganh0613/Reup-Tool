@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # console Windows (cp1252) không in được tiếng Việt
     ffmpeg = str(Path(sys.argv[1]).resolve())        # bước render chạy trong thư mục tạm → cần đường dẫn tuyệt đối
     need_encoders = sys.argv[2:]
     filters = subprocess.run([ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True).stdout
