@@ -30,7 +30,7 @@ def is_installed() -> bool:
 def install_demucs(log: Callable[[str], None] | None = None) -> bool:
     if getattr(sys, "frozen", False):
         if log:
-            log("Bản đóng gói .exe không cài thêm được gói Python — chạy bản mã nguồn (run.bat) để cài, hoặc dùng tính năng thay thế.")
+            log("Bản đóng gói (.exe / .app) không cài thêm được gói Python — chạy bản mã nguồn (run.bat / run.command) để cài, hoặc dùng tính năng thay thế.")
         return False
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "demucs", "torch", "torchaudio"]
     if log:

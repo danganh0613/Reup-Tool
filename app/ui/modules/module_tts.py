@@ -303,7 +303,7 @@ class TTSModule(BaseModule):
             self._load_voices(force=True)
             return
         if getattr(sys, "frozen", False):
-            self.voice_status.error("Bản đóng gói .exe không có VieNeu (cần torch) — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat).")
+            self.voice_status.error("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat / run.command).")
             return
         self.voice_status.warn("Đang cài VieNeu (vài phút)… xem log")
 

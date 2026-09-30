@@ -255,7 +255,7 @@ TOPICS: list[dict] = [
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
             ("Gemini báo 429 / hết hạn mức", "Đợi 1 phút rồi thử lại, hoặc dán thêm key khác. Tạo ảnh/video AI cần tài khoản trả tiền."),
             ("Video bị xoay sai", "Mục Hiệu ứng → Xoay."),
-            ("Bản .exe không có VieNeu / Demucs", "Hai thứ này rất nặng, chỉ có ở bản chạy bằng Python (run.bat)."),
+            ("Bản đóng gói không có Demucs", "Demucs rất nặng (cần torch), chỉ có ở bản chạy bằng Python (run.bat / run.command)."),
         ]),
     ]},
 ]

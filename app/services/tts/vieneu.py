@@ -40,7 +40,7 @@ def install_vieneu(log: Callable[[str], None] | None = None) -> bool:
     """pip install vieneu (không kéo gradio). Chạy trong thread nền."""
     if getattr(sys, "frozen", False):
         if log:
-            log("Bản đóng gói .exe không cài thêm được gói Python — chạy bản mã nguồn (run.bat) để cài, hoặc dùng tính năng thay thế.")
+            log("Bản đóng gói (.exe / .app) không cài thêm được gói Python — chạy bản mã nguồn (run.bat / run.command) để cài, hoặc dùng tính năng thay thế.")
         return False
     cmds = [
         [sys.executable, "-m", "pip", "install", "--upgrade", *_RUNTIME_DEPS],
@@ -65,7 +65,7 @@ def load_model(precision: str = "int8", log: Callable[[str], None] | None = None
             return _model
         if not is_installed():
             if getattr(sys, "frozen", False):
-                raise RuntimeError("Bản đóng gói .exe không có VieNeu (cần torch) — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat).")
+                raise RuntimeError("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat / run.command).")
             raise RuntimeError("Chưa cài VieNeu — bấm “Cài VieNeu” trong module Lồng tiếng.")
         os.environ.setdefault("HF_HOME", str(MODELS_DIR / "hf"))
         from vieneu import Vieneu

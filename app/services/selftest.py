@@ -126,7 +126,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                              "" if has_model else "Mục TTS → chọn VieNeu → «Nghe thử giọng» để tải."))
         else:
             out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS / ElevenLabs / Google thay thế",
-                             "Bản .exe: cài lại bộ cài mới." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
+                             "Bản đóng gói: cài lại bản mới nhất." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
     except Exception as exc:
         out.append(Check("VieNeu", "warn", f"Không kiểm tra được: {exc}"))
 
@@ -168,7 +168,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
         else:
             out.append(Check("Demucs (tách giọng/nhạc)", "warn", "Chưa có — tính năng tách nhạc nền tắt, còn lại bình thường",
                              "Chỉ bản mã nguồn cài được (cần torch ~2 GB): mục Video → «Cài Demucs»." if not _frozen()
-                             else "Bản .exe không hỗ trợ (cần torch ~2 GB)."))
+                             else "Bản đóng gói không hỗ trợ (cần torch ~2 GB)."))
     except Exception:
         pass
     return out
