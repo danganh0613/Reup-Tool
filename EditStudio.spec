@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec: đóng gói Edit Studio thành thư mục dist/EditStudio (onedir).
 
+macOS: thêm dist/Edit Studio.app (BUNDLE) — bin/ffmpeg + app/assets + presets nằm TRONG gói (xem bên dưới);
+dữ liệu người dùng ở ~/Library/Application Support/Edit Studio (app/config/paths.py).
+
     pip install pyinstaller
     pyinstaller EditStudio.spec
 
@@ -10,6 +13,7 @@ chỉ có ở bản chạy mã nguồn.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
@@ -17,7 +21,12 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 block_cipher = None
 ROOT = Path(SPECPATH)
 
-datas = []   # app/assets được build.bat chép cạnh EXE (người dùng tự thêm nhạc/sfx/texture vào đó)
+MAC = sys.platform == "darwin"
+
+datas = []   # Windows: app/assets được build.bat chép cạnh EXE (người dùng tự thêm nhạc/sfx/texture vào đó)
+if MAC:
+    # gói .app chỉ đọc → assets/presets mẫu + ffmpeg đi trong gói; lần chạy đầu app chép assets/presets ra thư mục dữ liệu
+    datas += [(str(ROOT / "app" / "assets"), "app/assets"), (str(ROOT / "presets"), "presets")]
 datas += collect_data_files("customtkinter")
 datas += collect_data_files("tkinterdnd2")
 datas += collect_data_files("faster_whisper")
@@ -33,6 +42,8 @@ hiddenimports = (
        "soxr", "soundfile", "yaml", "lazy_loader", "pooch", "msgpack", "joblib", "decorator", "hf_xet", "scipy.signal", "scipy.fft"]
 )
 binaries = []
+if MAC:
+    binaries += [(str(ROOT / "bin" / "ffmpeg"), "bin"), (str(ROOT / "bin" / "ffprobe"), "bin")]
 # VieNeu v3 Turbo (ONNX): gói + dữ liệu giọng mẫu, G2P (sea_g2p có .pyd + .bin), fbank
 for _pkg in ("vieneu", "vieneu_utils", "sea_g2p", "kaldi_native_fbank"):
     _d, _b, _h = collect_all(_pkg)
@@ -63,6 +74,25 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=str(ROOT / "app" / "assets" / "icon.ico"),
+    icon=str(ROOT / "app" / "assets" / ("icon.icns" if MAC else "icon.ico")),
+    target_arch="arm64" if MAC else None,
 )
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="EditStudio")
+if MAC:
+    sys.path.insert(0, str(ROOT))
+    from app.config.paths import APP_VERSION
+
+    app = BUNDLE(
+        coll,
+        name="Edit Studio.app",
+        icon=str(ROOT / "app" / "assets" / "icon.icns"),
+        bundle_identifier="io.github.danganh0613.editstudio",
+        version=APP_VERSION,
+        info_plist={
+            "CFBundleDisplayName": "Edit Studio",
+            "CFBundleShortVersionString": APP_VERSION,
+            "LSMinimumSystemVersion": "12.0",
+            "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": False,
+        },
+    )

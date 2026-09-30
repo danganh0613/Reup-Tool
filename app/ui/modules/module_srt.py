@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -13,6 +12,7 @@ from app.core.state import TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
+from app.core.platform import open_path
 
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
                 "ไทย", "Bahasa Indonesia", "Русский"]
@@ -151,7 +151,7 @@ class SRTModule(BaseModule):
     def _open_srt(self) -> None:
         it = self.state.active
         if it and it.srt_path and Path(it.srt_path).exists():
-            os.startfile(it.srt_path)
+            open_path(it.srt_path)
 
     def _clear_cache(self) -> None:
         it = self._need_item()

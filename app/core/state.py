@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
@@ -28,7 +29,8 @@ RATIO_VALUES: dict[str, float | None] = {"Giữ nguyên": None, "21:9 (Điện �
 FIT_MODES = ["Cắt vừa khung", "Thêm viền đen", "Nền mờ (blur)"]
 RESOLUTIONS = ["Giữ nguyên", "720p", "1080p", "1440p", "4K"]
 FPS_OPTIONS = ["Giữ nguyên", "24", "25", "30", "50", "60"]
-GPU_BACKENDS = ["auto", "nvenc", "qsv", "amf", "cpu"]
+# macOS chỉ có VideoToolbox; cấu hình mang từ máy Windows sang (nvenc…) vẫn chạy: không dùng được thì tự dò tiếp rồi về CPU
+GPU_BACKENDS = ["auto", "videotoolbox", "cpu"] if sys.platform == "darwin" else ["auto", "nvenc", "qsv", "amf", "cpu"]
 VIDEO_CODECS = ["H.264 / AVC", "H.265 / HEVC", "AV1"]
 ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 

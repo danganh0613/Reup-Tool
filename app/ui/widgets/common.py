@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import filedialog
@@ -200,7 +201,9 @@ class EntryRow(ctk.CTkFrame):
         if self.browse_mode == "dir":
             p = filedialog.askdirectory()
         elif self.browse_mode == "exe":
-            p = filedialog.askopenfilename(filetypes=[("Chương trình", "*.exe"), ("Tất cả", "*.*")])
+            # macOS/Linux: chương trình không có đuôi .exe → không lọc
+            p = filedialog.askopenfilename(filetypes=[("Chương trình", "*.exe"), ("Tất cả", "*.*")]) if sys.platform == "win32" \
+                else filedialog.askopenfilename()
         else:
             p = filedialog.askopenfilename()
         if p:

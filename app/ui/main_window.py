@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -39,18 +38,23 @@ from app.ui.preview_panel import PreviewPanel
 from app.ui.progress_panel import ProgressPanel, stage_index_for
 from app.ui.widgets.dialogs import LogWindow, NotificationCenter, ShortcutsWindow, now_str
 from app.ui.widgets.ui import button, button_width, relabel
+from app.core.platform import IS_MAC, IS_WIN, exe_name, open_path
 
 ctk_patches.apply()      # vá CTk: hết vạch hở 1 px mép phải/dưới ở DPI lẻ
 
 logger = logging.getLogger(__name__)
 
-try:  # kéo thả file từ Explorer
+try:  # kéo thả file từ Explorer / Finder
     from tkinterdnd2 import DND_FILES, TkinterDnD
 
     class _Root(ctk.CTk, TkinterDnD.DnDWrapper):
         def __init__(self) -> None:
             super().__init__()
-            self.TkdndVersion = TkinterDnD._require(self)
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+            except Exception:                    # thư viện tkdnd không nạp được trên máy này → vẫn mở app, chỉ tắt kéo thả
+                logger.warning("Không bật được kéo thả file (tkdnd)", exc_info=True)
+                self.TkdndVersion = None
 
     _HAS_DND = True
 except Exception:  # pragma: no cover
@@ -89,7 +93,7 @@ class MainWindow(_Root):
         self._compact_header = False
         self._compact_rail = False
         self._help_wanted = False
-        self.after(50, lambda: self.wm_state("zoomed"))
+        self.after(50, self._maximize)
         self.configure(fg_color=T.BG)
         self._set_icon()
         state.set_save_scheduler(self._schedule_save)
@@ -108,7 +112,7 @@ class MainWindow(_Root):
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
         self.after(400, self._apply_layout)
-        if _HAS_DND:
+        if _HAS_DND and getattr(self, "TkdndVersion", None):
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
 
@@ -120,20 +124,32 @@ class MainWindow(_Root):
         self._active_changed()
         if not self.ffmpeg.available:
             self.after(300, lambda: messagebox.showwarning(
-                APP_NAME, "Không tìm thấy ffmpeg/ffprobe.\nĐặt ffmpeg.exe + ffprobe.exe vào thư mục bin/ "
+                APP_NAME, f"Không tìm thấy ffmpeg/ffprobe.\nĐặt {exe_name('ffmpeg')} + {exe_name('ffprobe')} vào thư mục bin/ "
                           "hoặc chọn đường dẫn trong Cài đặt."))
-        dnd = " · kéo thả: bật" if _HAS_DND else ""
+        dnd = " · kéo thả: bật" if _HAS_DND and getattr(self, "TkdndVersion", None) else ""
         self.run_bg(self.ffmpeg.version,          # chạy `ffmpeg -version` trong nền, không chặn lúc mở app
                     lambda v, _e: self.log(f"{APP_NAME} sẵn sàng · {(v or '')[:40] or 'chưa có ffmpeg'}{dnd}"))
 
     # ── Dựng giao diện ────────────────────────────────────────────────────
-    def _set_icon(self) -> None:
-        ico = ASSETS_DIR / "icon.ico"
-        if ico.exists():
+    def _maximize(self) -> None:
+        try:
+            self.wm_state("zoomed")              # Windows + macOS
+        except tk.TclError:
             try:
-                self.iconbitmap(str(ico))
-            except Exception:
+                self.attributes("-zoomed", True)  # Linux (X11)
+            except tk.TclError:
                 pass
+
+    def _set_icon(self) -> None:
+        ico, png = ASSETS_DIR / "icon.ico", ASSETS_DIR / "icon.png"
+        try:
+            if IS_WIN and ico.exists():
+                self.iconbitmap(str(ico))
+            elif png.exists():                   # macOS: icon Dock khi chạy mã nguồn (bản .app lấy từ .icns)
+                self._icon_photo = tk.PhotoImage(file=str(png))
+                self.iconphoto(True, self._icon_photo)
+        except Exception:
+            pass
 
     def _build_header(self) -> None:
         head = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, height=58)
@@ -533,7 +549,7 @@ class MainWindow(_Root):
     def open_output_dir(self) -> None:
         d = self.app_state.output_dir or str(VIDEOS_DIR)
         Path(d).mkdir(parents=True, exist_ok=True)
-        os.startfile(d)
+        open_path(d)
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
@@ -546,18 +562,24 @@ class MainWindow(_Root):
     def _bind_shortcuts(self) -> None:
         for seq, key in _FKEYS.items():
             self.bind(seq, lambda _e, k=key: self.show_module(k))
-        self.bind("<Control-s>", lambda _e: (self.app_state.save_config(), self.log("Đã lưu cấu hình.")))
-        self.bind("<Control-r>", lambda _e: self.start_render(list(self.app_state.videos)))
-        self.bind("<Control-z>", lambda e: self._if_free(e, self.preview.undo))
-        self.bind("<Control-y>", lambda e: self._if_free(e, self.preview.redo))
-        self.bind("<Control-Shift-Z>", lambda e: self._if_free(e, self.preview.redo))
-        self.bind("<Control-e>", lambda e: self._if_free(e, self._open_srt_editor))
-        self.bind("<Control-h>", lambda e: self._if_free(e, lambda: self.toggle_help()))
-        self.bind("<Control-slash>", lambda e: self._if_free(e, lambda: self.toggle_help()))
-        self.bind("<Control-plus>", lambda _e: self.preview.zoom_step(1))
-        self.bind("<Control-equal>", lambda _e: self.preview.zoom_step(1))
-        self.bind("<Control-minus>", lambda _e: self.preview.zoom_step(-1))
-        self.bind("<Control-0>", lambda _e: self.preview.set_zoom(None))
+        mod_keys = {
+            "s": lambda _e: (self.app_state.save_config(), self.log("Đã lưu cấu hình.")),
+            "r": lambda _e: self.start_render(list(self.app_state.videos)),
+            "z": lambda e: self._if_free(e, self.preview.undo),
+            "y": lambda e: self._if_free(e, self.preview.redo),
+            "Shift-Z": lambda e: self._if_free(e, self.preview.redo),
+            "e": lambda e: self._if_free(e, self._open_srt_editor),
+            "h": lambda e: self._if_free(e, lambda: self.toggle_help()),
+            "slash": lambda e: self._if_free(e, lambda: self.toggle_help()),
+            "plus": lambda _e: self.preview.zoom_step(1),
+            "equal": lambda _e: self.preview.zoom_step(1),
+            "minus": lambda _e: self.preview.zoom_step(-1),
+            "0": lambda _e: self.preview.set_zoom(None),
+        }
+        for k, fn in mod_keys.items():
+            self.bind(f"<Control-{k}>", fn)
+            if IS_MAC:                           # macOS quen dùng ⌘ (Command) thay Ctrl
+                self.bind(f"<Command-{k}>", fn)
         self.bind("<Escape>", lambda _e: self.stop_all() if (self.runner.running or self.tasks.running) else None)
 
         def fps() -> float:

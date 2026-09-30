@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
 import tkinter as tk
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +29,7 @@ from app.services.ffmpeg import MediaInfo
 from app.services.player import Player, waveform_png
 from app.services.srt_utils import Cue, cue_at, format_ts
 from app.services.subtitle_style import write_ass
+from app.core.platform import open_path
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
@@ -223,7 +223,7 @@ class PreviewPanel(ctk.CTkFrame):
         self.cue_label.pack(side="left", fill="x", expand=True, padx=8)
         button(ctrl, "", icon_name="fullscreen", size="sm", command=self.fullscreen, tip="Xem trước toàn màn hình (F)").pack(side="right")
         self.ext_btn = button(ctrl, "Mở ngoài", icon_name="export", size="sm", command=self._open_external,
-                              tip="Mở video bằng trình phát mặc định của Windows")
+                              tip="Mở video bằng trình phát mặc định của máy")
         self.ext_btn.pack(side="right", padx=(0, 4))
         self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform,
                                tip="Vẽ dạng sóng âm thanh dưới thanh thời gian")
@@ -1053,7 +1053,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _open_external(self) -> None:
         if self.item and Path(self.item.path).exists():
-            os.startfile(self.item.path)
+            open_path(self.item.path)
 
     def fullscreen(self) -> None:
         img = self._current_image()

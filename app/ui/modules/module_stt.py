@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -12,6 +11,7 @@ from app.core.state import STT_DEVICES, STT_ENGINES, STT_LANGUAGES, STT_MODELS, 
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
+from app.core.platform import open_path
 
 
 class STTModule(BaseModule):
@@ -220,6 +220,6 @@ class STTModule(BaseModule):
     def _open_srt(self) -> None:
         it = self.state.active
         if it and it.srt_path and Path(it.srt_path).exists():
-            os.startfile(it.srt_path)
+            open_path(it.srt_path)
         else:
             messagebox.showinfo("Edit Studio", "Chưa có file SRT cho video này.")

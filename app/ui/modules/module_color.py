@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -12,6 +11,7 @@ from app.config.paths import ASSETS_DIR
 from app.core.state import COLOR_PRESETS, KENBURNS, TEXTURE_BLENDS, ColorConfig
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, SwitchRow, hint, pack_rows
+from app.core.platform import open_path
 
 ROTATIONS = ["0°", "90° (xoay phải)", "180°", "270° (xoay trái)", "Tuỳ chỉnh"]
 TEXTURE_LIB = ASSETS_DIR / "textures"
@@ -198,4 +198,4 @@ class ColorModule(BaseModule):
 
     def _open_lib(self) -> None:
         TEXTURE_LIB.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(TEXTURE_LIB))
+        open_path(str(TEXTURE_LIB))

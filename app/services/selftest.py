@@ -44,8 +44,9 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     step("Môi trường")
     import platform
 
-    out.append(Check("Phiên bản", "ok", f"Edit Studio {APP_VERSION} · {'bản cài .exe' if _frozen() else 'bản mã nguồn'} · "
-                                        f"Windows {platform.release()} ({platform.machine()}) · Python {platform.python_version()}"))
+    os_name = f"macOS {platform.mac_ver()[0]}" if sys.platform == "darwin" else f"{platform.system()} {platform.release()}"
+    out.append(Check("Phiên bản", "ok", f"Edit Studio {APP_VERSION} · {'bản đóng gói' if _frozen() else 'bản mã nguồn'} · "
+                                        f"{os_name} ({platform.machine()}) · Python {platform.python_version()}"))
     try:
         free = shutil.disk_usage(ROOT).free / 2**30
         out.append(Check("Ổ đĩa", "ok" if free > 10 else "warn", f"Còn trống {free:,.1f} GB tại {ROOT}",

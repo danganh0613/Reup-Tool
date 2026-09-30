@@ -1,4 +1,4 @@
-"""Phát video xem trước: giải mã khung hình bằng PyAV trong thread, âm thanh qua winsound theo từng đoạn.
+"""Phát video xem trước: giải mã khung hình bằng PyAV trong thread, âm thanh (WAV) theo từng đoạn — winsound / afplay.
 
 Không áp filter khi phát (quá nặng); các lớp phủ (phụ đề, vùng che, logo) do canvas vẽ đè.
 """
@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.config.paths import PREVIEW_CACHE_DIR
+from app.core.platform import WavPlayer
 from app.services.ffmpeg import FFmpeg
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class Player:
         self._max_width = 960
         self._lock = threading.Lock()
         self._latest: tuple[Image.Image, float] | None = None
+        self._sound = WavPlayer()
 
     @property
     def playing(self) -> bool:
@@ -93,8 +94,8 @@ class Player:
 
     # ── Âm thanh ─────────────────────────────────────────────────────────
     def _audio_chunk(self, path: str, start: float, dur: float = AUDIO_CHUNK) -> Path | None:
-        """Trích [start, start+dur] thành WAV để winsound phát."""
-        if self.muted or sys.platform != "win32" or not path:
+        """Trích [start, start+dur] thành WAV để phát."""
+        if self.muted or not path or not WavPlayer.available():
             return None
         PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         key = hashlib.sha1(f"{path}|{start:.2f}|{dur:.1f}|{self.volume:.2f}".encode("utf-8")).hexdigest()[:12]
@@ -135,24 +136,15 @@ class Player:
             pass
 
     def _audio_play(self, wav: Path | None) -> None:
-        if wav is None or sys.platform != "win32":
+        if wav is None:
             return
-        import winsound
-
         try:
-            winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            self._sound.play(wav)
         except Exception:
-            pass
+            logger.debug("phát audio lỗi", exc_info=True)
 
     def _audio_stop(self) -> None:
-        if sys.platform != "win32":
-            return
-        import winsound
-
-        try:
-            winsound.PlaySound(None, winsound.SND_PURGE)
-        except Exception:
-            pass
+        self._sound.stop()
 
     # ── Vòng giải mã ─────────────────────────────────────────────────────
     def _target_size(self, w: int, h: int) -> tuple[int, int]:

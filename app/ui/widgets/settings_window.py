@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import webbrowser
 from pathlib import Path
@@ -14,6 +13,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRESETS_DIR, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
+from app.core.platform import exe_name
 from app.core.state import GPU_BACKENDS, TRANSLATE_PROVIDERS, VIDEO_CODECS
 from app.services.ffmpeg import FFmpeg
 from app.services.sysinfo import gpu_name
@@ -21,6 +21,7 @@ from app.services.translate_router import DEFAULT_MODELS
 from app.ui.widgets.ui import Select, button
 from app.ui.widgets.common import EntryRow, OptionRow, SwitchRow, SliderRow, hint
 from app.ui.widgets.dialogs import SHORTCUTS
+from app.core.platform import open_path
 
 KEY_LINKS = {"Gemini": "https://aistudio.google.com/apikey", "Groq": "https://console.groq.com/keys",
              "DeepSeek": "https://platform.deepseek.com/api_keys", "OpenAI": "https://platform.openai.com/api-keys",
@@ -149,11 +150,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self.ffmpeg_fast = SwitchRow(b, "Tăng tốc FFmpeg (thử nghiệm)", value=st.ffmpeg_fast)
         self.ffmpeg_fast.pack(fill="x", pady=3)
         hint(b, "Dùng preset encode nhanh nhất, ưu tiên tốc độ hơn dung lượng.").pack(fill="x")
-        self.toast = SwitchRow(b, "Thông báo Windows Native khi hoàn tất", value=st.windows_toast)
+        self.toast = SwitchRow(b, "Thông báo hệ thống khi hoàn tất", value=st.windows_toast)
         self.toast.pack(fill="x", pady=3)
-        hint(b, "Gửi thông báo Toast vào Windows Action Center khi render hoàn tất.").pack(fill="x")
-        self.ffmpeg = EntryRow(b, "ffmpeg.exe", value=st.ffmpeg_path, browse="exe", placeholder="để trống = bin/ffmpeg.exe hoặc PATH")
-        self.ffprobe = EntryRow(b, "ffprobe.exe", value=st.ffprobe_path, browse="exe", placeholder="để trống = bin/ffprobe.exe hoặc PATH")
+        hint(b, "Gửi thông báo vào Trung tâm thông báo (Windows Action Center / macOS Notification Center) khi render hoàn tất.").pack(fill="x")
+        ffm, ffp = exe_name("ffmpeg"), exe_name("ffprobe")
+        self.ffmpeg = EntryRow(b, ffm, value=st.ffmpeg_path, browse="exe", placeholder=f"để trống = bin/{ffm} hoặc PATH")
+        self.ffprobe = EntryRow(b, ffp, value=st.ffprobe_path, browse="exe", placeholder=f"để trống = bin/{ffp} hoặc PATH")
         self.workers = SliderRow(b, "Luồng TTS", from_=1, to=8, step=1, value=st.tts_workers)
         self.compute = OptionRow(b, "Whisper compute", ["auto", "int8", "float16", "float32"], value=st.whisper_compute)
         self.vieneu = OptionRow(b, "VieNeu precision", ["int8", "fp32"], value=st.vieneu_precision)
@@ -440,7 +442,7 @@ class SettingsWindow(ctk.CTkToplevel):
         d = self.out_var.get().strip()
         if d:
             Path(d).mkdir(parents=True, exist_ok=True)
-            os.startfile(d)
+            open_path(d)
 
     def _export_config(self) -> None:
         p = filedialog.asksaveasfilename(defaultextension=".json", initialfile="edit_studio_config.json",

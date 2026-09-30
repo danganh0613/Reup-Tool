@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -99,7 +100,7 @@ class NotificationCenter(ctk.CTkToplevel):
         self.refresh()
 
 
-SHORTCUTS = [
+SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Điều khiển timeline & dựng video", [
         ("Space", "Phát / Dừng video xem trước"),
         ("J / K / L", "Tua lùi 3s · Dừng · Tua tới 3s"),
@@ -134,6 +135,8 @@ SHORTCUTS = [
         ("F11", "Dựng Truyện AI"),
     ]),
 ]
+if sys.platform == "darwin":                 # macOS: phím ⌘ thay Ctrl (Ctrl vẫn dùng được)
+    SHORTCUTS = [(t, [(k.replace("Ctrl", "⌘"), d) for k, d in rows]) for t, rows in SHORTCUTS]
 
 
 class ShortcutsWindow(ctk.CTkToplevel):

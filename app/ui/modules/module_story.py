@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -19,6 +18,7 @@ from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import (ButtonRow, ComboRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel,
                                    SwitchRow, hint, pack_rows)
 from app.ui.widgets.voice_picker import VoicePicker
+from app.core.platform import open_path
 
 _LENGTH_LABELS = {v[0]: k for k, v in LENGTHS.items()}
 _PROMPT_LABELS = {v[0]: k for k, v in MASTER_PROMPTS.items()}
@@ -298,7 +298,7 @@ class StoryModule(BaseModule):
     def _open_folder(self) -> None:
         if self.project:
             self.project.dir.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(self.project.dir))
+            open_path(str(self.project.dir))
 
     def _name_changed(self, v: str) -> None:
         if self.project and v.strip():

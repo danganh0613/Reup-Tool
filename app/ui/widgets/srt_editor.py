@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -59,8 +60,9 @@ class SRTEditorDialog(ctk.CTkToplevel):
         self.status.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(foot, text="Lưu  Ctrl+S", width=160, height=36, command=self._save, **T.primary_button()).pack(side="right")
         ctk.CTkButton(foot, text="Đóng", width=100, height=36, command=self.destroy, **T.secondary_button()).pack(side="right", padx=(0, 8))
-        self.bind("<Control-s>", lambda _e: self._save())
-        self.bind("<Control-f>", lambda _e: self._find(1))
+        for mod in ("Control", "Command") if sys.platform == "darwin" else ("Control",):
+            self.bind(f"<{mod}-s>", lambda _e: self._save())
+            self.bind(f"<{mod}-f>", lambda _e: self._find(1))
         self._load()
 
     def _path(self) -> str | None:

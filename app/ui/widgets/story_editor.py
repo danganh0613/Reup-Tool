@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tkinter import filedialog
 
@@ -15,6 +14,7 @@ from app.services.story.project import Character, Scene, StoryProject
 from app.ui.widgets.ui import button
 from app.ui.widgets.common import ButtonRow, ComboRow, EntryRow, OptionRow, SliderRow, StatusLabel, hint
 from app.ui.widgets.voice_picker import VoicePicker
+from app.core.platform import open_path
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
 
@@ -547,7 +547,7 @@ class StoryEditor(ctk.CTkToplevel):
     def _open_dir(self) -> None:
         if self.project:
             self.project.dir.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(self.project.dir))
+            open_path(str(self.project.dir))
 
     def _save(self) -> None:
         self._text_changed()

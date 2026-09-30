@@ -78,16 +78,31 @@ presets/  cache/  models/  logs/  voices/(giọng clone)
 build.bat        # PyInstaller → dist/EditStudio/EditStudio.exe (kèm bin/ffmpeg, app/assets, presets)
 ```
 
-### Bản ZIP tự build trên GitHub
+### macOS (chip Apple M1/M2/M3/M4)
 
-Workflow `.github/workflows/build-windows.yml` build bản gọn (không CUDA) trên máy Windows của GitHub Actions,
-chạy thử `EditStudio.exe --selftest` rồi nén thành `EditStudio-<ver>-win64-Lite.zip` (kèm FFmpeg):
+Cùng một bộ mã nguồn; khác biệt theo hệ điều hành gom ở `app/core/platform.py` (mở file, phát WAV, cờ subprocess):
 
-- Mỗi pull request / push lên `main`: tab **Actions** → lần chạy **Build Windows** → mục **Artifacts** → tải ZIP (giữ 7 ngày).
-- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP, tải lâu dài.
-- Chạy tay: **Actions** → **Build Windows** → **Run workflow**.
+- Âm thanh xem trước / nghe thử: `afplay` · thông báo: Notification Center · phím tắt: ⌘ (Ctrl vẫn dùng được).
+- Render GPU: **VideoToolbox** (`h264_videotoolbox` / `hevc_videotoolbox`); Whisper chạy CPU (không có CUDA).
+- Icon: `app/assets/fonts/EditStudioIcons.ttf` — bản rút gọn Fluent UI System Icons (Microsoft, MIT), dùng khi máy
+  không có font Segoe Fluent.
+- Bản `.app` đóng gói: dữ liệu người dùng ở `~/Library/Application Support/Edit Studio`; ffmpeg nằm trong gói.
+- Chạy mã nguồn: `pip install -r requirements.txt av` rồi `python3 main.py` (hoặc nhấp đúp `run.command`).
 
-Người dùng chỉ cần giải nén rồi chạy `EditStudio.exe` (hướng dẫn trong `DOC_TRUOC.txt` của bản ZIP).
+### Bản ZIP / DMG tự build trên GitHub
+
+Workflow `.github/workflows/build.yml` build song song trên máy của GitHub Actions, chạy thử rồi đóng gói (kèm FFmpeg):
+
+- **Windows**: `EditStudio-<ver>-win64-Lite.zip` (không CUDA) — chạy thử `EditStudio.exe --selftest`.
+- **macOS chip Apple**: `EditStudio-<ver>-macOS-arm64.dmg` — chạy thử `--selftest` và mở giao diện 30 giây.
+- Cả hai: kiểm tra FFmpeg có libass và phụ đề hiện chữ thật (`tools/ci_check_ffmpeg.py`).
+
+- Mỗi pull request / push lên `main`: tab **Actions** → lần chạy **Build** → mục **Artifacts** → tải ZIP / DMG (giữ 7 ngày).
+- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP + DMG, tải lâu dài.
+- Chạy tay: **Actions** → **Build** → **Run workflow**.
+
+Windows: giải nén rồi chạy `EditStudio.exe` (hướng dẫn `DOC_TRUOC.txt`). macOS: mở DMG, kéo app vào Applications
+(hướng dẫn mở lần đầu khi macOS chặn app chưa ký: `tools/DOC_MAC.txt`, có sẵn trong DMG).
 
 - Thư mục `dist/EditStudio` (~690 MB) copy đi máy khác chạy được; mỗi lần build lại PyInstaller **xoá và tạo mới**
   thư mục này, nên `output/`, `models/`, `settings.json` trong đó sẽ mất — giữ bản gốc ở nơi khác.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tkinter import filedialog
 from typing import TYPE_CHECKING
@@ -13,6 +12,7 @@ from app.config import theme as T
 from app.ui.widgets.ui import button
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts
+from app.core.platform import open_path
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
@@ -54,7 +54,7 @@ class QueueRow(ctk.CTkFrame):
     def _open_output(self) -> None:
         p = self.item.output_path or self.item.path
         if p and Path(p).exists():
-            os.startfile(p)
+            open_path(p)
 
     def _put(self, key: str, value: object, apply) -> None:
         if self._shown.get(key, _UNSET) != value:

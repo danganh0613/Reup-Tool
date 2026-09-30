@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from tkinter import messagebox
@@ -14,6 +13,7 @@ from app.config import theme as T
 from app.ui.widgets.ui import button
 from app.config.paths import VOICE_DIR
 from app.services.srt_utils import format_ts
+from app.core.platform import open_path
 
 
 def list_voices() -> list[dict]:
@@ -67,7 +67,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         ctk.CTkButton(foot, text="Đóng", width=90, height=32, command=self.destroy, **T.secondary_button()).pack(side="right")
         self.use_btn = ctk.CTkButton(foot, text="Dùng voice này", width=130, height=32, command=self._use, **T.primary_button())
         self.use_btn.pack(side="right", padx=6)
-        ctk.CTkButton(foot, text="Mở thư mục", width=100, height=32, command=lambda: os.startfile(str(VOICE_DIR)), **T.secondary_button()).pack(side="right", padx=6)
+        ctk.CTkButton(foot, text="Mở thư mục", width=100, height=32, command=lambda: open_path(str(VOICE_DIR)), **T.secondary_button()).pack(side="right", padx=6)
         button(foot, "Nghe", icon_name="play", size="sm", command=self._play).pack(side="right", padx=6)
         ctk.CTkButton(foot, text="Xóa tất cả…", width=100, height=32, command=self._delete_all, **T.danger_button()).pack(side="right", padx=6)
         button(foot, "Xóa voice", icon_name="trash", variant="destructive", size="sm", command=self._delete).pack(side="right", padx=6)

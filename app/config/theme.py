@@ -9,12 +9,19 @@ from __future__ import annotations
 import customtkinter as ctk
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 
+_MAC = sys.platform == "darwin"
+
+
 def _pick_ui_font() -> str:
-    """Segoe UI Variable (Win11) gần với Inter của các app AI hiện đại; máy cũ dùng Segoe UI."""
+    """Segoe UI Variable (Win11) gần với Inter của các app AI hiện đại; máy cũ dùng Segoe UI.
+    macOS: font hệ thống (SF Pro) qua tên đặc biệt của Tk."""
+    if _MAC:
+        return ".AppleSystemUIFont"
     fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
     if (fonts_dir / "SegUIVar.ttf").exists():
         return "Segoe UI Variable Text"
@@ -22,9 +29,14 @@ def _pick_ui_font() -> str:
 
 
 UI_FONT = _pick_ui_font()
-UI_FONT_MEDIUM = "Segoe UI Variable Text Semibold" if UI_FONT.startswith("Segoe UI Variable") else "Segoe UI Semibold"
-MONO_FONT = "Consolas"
-EMOJI_FONT = "Segoe UI Emoji"
+if _MAC:
+    UI_FONT_MEDIUM = UI_FONT                    # Tk trên macOS không tách họ font «Semibold» riêng
+    MONO_FONT = "Menlo"
+    EMOJI_FONT = "Apple Color Emoji"
+else:
+    UI_FONT_MEDIUM = "Segoe UI Variable Text Semibold" if UI_FONT.startswith("Segoe UI Variable") else "Segoe UI Semibold"
+    MONO_FONT = "Consolas"
+    EMOJI_FONT = "Segoe UI Emoji"
 
 # ── Bộ theme trọn gói ────────────────────────────────────────────────────
 # Mỗi theme là một bộ màu đồng bộ (nền · panel · thẻ · chữ · màu nhấn). Ít mà chất: chọn một là xong.

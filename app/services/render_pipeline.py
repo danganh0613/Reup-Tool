@@ -14,6 +14,7 @@ tên tương đối, tránh vấn đề escape đường dẫn Windows trong fil
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -400,8 +401,11 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
 
 # ── Encoder ───────────────────────────────────────────────────────────────
 
-HW_BACKENDS = ("nvenc", "qsv", "amf")     # NVIDIA · Intel (kể cả iGPU) · AMD (kể cả APU)
-BACKEND_LABEL = {"nvenc": "NVENC (NVIDIA)", "qsv": "QSV (Intel)", "amf": "AMF (AMD)"}
+if sys.platform == "darwin":
+    HW_BACKENDS: tuple[str, ...] = ("videotoolbox",)       # Apple Silicon / Mac Intel: bộ mã hóa phần cứng của macOS
+else:
+    HW_BACKENDS = ("nvenc", "qsv", "amf")     # NVIDIA · Intel (kể cả iGPU) · AMD (kể cả APU)
+BACKEND_LABEL = {"nvenc": "NVENC (NVIDIA)", "qsv": "QSV (Intel)", "amf": "AMF (AMD)", "videotoolbox": "VideoToolbox (Apple)"}
 
 
 def available_encoders(ffmpeg: FFmpeg, codec: str = "h264") -> dict[str, bool]:
@@ -437,6 +441,11 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
         elif backend == "qsv":
             p = ["veryfast", "medium", "slower"][preset_idx]
             args = ["-c:v", enc, "-preset", p, "-global_quality", str(q)]
+        elif backend == "videotoolbox":
+            # -q:v 1–100 (cao = đẹp): quy đổi gần đúng từ thang CRF — 18 → 65, 23 → 55, 28 → 45
+            args = ["-c:v", enc, "-q:v", str(max(1, min(100, 101 - 2 * q))), "-allow_sw", "1"]
+            if not hevc:
+                args += ["-profile:v", "high"]
         else:
             p = ["speed", "balanced", "quality"][preset_idx]
             args = ["-c:v", enc, "-quality", p, "-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q)]

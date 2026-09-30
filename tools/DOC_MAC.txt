@@ -1,0 +1,32 @@
+EDIT STUDIO — BẢN macOS (chip Apple M1/M2/M3/M4, macOS 12 trở lên)
+===================================================================
+
+CÀI ĐẶT
+  1. Mở file .dmg vừa tải → kéo biểu tượng "Edit Studio" vào thư mục "Applications".
+  2. Mở Launchpad hoặc thư mục Applications → bấm "Edit Studio".
+
+LẦN MỞ ĐẦU TIÊN: macOS BÁO "KHÔNG THỂ MỞ" / "KHÔNG XÁC MINH ĐƯỢC NHÀ PHÁT TRIỂN"
+  App chưa được ký bằng tài khoản Apple Developer nên macOS chặn lần đầu. Chọn MỘT trong hai cách:
+  • Cách 1: Bấm "Xong"/"Done" → mở Cài đặt hệ thống (System Settings) → Quyền riêng tư & Bảo mật
+    (Privacy & Security) → kéo xuống, bấm "Vẫn mở" (Open Anyway) cạnh dòng "Edit Studio" → nhập mật khẩu máy.
+    (macOS 14 trở về trước: có thể chuột phải vào app → Mở (Open) → Mở.)
+  • Cách 2: mở Terminal, dán lệnh sau rồi Enter:
+        xattr -dr com.apple.quarantine "/Applications/Edit Studio.app"
+  Chỉ cần làm một lần.
+
+MÁY CẦN GÌ?
+  • Không cần cài Python hay FFmpeg — đã có sẵn trong app.
+  • Render dùng bộ mã hóa phần cứng VideoToolbox của chip Apple (nhanh, mát máy).
+  • Nhận dạng giọng nói (Whisper) chạy bằng CPU của chip Apple. Lần đầu tự tải model (cần Internet).
+  • API key (Gemini, ElevenLabs, Google…): nhập trong Cài đặt.
+
+DỮ LIỆU CỦA BẠN NẰM Ở ĐÂU?
+  ~/Library/Application Support/Edit Studio   (cài đặt, video xuất, model, preset, nhạc/sfx thêm vào)
+  Trong Finder: menu Go (Đi) → giữ phím Option → Library → Application Support → Edit Studio.
+  Video xuất mặc định ở thư mục output/videos bên trong (đổi được trong app).
+
+CẬP NHẬT
+  Tải .dmg mới → kéo "Edit Studio" vào Applications → chọn "Thay thế" (Replace). Dữ liệu ở trên được giữ nguyên.
+
+GỠ
+  Xoá "Edit Studio" trong Applications. Muốn xoá cả dữ liệu: xoá thư mục ~/Library/Application Support/Edit Studio.
