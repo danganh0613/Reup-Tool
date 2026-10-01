@@ -75,7 +75,7 @@ exe = EXE(
     upx=False,
     console=False,
     icon=str(ROOT / "app" / "assets" / ("icon.icns" if MAC else "icon.ico")),
-    target_arch="arm64" if MAC else None,
+    target_arch=None,          # build theo kiến trúc của máy build: arm64 (chip Apple) hoặc x86_64 (Mac Intel)
 )
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="EditStudio")
 if MAC:
@@ -91,7 +91,7 @@ if MAC:
         info_plist={
             "CFBundleDisplayName": "Edit Studio",
             "CFBundleShortVersionString": APP_VERSION,
-            "LSMinimumSystemVersion": "12.0",
+            "LSMinimumSystemVersion": "12.0",      # CI đo lại từ thư viện thật trong gói rồi ghi đè
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
         },

@@ -1,6 +1,6 @@
-# Đóng gói Edit Studio cho Windows (ZIP) và macOS chip Apple (DMG) — build song song trên máy của GitHub.
+# Đóng gói Edit Studio cho Windows (ZIP) và macOS chip Apple + Intel (DMG) — build song song trên máy của GitHub.
 #   • Mỗi pull request / push lên main: file nằm ở mục «Artifacts» của lần chạy (giữ 7 ngày).
-#   • Đẩy tag v* (vd. v1.0.1): tạo GitHub Release kèm cả ZIP Windows lẫn DMG macOS.
+#   • Đẩy tag v* (vd. v1.0.1): tạo GitHub Release kèm ZIP Windows + 2 DMG macOS (arm64, x86_64).
 #   • Chạy tay: tab Actions → Build → Run workflow.
 name: Build
 
@@ -109,9 +109,15 @@ jobs:
           retention-days: 7
 
   macos:
-    name: macOS Apple Silicon (DMG)
-    runs-on: macos-14
+    name: macOS ${{ matrix.label }} (DMG)
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "Apple Silicon", runner: macos-14, arch: arm64, ffarch: arm64 }
+          - { label: "Intel", runner: macos-15-intel, arch: x86_64, ffarch: amd64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -124,7 +130,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt av pyinstaller
-          python -c "import tkinter, platform; print('Tk', tkinter.TkVersion, platform.machine())"
+          python -c "import tkinter, platform; print('Tk', tkinter.TkVersion, platform.machine()); assert platform.machine() == '${{ matrix.arch }}'"
 
       - name: Cài VieNeu (TTS tiếng Việt local, tuỳ chọn)
         continue-on-error: true
@@ -135,11 +141,11 @@ jobs:
       - name: Kiểm tra cú pháp
         run: python -m compileall -q app main.py
 
-      - name: Tải FFmpeg (arm64, build tĩnh — ffmpeg.martin-riedl.de)
+      - name: Tải FFmpeg (${{ matrix.ffarch }}, build tĩnh — ffmpeg.martin-riedl.de)
         run: |
           mkdir -p bin
           for t in ffmpeg ffprobe; do
-            curl -fsSL --retry 3 -o "$t.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/$t.zip"
+            curl -fsSL --retry 3 -o "$t.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${{ matrix.ffarch }}/release/$t.zip"
             unzip -o -q "$t.zip" -d bin
           done
           chmod +x bin/ffmpeg bin/ffprobe
@@ -152,6 +158,20 @@ jobs:
 
       - name: PyInstaller
         run: pyinstaller --noconfirm EditStudio.spec
+
+      - name: Phiên bản macOS tối thiểu (đo từ thư viện trong gói)
+        run: |
+          APP="dist/Edit Studio.app"
+          # macOS thấp nhất mà MỌI file nhị phân trong gói chạy được = giá trị lớn nhất trong số chúng
+          MIN=$(find "$APP" -type f \( -name "*.so" -o -name "*.dylib" -o -perm -u+x \) -print0 \
+                | xargs -0 -n1 vtool -show-build 2>/dev/null \
+                | awk '$1 == "minos" || $1 == "version" {print $2}' | sort -V | tail -1)
+          [ -n "$MIN" ] || MIN=12.0
+          echo "macOS tối thiểu: $MIN"
+          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MIN" "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"          # sửa Info.plist → ký ad-hoc lại
+          codesign --verify --deep --strict "$APP"
+          echo "MACOS_MIN=$MIN" >> "$GITHUB_ENV"
 
       - name: Chạy thử --selftest
         run: |
@@ -186,15 +206,15 @@ jobs:
       - name: Tạo DMG
         run: |
           VER=$(python -c "from app.config.paths import APP_VERSION; print(APP_VERSION)")
-          NAME="EditStudio-$VER-macOS-arm64"
+          NAME="EditStudio-$VER-macOS-${{ matrix.arch }}"
           if [ "${{ github.ref_type }}" != "tag" ]; then NAME="$NAME-${GITHUB_SHA::7}"; fi
           mkdir -p dmg release
           ditto "dist/Edit Studio.app" "dmg/Edit Studio.app"
           ln -s /Applications dmg/Applications
-          cp tools/DOC_MAC.txt "dmg/DOC TRUOC.txt"
+          sed -e "s/__MACOS_MIN__/$MACOS_MIN/" -e "s/__ARCH__/${{ matrix.label }}/" tools/DOC_MAC.txt > "dmg/DOC TRUOC.txt"
           hdiutil create -volname "Edit Studio" -srcfolder dmg -ov -format UDZO "release/$NAME.dmg"
           ls -lh release
-          (cd release && shasum -a 256 "$NAME.dmg" > SHA256-macos.txt)
+          (cd release && shasum -a 256 "$NAME.dmg" > "SHA256-macos-${{ matrix.arch }}.txt")
           echo "PKG_NAME=$NAME" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
@@ -202,7 +222,7 @@ jobs:
           name: ${{ env.PKG_NAME }}
           path: |
             release/${{ env.PKG_NAME }}.dmg
-            release/SHA256-macos.txt
+            release/SHA256-macos-${{ matrix.arch }}.txt
           compression-level: 0
           retention-days: 7
 
