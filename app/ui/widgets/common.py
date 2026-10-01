@@ -92,12 +92,14 @@ class SliderRow(ctk.CTkFrame):
 
 class OptionRow(ctk.CTkFrame):
     def __init__(self, master, label: str, values: list[str], *, value: str | None = None,
-                 on_change: Callable[[str], None] | None = None, width: int = 200) -> None:
+                 on_change: Callable[[str], None] | None = None, width: int = 200,
+                 labels: dict[str, str] | None = None) -> None:
+        """``labels``: tên hiển thị cho từng giá trị (giá trị lưu vẫn là mã, vd. "vi" → "Tiếng Việt")."""
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(self, text=label, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
             row=0, column=0, sticky="w")
-        self.menu = Select(self, values or [""], value=value, command=on_change, width=width, height=34)
+        self.menu = Select(self, values or [""], value=value, command=on_change, width=width, height=34, labels=labels)
         self.var = self.menu.var
         self.menu.grid(row=0, column=1, sticky="ew")
 

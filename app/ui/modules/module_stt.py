@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from app.config import theme as T
+from app.core.languages import language_label
 from app.core.state import STT_DEVICES, STT_ENGINES, STT_LANGUAGES, STT_MODELS, SRT_SOURCES
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
@@ -30,8 +31,10 @@ class STTModule(BaseModule):
         self.engine = OptionRow(sec.body, "Nhận dạng", STT_ENGINES, on_change=self._engine_changed)
         self.engine_hint = hint(sec.body, "Model chạy trên máy, không cần mạng")
         self.model = OptionRow(sec.body, "Model Whisper", STT_MODELS, on_change=s(cfg, "stt_model", preview=False))
-        self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False))
-        self.device = OptionRow(sec.body, "Thiết bị", STT_DEVICES, on_change=s(cfg, "stt_device", preview=False))
+        self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False),
+                              labels={c: language_label(c) for c in STT_LANGUAGES})
+        self.device = OptionRow(sec.body, "Thiết bị", STT_DEVICES, on_change=s(cfg, "stt_device", preview=False),
+                                labels={"auto": "Tự động (GPU nếu có)", "cpu": "CPU (bộ xử lý)", "cuda": "GPU NVIDIA (CUDA)"})
         self.weak = SwitchRow(sec.body, "PC yếu", on_change=s(cfg, "weak_pc", preview=False))
         self.auto = SwitchRow(sec.body, "Tự nhận diện khi render nếu chưa có SRT", on_change=self._auto_changed)
         self.engine.pack(fill="x", pady=3)
