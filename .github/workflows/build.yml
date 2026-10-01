@@ -45,13 +45,31 @@ jobs:
       - name: Kiểm tra cú pháp
         run: python -m compileall -q app main.py
 
-      - name: Tải FFmpeg (gyan.dev full)
+      - name: Tải FFmpeg (gyan.dev full; dự phòng BtbN)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force bin | Out-Null
-          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z -OutFile ffmpeg.7z
-          7z e ffmpeg.7z -obin ffmpeg.exe ffprobe.exe -r -y | Out-Null
-          if (!(Test-Path bin/ffmpeg.exe) -or !(Test-Path bin/ffprobe.exe)) { throw "Không giải nén được ffmpeg" }
+          # gyan.dev thỉnh thoảng 503 (quá tải) → thử lại vài lần rồi chuyển sang bản build BtbN trên GitHub Releases
+          # (cũng có libass + NVENC/QSV/AMF; bước «Kiểm tra FFmpeg» bên dưới xác nhận lại dù tải từ đâu)
+          $sources = @(
+            @{ url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"; file = "ffmpeg.7z" },
+            @{ url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"; file = "ffmpeg.zip" }
+          )
+          $ok = $false
+          foreach ($src in $sources) {
+            for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+              try {
+                Invoke-WebRequest $src.url -OutFile $src.file
+                7z e $src.file -obin ffmpeg.exe ffprobe.exe -r -y | Out-Null
+                $ok = (Test-Path bin/ffmpeg.exe) -and (Test-Path bin/ffprobe.exe)
+              } catch {
+                Write-Host "Tải $($src.url) lỗi (lần $i): $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+                Start-Sleep -Seconds (10 * $i)
+              }
+            }
+            if ($ok) { Write-Host "FFmpeg từ: $($src.url)"; break }
+          }
+          if (-not $ok) { throw "Không tải được ffmpeg từ nguồn nào" }
           bin/ffmpeg.exe -hide_banner -version | Select-Object -First 1
 
       - name: Kiểm tra FFmpeg (phụ đề + NVENC/QSV/AMF)
@@ -145,7 +163,7 @@ jobs:
         run: |
           mkdir -p bin
           for t in ffmpeg ffprobe; do
-            curl -fsSL --retry 3 -o "$t.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${{ matrix.ffarch }}/release/$t.zip"
+            curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$t.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${{ matrix.ffarch }}/release/$t.zip"
             unzip -o -q "$t.zip" -d bin
           done
           chmod +x bin/ffmpeg bin/ffprobe
