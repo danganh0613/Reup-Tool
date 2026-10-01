@@ -13,6 +13,7 @@ import tkinter
 
 from customtkinter.windows.widgets.core_rendering import DrawEngine
 from customtkinter.windows.widgets.ctk_scrollable_frame import CTkScrollableFrame
+from customtkinter.windows.widgets.ctk_slider import CTkSlider
 from customtkinter.windows.widgets.scaling import CTkScalingBaseClass
 
 
@@ -68,6 +69,26 @@ def _sf_destroy(self):
     _orig_sf_destroy(self)
 
 
+# CustomTkinter 6.x: lăn chuột trên thanh trượt đổi giá trị (không chặn sự kiện) → cuộn bảng công cụ mà con trỏ lướt
+# qua thanh nào là thanh đó bị đổi. Bỏ: thanh trượt chỉ đổi khi bấm / nắm kéo; lăn chuột vẫn cuộn bảng như thường.
+def _slider_ignore_wheel(self, event=None):
+    return None
+
+
+# CTk 6.x cũng bỏ qua việc cuộn bảng khi con trỏ nằm trên thanh trượt (dành lăn chuột cho thanh trượt) → sau khi tắt
+# lăn chuột của thanh trượt, coi thanh trượt như phần nền: lăn chuột trên nó vẫn cuộn bảng chứa nó.
+_orig_valid_scroll = getattr(CTkScrollableFrame, "_check_if_valid_scroll", None)
+
+
+def _valid_scroll_through_slider(self, widget):
+    w = widget
+    while w is not None and w != self._parent_canvas:
+        if isinstance(w, CTkSlider):
+            return _orig_valid_scroll(self, w.master)
+        w = getattr(w, "master", None)
+    return _orig_valid_scroll(self, widget)
+
+
 def apply() -> None:
     if getattr(CTkScalingBaseClass, "_es_patched", False):
         return
@@ -77,4 +98,8 @@ def apply() -> None:
     DrawEngine.draw_rounded_rect_with_border = _draw_rounded_rect_with_border
     CTkScrollableFrame.bind_all = _sf_bind_all
     CTkScrollableFrame.destroy = _sf_destroy
+    if hasattr(CTkSlider, "_mouse_scroll_event"):         # chỉ có từ CustomTkinter 6.x
+        CTkSlider._mouse_scroll_event = _slider_ignore_wheel
+        if _orig_valid_scroll is not None:
+            CTkScrollableFrame._check_if_valid_scroll = _valid_scroll_through_slider
     CTkScalingBaseClass._es_patched = True
