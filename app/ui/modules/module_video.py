@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.config import theme as T
-from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIOS, RESOLUTIONS, VIDEO_CODECS
+from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIO_VALUES, RATIOS, RESOLUTIONS, VIDEO_CODECS
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
 from app.ui.queue_panel import QueuePanel
@@ -39,13 +39,17 @@ class VideoModule(BaseModule):
 
         sec = Section(self, "Khung hình & tốc độ")
         sec.pack(fill="x", pady=4)
-        self.ratio = OptionRow(sec.body, "Tỉ lệ", RATIOS, on_change=s(cfg, "ratio"))
-        self.fit = OptionRow(sec.body, "Cách vừa khung", FIT_MODES, on_change=s(cfg, "fit_mode"))
+        set_ratio, set_fit = s(cfg, "ratio"), s(cfg, "fit_mode")
+        self.ratio = OptionRow(sec.body, "Tỉ lệ", RATIOS, on_change=lambda v: (set_ratio(v), self.update_fit_hint()))
+        self.fit = OptionRow(sec.body, "Cách vừa khung", FIT_MODES, on_change=lambda v: (set_fit(v), self.update_fit_hint()))
         self.res = OptionRow(sec.body, "Độ phân giải", RESOLUTIONS, on_change=s(cfg, "resolution"))
         self.fps = OptionRow(sec.body, "FPS", list(FPS_LABELS.values()), on_change=self._fps_changed)
         self.zoom = OptionRow(sec.body, "Phóng to", list(ZOOM_LABELS.values()), on_change=self._zoom_changed)
         self.speed = OptionRow(sec.body, "Tốc độ", list(SPEED_LABELS.values()), on_change=self._speed_changed)
         pack_rows(sec.body, [self.ratio, self.fit, self.res, self.fps, self.zoom, self.speed])
+        # chỉ hiện khi «Cách vừa khung» không có tác dụng (video đã đúng tỉ lệ xuất) — tránh tưởng chọn mà không ăn
+        self.fit_hint = hint(sec.body, "")
+        self.fit_hint.configure(text_color=T.INFO)
         hint(sec.body, "9:16 (Shorts/TikTok) · 16:9 (YouTube). Nền mờ: video nằm giữa, hai bên là chính nó phóng to "
                        "và làm mờ.").pack(fill="x", pady=(2, 0))
 
@@ -128,7 +132,31 @@ class VideoModule(BaseModule):
             self.demucs.set(cfg.demucs_enable)
         finally:
             self._loading = False
+        self.update_fit_hint()
         self._update_gpu_hint()
+
+    def on_active_changed(self) -> None:
+        self.update_fit_hint()
+
+    def update_fit_hint(self) -> None:
+        """Video đang chọn đã đúng tỉ lệ xuất (vd. 1080×1920 → 9:16) thì khung vừa khít, không có chỗ cho viền / nền mờ."""
+        cfg = self.state.video
+        it = self.state.active
+        w, h = (it.width, it.height) if it is not None else (0, 0)
+        target = RATIO_VALUES.get(cfg.ratio)
+        text = ""
+        if it is not None and target is None:
+            text = ("Đang giữ tỉ lệ gốc của video → «Cách vừa khung» không có tác dụng. Chọn một tỉ lệ khác "
+                    "(vd. 9:16) để thêm viền đen / nền mờ.")
+        elif w and h and target and abs(w / h - target) < 0.02:
+            text = (f"Video đang chọn ({w}×{h}) đã đúng tỉ lệ {cfg.ratio.split(' ')[0]} → vừa khít khung, «Cách vừa "
+                    "khung» không thay đổi gì. Viền đen / nền mờ chỉ xuất hiện khi tỉ lệ video khác tỉ lệ xuất "
+                    "(vd. video ngang 16:9 → 9:16).")
+        self.fit_hint.configure(text=text)
+        if text and not self.fit_hint.winfo_ismapped():
+            self.fit_hint.pack(fill="x", pady=(0, 3), after=self.fit)
+        elif not text and self.fit_hint.winfo_ismapped():
+            self.fit_hint.pack_forget()
 
     def _update_gpu_hint(self) -> None:
         """Dò thật NVENC/QSV/AMF bằng ffmpeg (chạy nền, có cache) để báo máy này sẽ mã hóa bằng gì."""
