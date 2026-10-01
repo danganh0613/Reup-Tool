@@ -62,7 +62,7 @@ def _keys(text: str) -> list[str]:
 
 
 #: model dự phòng cùng nhà cung cấp — dùng khi model chính quá tải (503) hoặc hết quota riêng của model đó
-ALT_MODELS = {"Gemini": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-lite-latest"],
+ALT_MODELS = {"Gemini": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"],
               "Groq": ["llama-3.1-8b-instant"], "DeepSeek": [], "OpenAI": ["gpt-4o-mini"]}
 
 

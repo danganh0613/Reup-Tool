@@ -11,7 +11,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.widgets.ui import button
 from app.core.state import STORY_RATIOS, STORY_RESOLUTIONS
-from app.services.gemini_client import IMAGE_MODELS, TEXT_MODELS, VIDEO_MODELS
+from app.services.gemini_models import image_models, text_models, video_models
 from app.services.story.engine import StoryEngine
 from app.services.story.project import StoryProject
 from app.services.story.prompts import LANGUAGES, LENGTHS, MASTER_PROMPTS, TONES, load_competitors, master_prompt_text
@@ -65,7 +65,7 @@ class StoryModule(BaseModule):
         self.genre = EntryRow(sec.body, "Thể loại", placeholder="vd: chuyện đời, trinh thám, cổ tích…",
                               on_change=s(cfg, "genre", preview=False))
         self.competitor = OptionRow(sec.body, "Phong cách kênh", ["(không)"], on_change=self._competitor_changed)
-        self.text_model = ComboRow(sec.body, "Model viết", TEXT_MODELS, on_change=s(cfg, "text_model", preview=False))
+        self.text_model = ComboRow(sec.body, "Model viết", text_models(), on_change=s(cfg, "text_model", preview=False))
         pack_rows(sec.body, [self.language, self.length, self.tone, self.genre, self.competitor, self.text_model])
         ButtonRow(sec.body, [("🏷 Quản lý phong cách kênh…", self._manage_competitors, None)]).pack(fill="x", pady=(4, 0))
 
@@ -76,7 +76,7 @@ class StoryModule(BaseModule):
                                        on_change=self._prompt_preset_changed)
         self.prompt_custom = EntryRow(sec.body, "Thêm vào prompt", placeholder="vd: Vietnamese village, 1990s",
                                       on_change=s(cfg, "master_prompt_custom", preview=False))
-        self.image_model = ComboRow(sec.body, "Model ảnh", IMAGE_MODELS, on_change=s(cfg, "image_model", preview=False))
+        self.image_model = ComboRow(sec.body, "Model ảnh", image_models(), on_change=s(cfg, "image_model", preview=False))
         self.ratio = OptionRow(sec.body, "Khung hình", STORY_RATIOS, on_change=s(cfg, "ratio", preview=False))
         self.resolution = OptionRow(sec.body, "Độ phân giải", STORY_RESOLUTIONS, on_change=s(cfg, "resolution", preview=False))
         self.kenburns = SliderRow(sec.body, "Chuyển động ảnh", from_=0, to=25, step=1, suffix="%",
@@ -91,7 +91,7 @@ class StoryModule(BaseModule):
         sec = Section(self, "Video AI (Veo)", subtitle="tuỳ chọn, tốn phí API")
         sec.pack(fill="x", pady=4)
         self.use_video = SwitchRow(sec.body, "Tạo clip AI thay cho ảnh tĩnh", on_change=s(cfg, "use_ai_video", preview=False))
-        self.video_model = ComboRow(sec.body, "Model video", VIDEO_MODELS, on_change=s(cfg, "video_model", preview=False))
+        self.video_model = ComboRow(sec.body, "Model video", video_models(), on_change=s(cfg, "video_model", preview=False))
         self.video_dur = SliderRow(sec.body, "Thời lượng clip", from_=4, to=8, step=1, suffix="s",
                                    on_change=s(cfg, "video_duration", cast=int, preview=False))
         pack_rows(sec.body, [self.use_video, self.video_model, self.video_dur])

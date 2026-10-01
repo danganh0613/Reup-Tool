@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config.paths import CONFIG_FILE, PRESETS_DIR, SETTINGS_FILE, VIDEOS_DIR
+from app.services.gemini_models import DEFAULT_TEXT, migrate_model
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,7 @@ SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
 AI_ENGINES = ["Gemini"]
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash",
-                 "gemini-flash-lite-latest", "gemini-pro-latest"]
+GEMINI_MODELS = DEFAULT_TEXT          # danh sách đầy đủ / cập nhật: app/services/gemini_models.py
 
 TEXTURE_BLENDS = ["screen", "overlay", "softlight", "multiply", "lighten", "addition"]
 BLUR_STYLES = ["Mờ (Gaussian)", "Ô vuông (pixelate)", "Che kín (màu đen)"]
@@ -273,8 +273,8 @@ STORY_RESOLUTIONS = ["720p", "1080p", "4K"]
 @dataclass
 class StoryConfig:
     text_model: str = "gemini-flash-latest"
-    image_model: str = "gemini-2.5-flash-image"
-    video_model: str = "veo-3.0-fast-generate-001"
+    image_model: str = "gemini-3.1-flash-image"
+    video_model: str = "veo-3.1-fast-generate-preview"
     video_duration: int = 8
     use_ai_video: bool = False
     ratio: str = STORY_RATIOS[0]
@@ -545,6 +545,10 @@ class AppState:
         self.trim = _from_dict(TrimConfig, data.get("trim"))
         self.color = _from_dict(ColorConfig, data.get("color"))
         self.story = _from_dict(StoryConfig, data.get("story"))
+        # cấu hình cũ còn ghi model Google đã tắt (2.5 Flash, Imagen 4, Veo 3.0…) → tự đổi sang model thay thế
+        for obj, attr in ((self.story, "text_model"), (self.story, "image_model"), (self.story, "video_model"),
+                          (self.subtitle, "gemini_model")):
+            setattr(obj, attr, migrate_model(getattr(obj, attr)))
         if include_videos:
             self.videos = []
             for row in data.get("videos", []) or []:
@@ -622,6 +626,7 @@ class AppState:
         if SETTINGS_FILE.exists():
             try:
                 self.settings = _from_dict(Settings, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+                self.settings.translate_model = migrate_model(self.settings.translate_model)
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
 
