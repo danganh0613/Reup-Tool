@@ -15,12 +15,10 @@ logger = logging.getLogger(__name__)
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 
-IMAGE_MODELS = ["gemini-2.5-flash-image", "imagen-4.0-generate-001", "imagen-4.0-fast-generate-001",
-                "imagen-4.0-ultra-generate-001"]
-VIDEO_MODELS = ["veo-3.0-generate-001", "veo-3.0-fast-generate-001", "veo-2.0-generate-001"]
-#: bí danh «…-latest» luôn trỏ tới bản mới nhất Google đang phục vụ — an toàn khi model cũ bị gỡ (404)
-TEXT_MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash",
-               "gemini-flash-lite-latest", "gemini-pro-latest"]
+# danh sách model: app/services/gemini_models.py (một chỗ duy nhất; có thể cập nhật từ Google)
+from app.services.gemini_models import DEFAULT_IMAGE as IMAGE_MODELS  # noqa: E402,F401  (giữ tên cũ cho nơi import)
+from app.services.gemini_models import DEFAULT_TEXT as TEXT_MODELS  # noqa: E402,F401
+from app.services.gemini_models import DEFAULT_VIDEO as VIDEO_MODELS  # noqa: E402,F401
 
 
 class GeminiError(RuntimeError):
