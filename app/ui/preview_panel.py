@@ -333,6 +333,9 @@ class PreviewPanel(ctk.CTkFrame):
         it = self.item
         it.duration, it.width, it.height, it.fps, it.has_audio = info.duration, info.width, info.height, info.fps, info.has_audio
         self.window.queue_update(it)
+        m = self.window.modules.get("video")
+        if m is not None:
+            m.update_fit_hint()                 # giờ mới biết kích thước video
         self.slider.configure(to=max(0.01, info.duration))
         self.slider.set(0)
         self._meta_text = (f"{info.width}×{info.height} · {info.fps:.2f} fps · {format_ts(info.duration, '.')[:8]}"
@@ -605,6 +608,8 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _draw_overlays(self, ox, oy, dw, dh) -> None:
         cv = self.canvas
+        # viền mảnh quanh khung video xuất: phân biệt viền đen của video với nền đen của khung xem trước
+        self._ov_rectangle(ox - 1, oy - 1, ox + dw, oy + dh, outline=T.BORDER, width=1)
         self._badges: list[tuple[str, int, float, float, float]] = []
         mod = self.window.current_module_key()
         if self.tool == "B" or mod == "blur":
