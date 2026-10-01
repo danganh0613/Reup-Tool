@@ -19,6 +19,7 @@ from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, voice_id_for
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, hint, pack_rows
+from app.core.languages import LocaleLabels
 
 logger = logging.getLogger(__name__)
 SPEED_OPTIONS = ["0.8", "0.9", "0.95", "1.0", "1.05", "1.1", "1.15", "1.2", "1.3", "1.5", "1.8", "2.0"]
@@ -71,7 +72,7 @@ class TTSModule(BaseModule):
         sec.pack(fill="x", pady=4)
         self.search = EntryRow(sec.body, "", placeholder="Tìm giọng…", label_width=0, on_change=lambda _v: self._fill_voice_lists())
         self.search.entry.bind("<KeyRelease>", lambda _e: self._fill_voice_lists())
-        self.language = OptionRow(sec.body, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed)
+        self.language = OptionRow(sec.body, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(sec.body, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         pack_rows(sec.body, [self.search, self.language, self.voice])
         ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button())]).pack(fill="x", pady=(4, 2))
