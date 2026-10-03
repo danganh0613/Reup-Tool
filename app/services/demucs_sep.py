@@ -44,6 +44,17 @@ def install_demucs(log: Callable[[str], None] | None = None) -> bool:
     return is_installed()
 
 
+def cached_no_vocals(video_path: str | Path) -> Path | None:
+    """Bản không lời đã tách sẵn (không chạy Demucs) — xem trước dùng nếu có."""
+    try:
+        src = Path(video_path)
+        key = hashlib.sha1(f"{src}|{int(src.stat().st_mtime)}".encode("utf-8")).hexdigest()[:12]
+        result = CACHE_DIR / "demucs" / key / "no_vocals.wav"
+        return result if result.exists() else None
+    except OSError:
+        return None
+
+
 def separate_no_vocals(video_path: str | Path, ffmpeg: FFmpeg, *, log: Callable[[str], None] | None = None,
                        cancel: threading.Event | None = None) -> Path | None:
     """Tách và trả về đường dẫn WAV không lời (cache theo file). None nếu không cài / lỗi."""

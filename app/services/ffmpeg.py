@@ -216,10 +216,11 @@ class FFmpeg:
             tail = "\n".join(stderr_lines[-12:])
             raise RuntimeError(f"ffmpeg thoát mã {proc.returncode}:\n{tail}")
 
-    def run_simple(self, args: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
+    def run_simple(self, args: list[str], timeout: float = 600, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
         self.require()
         cmd = [self.ffmpeg, "-hide_banner", "-y", "-nostdin", "-loglevel", "error", *args]
-        return subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW, timeout=timeout,
+                              cwd=str(cwd) if cwd else None)
 
     # ── Khung hình xem trước ──────────────────────────────────────────────
     def extract_frame(self, path: str | Path, t: float, *, vf: str = "", max_width: int = 1280,

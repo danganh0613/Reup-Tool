@@ -24,7 +24,11 @@ TOPICS: list[dict] = [
             ("Các ô nhỏ 16:9 · Gốc · Gốc · Cắt vừa khung", "Bấm vào để chọn khung video: 16:9 là video ngang (YouTube), 9:16 là video dọc (TikTok)."),
             ("V · T · B", "V: kéo hình đi. T: kéo ô chữ phụ đề. B: vẽ ô che mờ."),
             ("Sub · Blur", "Tạm giấu chữ / ô che để nhìn hình cho rõ. Không ảnh hưởng video xuất ra."),
-            ("Phát", "Xem thử video có tiếng."),
+            ("Phát", "Xem thử giống video xuất: đủ khung hình, màu, che mờ, logo, chữ, phụ đề; tiếng gồm âm gốc + giọng lồng "
+                     "+ nhạc nền; bỏ qua đoạn đã cắt, đúng tốc độ. Đang phát mà chỉnh gì thì hình/tiếng đổi theo ngay."),
+            ("Hiệu ứng", "Tắt khi máy yếu, phát bị giật: lúc đó chỉ phát hình gốc, phụ đề vẽ đè (tiếng vẫn đủ)."),
+            ("Render thử", "Render thật 15 giây từ chỗ đang xem rồi phát luôn — giống hệt file xuất. Chưa có giọng lồng thì "
+                           "máy tự tạo giọng cho đoạn đó. Dùng để nghiệm thu trước khi render cả video."),
             ("Xóa · phím Delete", "Xoá ô che hoặc ô chữ đang chọn. Lỡ tay thì bấm Ctrl+Z để lấy lại."),
         ]),
         ("tip", "Bạn không cần bấm lưu. Mọi thứ tự lưu, tắt máy mở lại vẫn còn."),

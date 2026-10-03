@@ -137,6 +137,7 @@ class RenderContext:
     src_width: int = 0       # kích thước khung nguồn (stage chạy trước khi đổi khung dùng cái này)
     src_height: int = 0
     src_t0: float = 0.0      # mốc thời gian theo nguồn (trước khi đổi tốc độ / cắt)
+    px: float = 1.0          # hệ số cỡ điểm ảnh so với bản render (phát xem trước ở cỡ nhỏ: độ mờ… co theo)
 
     def t(self) -> str:
         """Biểu thức thời gian tuyệt đối dùng trong filter."""
@@ -194,16 +195,26 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
                       stages: list[Stage] | None = None, pre_stages: list[Stage] | None = None,
                       src_stages: list[Stage] | None = None,
                       trim: TrimSpec | None = None, include_fps: bool = True, t0: float = 0.0,
-                      preview: bool = False, first_extra_input: int = 1) -> VideoGraph:
+                      preview: bool = False, first_extra_input: int = 1, preview_scale: float = 1.0) -> VideoGraph:
     """Dựng toàn bộ nhánh video. ``src_stages`` áp thẳng lên khung nguồn (che mờ — toạ độ theo video gốc, đi theo
-    mọi kiểu khung ra); ``pre_stages`` chạy sau lật/phóng nhưng trước khi đổi khung (màu, hiệu ứng)."""
+    mọi kiểu khung ra); ``pre_stages`` chạy sau lật/phóng nhưng trước khi đổi khung (màu, hiệu ứng).
+
+    ``preview_scale`` < 1 (chỉ khi ``preview``): xử lý cả chuỗi ở cỡ nhỏ (phát xem trước theo thời gian thực) —
+    nguồn thu nhỏ trước, khung ra cùng tỉ lệ; vị trí/cỡ của các lớp phủ tính theo tỉ lệ khung nên không đổi."""
     g = Graph(first_extra_input)
     geo = output_geometry(info, cfg)
+    k = preview_scale if preview and 0.05 < preview_scale < 0.999 else 1.0
+    if k < 1.0:
+        geo = OutputGeometry(_even(geo.width * k), _even(geo.height * k), geo.mode)
     speed = max(0.25, min(4.0, cfg.speed / 100.0))
     zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
     src_dur = info.duration
     input_args: list[str] = []
     vsrc, asrc = "[0:v]", ("[0:a]" if info.has_audio else None)
+    src_w, src_h = max(2, info.width), max(2, info.height)
+    if k < 1.0:
+        src_w, src_h = _even(src_w * k), _even(src_h * k)
+        vsrc = g.chain(vsrc, [f"scale={src_w}:{src_h}"])
 
     # ── Cắt ──────────────────────────────────────────────────────────────
     src_offset = 0.0
@@ -233,8 +244,8 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
 
     ctx = RenderContext(width=geo.width, height=geo.height, fps=info.fps or 30.0,
                         duration=src_dur / speed if speed else src_dur, work_dir=work_dir, t0=t0,
-                        preview=preview, speed=speed, src_width=max(2, info.width), src_height=max(2, info.height),
-                        src_t0=t0 * speed + src_offset)
+                        preview=preview, speed=speed, src_width=src_w, src_height=src_h,
+                        src_t0=t0 * speed + src_offset, px=k)
 
     # ── Stage trên khung nguồn (che mờ) ──────────────────────────────────
     cur = vsrc
@@ -260,7 +271,7 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
         bg_src, fg_src = g.label("bgsrc"), g.label("fgsrc")
         g.add(f"{cur}split=2{bg_src}{fg_src}")
         bg = g.chain(bg_src, [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}",
-                              "gblur=sigma=28", "eq=brightness=-0.08"])
+                              f"gblur=sigma={28 * k:.1f}", "eq=brightness=-0.08"])
         fg = g.chain(fg_src, [f"scale={W}:{H}:force_original_aspect_ratio=decrease"])
         cur = g.label()
         g.add(f"{bg}{fg}overlay=(W-w)/2:(H-h)/2{cur}")

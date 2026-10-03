@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HANDLE = 7
+CLIP_SECONDS = 15                 # độ dài bản render thử
 ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 
 
@@ -83,6 +84,10 @@ class PreviewPanel(ctk.CTkFrame):
         self._wave_line: int | None = None
         self.player = Player(window.ffmpeg, None, self._on_play_end)
         self._cues_cache: list[Cue] = []
+        self.fx_play = True                             # phát có đủ hiệu ứng như bản render
+        self._clip: dict | None = None                  # đang phát bản render thử
+        self._restart_id: str | None = None
+        self.state.on("config_changed", self._config_changed)
 
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -104,6 +109,14 @@ class PreviewPanel(ctk.CTkFrame):
         self.canvas.bind("<Motion>", self._hover)
         self.canvas.bind("<MouseWheel>", self._wheel)
         self._build_timeline()
+
+    def destroy(self) -> None:
+        self.state.off("config_changed", self._config_changed)    # dựng lại giao diện (đổi theme) → gỡ listener cũ
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        super().destroy()
 
     # ── Dựng UI ──────────────────────────────────────────────────────────
     def _build_header(self) -> None:
@@ -220,16 +233,25 @@ class PreviewPanel(ctk.CTkFrame):
         self.time_label = ctk.CTkLabel(ctrl, text="00:00:00 / 00:00:00", font=T.mono(11), width=150, anchor="w")
         self.time_label.pack(side="left", padx=(8, 0))
         self.cue_label = ctk.CTkLabel(ctrl, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w")
-        self.cue_label.pack(side="left", fill="x", expand=True, padx=8)
         button(ctrl, "", icon_name="fullscreen", size="sm", command=self.fullscreen, tip="Xem trước toàn màn hình (F)").pack(side="right")
-        self.ext_btn = button(ctrl, "Mở ngoài", icon_name="export", size="sm", command=self._open_external,
+        self.ext_btn = button(ctrl, "", icon_name="export", size="sm", command=self._open_external,
                               tip="Mở video bằng trình phát mặc định của máy")
         self.ext_btn.pack(side="right", padx=(0, 4))
         self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform,
                                tip="Vẽ dạng sóng âm thanh dưới thanh thời gian")
         self.wave_btn.pack(side="right", padx=(0, 4))
-        for b in (self.ext_btn, self.wave_btn):
+        self.clip_btn = button(ctrl, "Render thử", icon_name="film", size="sm", command=self.render_clip,
+                               tip=f"Render thử {CLIP_SECONDS} giây từ vị trí đang xem với đầy đủ chỉnh sửa (phụ đề, lồng tiếng, "
+                                   "nhạc nền, hiệu ứng, cắt, tốc độ) rồi phát ngay — giống hệt file sẽ xuất")
+        self.clip_btn.pack(side="right", padx=(0, 4))
+        self.fx_btn = button(ctrl, "Hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx,
+                             tip="Khi phát: áp đủ hiệu ứng như bản render (khung hình, màu, che mờ, logo, phụ đề thật). "
+                                 "Máy yếu bị giật thì tắt — khi đó phát hình gốc, phụ đề vẽ đè.")
+        self.fx_btn.pack(side="right", padx=(0, 4))
+        for b in (self.wave_btn, self.clip_btn, self.fx_btn):
             self._full_w[b] = b.cget("width")
+        # chữ của câu phụ đề xếp sau cùng: thiếu chỗ thì nó co lại, các nút không bị đẩy ra ngoài
+        self.cue_label.pack(side="left", fill="x", expand=True, padx=8)
         self._compact = False
 
     def _layout_top(self) -> None:
@@ -284,7 +306,8 @@ class PreviewPanel(ctk.CTkFrame):
         elif self._top_rows == 2:
             self.bar_label.pack(side="left", padx=(0, 10), before=self.bar.winfo_children()[1])
         labels = {self.del_btn: "Xóa", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
-                  self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.ext_btn: "Mở ngoài", self.wave_btn: "Sóng âm",
+                  self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.wave_btn: "Sóng âm",
+                  self.clip_btn: "Render thử", self.fx_btn: "Hiệu ứng" if self.fx_play else "Hiệu ứng tắt",
                   **{b: key for key, b in self.tool_btns.items()}}
         for b, label in labels.items():
             relabel(b, "" if compact else label, width=32 if compact else self._full_w[b])
@@ -304,6 +327,7 @@ class PreviewPanel(ctk.CTkFrame):
     # ── Public API ───────────────────────────────────────────────────────
     def set_item(self, item: VideoItem | None) -> None:
         self.stop_play()
+        self._clip = None
         self.item = item
         self.info = None
         self.t = 0.0
@@ -374,7 +398,8 @@ class PreviewPanel(ctk.CTkFrame):
             cue_text = ""
             mods = stages_mod.collect(self.state, item, info, include_blur=show_blur)
             eff = mods.info
-            cues = self.window.pipeline.subtitle_cues(item)
+            pipe = self.window.pipeline
+            cues = pipe.preview_sub_cues(item, pipe.current_voice_track(item, info.duration)[0])
             c = cue_at(cues, t)
             if c is not None:
                 cue_text = c.plain + (f"  ⟂ {c.meta.get('secondary')}" if c.meta.get("secondary") else "")
@@ -429,6 +454,8 @@ class PreviewPanel(ctk.CTkFrame):
     def seek(self, t: float) -> None:
         if self.info is None:
             return
+        if self._clip is not None:
+            self.stop_play()
         was_playing = self.player.playing
         self.t = max(0.0, min(max(0.0, self.info.duration - 0.05), t))
         self.slider.set(self.t)
@@ -595,6 +622,8 @@ class PreviewPanel(ctk.CTkFrame):
     def _draw_live_subtitle(self, ox, oy, dw, dh) -> None:
         if not (self.state.subtitle.enable_subtitle and self.show_sub):
             return
+        if self._clip is not None or (self.fx_play and not self.player.effects_failed):
+            return                       # khung đã có phụ đề thật (ASS) — không vẽ đè
         c = cue_at(self._cues_cache, self.t)
         if c is None:
             return
@@ -608,6 +637,11 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _draw_overlays(self, ox, oy, dw, dh) -> None:
         cv = self.canvas
+        if self._clip is not None:
+            a, b = self._clip["window"][0][0], self._clip["window"][-1][1]
+            self._ov_text(ox + 10, oy + 10, anchor="nw", fill=T.ACCENT, font=(T.UI_FONT, 11, "bold"),
+                          text=f"BẢN RENDER THỬ · {format_ts(a, '.')[:8]} → {format_ts(b, '.')[:8]}")
+            return
         # viền mảnh quanh khung video xuất: phân biệt viền đen của video với nền đen của khung xem trước
         self._ov_rectangle(ox - 1, oy - 1, ox + dw, oy + dh, outline=T.BORDER, width=1)
         self._badges: list[tuple[str, int, float, float, float]] = []
@@ -925,9 +959,101 @@ class PreviewPanel(ctk.CTkFrame):
     def start_play(self) -> None:
         if self.item is None or self.info is None:
             return
-        self._cues_cache = self.window.pipeline.subtitle_cues(self.item)
+        self._configure_spec(announce=True)
         self._play_from(self.t)
         self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+
+    def _configure_spec(self, announce: bool = False) -> None:
+        """Chụp cấu hình hiện tại cho lần phát: hình qua đủ filter, tiếng = âm gốc + giọng lồng + nhạc nền."""
+        from app.services.live_preview import LiveSpec
+
+        pipe = self.window.pipeline
+        voice, fresh, trimmed = pipe.current_voice_track(self.item, self.info.duration)
+        cues = pipe.preview_sub_cues(self.item, voice) if self.show_sub else []
+        self._cues_cache = cues
+        self.player.effects_failed = ""
+        try:
+            self.player.spec = LiveSpec(self.state, self.item, self.info, self.window.ffmpeg,
+                                        cues=cues if (self.fx_play and self.state.subtitle.enable_subtitle) else [],
+                                        voice=voice, voice_trimmed=trimmed,
+                                        effects=self.fx_play, show_blur=self.show_blur)
+        except Exception:
+            logger.warning("Không dựng được cấu hình phát xem trước", exc_info=True)
+            self.player.spec = None
+        if not announce:
+            return
+        tts, vcfg = self.state.tts, self.state.video
+        note = ""
+        if tts.enable_tts and not vcfg.mute:
+            if voice is None:
+                note = ("Chưa có giọng lồng cho video này — bấm «Render thử» (tự tạo giọng cho đoạn đang xem) "
+                        "hoặc «Tạo giọng» ở tab TTS để nghe kèm khi phát.")
+            elif not fresh:
+                note = ("Đang nghe giọng lồng tạo lần trước; cài đặt đã đổi nên khi render sẽ tạo giọng mới — "
+                        "bấm «Render thử» để nghe đúng bản mới.")
+        if note:
+            self.window.progress.set_status(f"🔈 {note}")
+
+    def _config_changed(self, _section: str = "") -> None:
+        """Đổi cài đặt lúc đang phát → phát lại từ chỗ đang xem với cài đặt mới (gom các thay đổi liên tiếp)."""
+        if not self.player.playing or self._clip is not None or self.item is None:
+            return
+        if self._restart_id is not None:
+            try:
+                self.after_cancel(self._restart_id)
+            except Exception:
+                pass
+        self._restart_id = self.after(400, self._restart_live)
+
+    def _restart_live(self) -> None:
+        self._restart_id = None
+        if self.player.playing and self._clip is None and self.item is not None and self.info is not None:
+            self._configure_spec()
+            self._play_from(self.t)
+
+    def toggle_fx(self) -> None:
+        self.fx_play = not self.fx_play
+        relabel(self.fx_btn, "" if self._compact else ("Hiệu ứng" if self.fx_play else "Hiệu ứng tắt"),
+                width=32 if self._compact else self._full_w[self.fx_btn])
+        self.fx_btn.configure(image=button_icon("eye" if self.fx_play else "hide", size="sm", with_text=not self._compact))
+        if self.player.playing and self._clip is None:
+            self._configure_spec()
+            self._play_from(self.t)
+
+    # ── Bản render thử ───────────────────────────────────────────────────
+    def render_clip(self) -> None:
+        if self.item is None or self.info is None:
+            return
+        self.stop_play()
+        item, t = self.item, self.t
+
+        def work(cancel):
+            return self.window.pipeline.preview_clip(item, t, CLIP_SECONDS, progress=self.window.set_busy_progress,
+                                                     log=self.window.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if error or result is None or self.item is not item:
+                return
+            path, window = result
+            self._clip = {"path": str(path), "window": window, "t": t}
+            self.player.spec = None
+            self.player.set_source(str(path))
+            self._cues_cache = []
+            self._live = None
+            self._play_from(0.0)
+            self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+            self.window.progress.set_status("▶ Đang phát bản render thử — giống hệt file sẽ xuất. Bấm Dừng để quay lại.")
+
+        self.window.run_task("Xem thử bản render", work, done)
+
+    def _exit_clip(self) -> None:
+        clip, self._clip = self._clip, None
+        if clip is None:
+            return
+        self.player.set_source(self.item.path if self.item else None)
+        self.t = clip["t"]
+        self.slider.set(self.t)
+        self._update_time()
 
     def _play_from(self, t: float) -> None:
         self._kill_frame_proc()
@@ -939,6 +1065,8 @@ class PreviewPanel(ctk.CTkFrame):
     def stop_play(self) -> None:
         if self.player.playing:
             self.player.stop()
+        if self._clip is not None:
+            self._exit_clip()
         if self._poll_id is not None:
             try:
                 self.after_cancel(self._poll_id)
@@ -956,7 +1084,16 @@ class PreviewPanel(ctk.CTkFrame):
         if not self.player.playing:
             return
         f = self.player.take_frame()
-        if f is not None:
+        if f is not None and self._clip is not None:
+            img, t = f
+            self._live = img
+            if abs(t - self._last_slider_t) >= 0.2 or t < self._last_slider_t:
+                self._last_slider_t = t
+                total = self._clip["window"]
+                dur = sum(b - a for a, b in total) / max(0.25, self.state.video.speed / 100.0)
+                self._set_text(self.time_label, f"{format_ts(t, '.')[:8]} / {format_ts(dur, '.')[:8]}")
+            self._redraw()
+        elif f is not None:
             img, t = f
             self._live = img
             self.t = t

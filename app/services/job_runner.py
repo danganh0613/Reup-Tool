@@ -8,6 +8,7 @@ Mọi callback về UI đều đi qua ``ui_call`` (root.after) nên an toàn thr
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import threading
@@ -15,8 +16,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from app.config.paths import JOBS_DIR, SUBS_DIR, VOICE_DIR
-from app.core.state import SRT_MODES, SRT_SOURCES, TRIM_MODES, TTS_SOURCES, AppState, VideoItem
+from app.config.paths import JOBS_DIR, PREVIEW_CACHE_DIR, SUBS_DIR, VOICE_DIR
+from app.core.state import ENCODE_PRESETS, SRT_MODES, SRT_SOURCES, TRIM_MODES, TTS_SOURCES, AppState, VideoItem
 from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
 from app.services.ffmpeg import FFmpeg, RenderCancelled
@@ -202,7 +203,7 @@ class Pipeline:
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,
                        progress: ProgressCb | None = None, log: LogCb | None = None,
                        cancel: threading.Event | None = None, force: bool = False, extra_key: str = "",
-                       fit_duration: float | None = None) -> Path:
+                       fit_duration: float | None = None, out_dir: Path | None = None) -> Path:
         from app.services.tts.generator import generate_voice_track, voice_id_for
 
         if cues is None:
@@ -211,7 +212,7 @@ class Pipeline:
             self.ensure_speakers(item, log=log, cancel=cancel)
             self.annotate_speakers(item, cues)
         srt_path = srt_path or item.srt_path or ""
-        out = VOICE_DIR / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
+        out = (out_dir or VOICE_DIR) / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
         if out.exists() and not force:
             if log:
                 log(f"Dùng lại track giọng đã có: {out.name}")
@@ -245,6 +246,81 @@ class Pipeline:
             return item.srt_path
         raise RuntimeError("Chưa có phụ đề để tạo giọng (nhận diện hoặc chọn file SRT trước).")
 
+    # ── Xem trước ─────────────────────────────────────────────────────────
+    def current_voice_track(self, item: VideoItem, duration: float = 0.0) -> tuple[Path | None, bool, bool]:
+        """Track giọng để nghe kèm khi phát xem trước: (đường dẫn, khớp cấu hình hiện tại?, tính theo thời gian sau cắt?).
+
+        Ưu tiên track đúng chữ ký cấu hình hiện tại (cùng file bản render sẽ dùng lại); không có thì track tạo gần nhất."""
+        if not self.state.tts.enable_tts:
+            return None, False, False
+        try:
+            srt = self._tts_srt_path(item)
+        except RuntimeError:
+            return None, False, False
+        trim = stages_mod.trim_spec(self.state.trim, duration or item.duration or 0.0)
+        key = repr([(round(a, 3), round(b, 3)) for a, b in trim.segments]) if trim.active else ""
+        p = VOICE_DIR / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt, key)}.wav"
+        if p.exists():
+            return p, True, trim.active
+        if item.voice_path and Path(item.voice_path).exists():
+            return Path(item.voice_path), False, False
+        return None, False, False
+
+    def preview_sub_cues(self, item: VideoItem, voice: Path | None) -> list[Cue]:
+        """Phụ đề sẽ ghi lên video (theo thời gian nguồn) — dùng mốc đã dời theo giọng nếu bản render cũng dùng."""
+        scfg, tcfg = self.state.subtitle, self.state.tts
+        synced = voice.with_suffix(".srt") if voice else None
+        same_source = tcfg.enable_tts and ((tcfg.tts_source == TTS_SOURCES[0] and scfg.srt_mode == SRT_MODES[1]) or
+                                           (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
+        if synced is not None and synced.exists() and same_source and not self.state.trim.enable:
+            try:
+                return shift(load_srt(synced), scfg.sub_delay)
+            except Exception:
+                pass
+        return self.subtitle_cues(item)
+
+    def preview_clip(self, item: VideoItem, start: float, seconds: float = 15.0, *, progress: ProgressCb | None = None,
+                     log: LogCb | None = None, cancel: threading.Event | None = None) -> tuple[Path, list[tuple[float, float]]]:
+        """Render thử ``seconds`` giây (sau cắt) từ mốc nguồn ``start`` bằng đúng quy trình render → MP4 trong cache.
+
+        Không đụng tới trạng thái hàng đợi; phụ đề nhận diện / bản dịch tạo ra trong lúc này vẫn được giữ cho video."""
+        log = log or (lambda _m: None)
+        info = self.ffmpeg.probe(item.path)
+        if info.width <= 0 or info.height <= 0:
+            raise RuntimeError("File không có luồng hình.")
+        trim = stages_mod.collect(self.state, item, info).trim
+        segs = trim.segments if trim.active else [(0.0, info.duration)]
+        speed = max(0.25, self.state.video.speed / 100.0)
+        need = seconds * speed                      # giây nguồn cho ``seconds`` giây video ra
+        window: list[tuple[float, float]] = []
+        for a, b in segs:
+            if b <= start + 0.05:
+                continue
+            a2 = max(a, start)
+            take = min(b - a2, need)
+            if take > 0.05:
+                window.append((a2, a2 + take))
+                need -= take
+            if need <= 0.05:
+                break
+        if not window:
+            raise RuntimeError("Vị trí đang xem nằm sau đoạn cuối được giữ lại — tua về trước rồi thử lại.")
+        clip = dataclasses.replace(item)
+        out = PREVIEW_CACHE_DIR / "render_preview.mp4"
+        PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self._render_one(clip, info, rp.TrimSpec(segments=window), on_update=lambda _it: progress(_it.progress) if progress else None,
+                         log=log, cancel=cancel, final=False, preview_out=out)
+        if clip.srt_path != item.srt_path or clip.srt_translated_path != item.srt_translated_path:
+            item.srt_path, item.srt_translated_path = clip.srt_path, clip.srt_translated_path
+        try:                                    # giọng của các lần xem thử: giữ 12 file gần nhất
+            old = sorted((PREVIEW_CACHE_DIR / "voice").glob("*.wav"), key=lambda f: f.stat().st_mtime, reverse=True)
+            for f in old[12:]:
+                for ext in (".wav", ".srt", ".json"):
+                    f.with_suffix(ext).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return out, window
+
     # ── Chuỗi đầy đủ cho một video ────────────────────────────────────────
     def process(self, item: VideoItem, *, on_update: Callable[[VideoItem], None],
                 log: LogCb, cancel: threading.Event) -> Path:
@@ -272,11 +348,14 @@ class Pipeline:
         return self._render_one(item, info, trim, on_update=on_update, log=log, cancel=cancel)
 
     def _render_one(self, item: VideoItem, info, trim, *, on_update, log, cancel, suffix: str = "",
-                    final: bool = True) -> Path:
+                    final: bool = True, preview_out: Path | None = None) -> Path:
         """``final=False``: một đoạn trong chế độ xuất nhiều file — không đánh dấu "Xong" để bộ đếm tiến độ
-        của hàng đợi không nhảy trước."""
+        của hàng đợi không nhảy trước. ``preview_out``: bản render thử (mã hoá nhanh, giọng/kết quả để trong cache)."""
         st = self.state
         vcfg, scfg, tcfg = st.video, st.subtitle, st.tts
+        audio_only = self.audio_only and preview_out is None
+        if preview_out is not None:
+            vcfg = dataclasses.replace(vcfg, encode_preset=ENCODE_PRESETS[0], loop_to_voice=False)
         mods = stages_mod.collect(st, item, info, trim_override=trim)
 
         def stage(name: str, base: float, span: float) -> ProgressCb:
@@ -344,7 +423,8 @@ class Pipeline:
             fit = trim.kept_duration if trim.active else info.duration   # track giọng tính theo thời gian nguồn (atempo theo tốc độ sau)
             voice_path = self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,
                                              progress=stage("Tạo giọng đọc", 0.45, 0.2), log=log, cancel=cancel,
-                                             fit_duration=fit if not vcfg.loop_to_voice else None)
+                                             fit_duration=fit if not (vcfg.loop_to_voice or preview_out) else None,
+                                             out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None)
             on_update(item)
 
         job_dir = self.job_dir(item)
@@ -366,8 +446,8 @@ class Pipeline:
 
         out_dir = Path(st.output_dir) if st.output_dir else VOICE_DIR.parent / "videos"
         out_dir.mkdir(parents=True, exist_ok=True)
-        ext = ".mp3" if self.audio_only else ".mp4"
-        out_path = out_dir / f"{item.stem}{vcfg.output_suffix}{suffix}{ext}"
+        ext = ".mp3" if audio_only else ".mp4"
+        out_path = preview_out or out_dir / f"{item.stem}{vcfg.output_suffix}{suffix}{ext}"
         voice_dur = self.ffmpeg.duration_of(voice_path) if voice_path else 0.0
         audio_override: Path | None = None
         if vcfg.demucs_enable and vcfg.keep_original_audio and not vcfg.mute and info.has_audio:
@@ -392,9 +472,9 @@ class Pipeline:
         plan = rp.plan_render(item, mods.info, vcfg, ffmpeg=self.ffmpeg, job_dir=job_dir, out_path=out_path,
                               ass_name=ass_name, voice_path=voice_path, stages=mods.stages,
                               pre_stages=mods.pre_stages, src_stages=mods.src_stages, trim=trim, audio_extras=mods.audio_extras,
-                              voice_duration=voice_dur, audio_only=self.audio_only, audio_override=audio_override,
+                              voice_duration=voice_dur, audio_only=audio_only, audio_override=audio_override,
                               audio_orig_filters=mods.audio_orig_filters, log=log)
-        log(f"Render → {out_path.name}")
+        log(f"Render thử → {out_path.name}" if preview_out else f"Render → {out_path.name}")
         rp.run_plan(plan, self.ffmpeg, on_progress=stage("Render", 0.65, 0.35), cancel=cancel)
         item.output_path = str(out_path)
         if final:

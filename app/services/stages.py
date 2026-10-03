@@ -142,12 +142,12 @@ def blur_stage(cfg: BlurConfig) -> Stage:
             g.add(f"{cur}split=2{base}{reg}")
             f = [f"crop={w}:{h}:{x}:{y}"]
             if style == BLUR_STYLES[1]:
-                p = 4 + strength * 0.36
+                p = max(1.5, (4 + strength * 0.36) * ctx.px)
                 f += [f"scale=iw/{p:.2f}:ih/{p:.2f}:flags=area", f"scale={w}:{h}:flags=neighbor"]
             elif style == BLUR_STYLES[2]:
                 f += ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill"]
             else:
-                f += [f"gblur=sigma={1 + strength * 0.5:.1f}:steps=2"]
+                f += [f"gblur=sigma={(1 + strength * 0.5) * ctx.px:.1f}:steps=2"]
             blurred = g.chain(reg, f)
             rounded = float(r.get("rounded", 0) or 0)
             if feather > 0 or opacity < 100 or rounded > 0:
@@ -411,16 +411,24 @@ def bgm_extras(cfg: BGMConfig) -> Callable[[Graph, RenderContext], list[AudioExt
             idx = g.add_input(args)
             end = max(0.0, float(clip.get("end", 0) or 0)) / ctx.speed
             span = max(0.1, (min(D, end) - start) if end > start else (D - start))
+            # xem trước từ giữa video (ctx.t0): bỏ phần nhạc đã qua, dời phần chưa tới
+            skip = max(0.0, ctx.t0 - start) if ctx.preview else 0.0
+            if skip >= span:
+                continue
+            delay = max(0.0, start - ctx.t0) if ctx.preview else start
+            left = span - skip
             f: list[str] = []
-            if offset > 0:
-                f += [f"atrim=start={offset:.3f}", "asetpts=PTS-STARTPTS"]
-            f += [f"atrim=end={span:.3f}", "asetpts=PTS-STARTPTS"]
-            if fi > 0:
-                f.append(f"afade=t=in:st=0:d={fi:.2f}")
+            if offset + skip > 0:
+                f += [f"atrim=start={offset + skip:.3f}", "asetpts=PTS-STARTPTS"]
+            f += [f"atrim=end={left:.3f}", "asetpts=PTS-STARTPTS"]
+            if fi > skip:
+                f.append(f"afade=t=in:st=0:d={fi - skip:.2f}")
             if fo > 0 and span > fo:
-                f.append(f"afade=t=out:st={span - fo:.3f}:d={fo:.2f}")
-            if start > 0:
-                ms = int(start * 1000)
+                st_out = span - fo - skip
+                f.append(f"afade=t=out:st={st_out:.3f}:d={fo:.2f}" if st_out >= 0 else
+                         f"afade=t=out:st=0:d={left:.2f}")
+            if delay > 0:
+                ms = int(delay * 1000)
                 f.append(f"adelay={ms}|{ms}")
             f.append(f"volume={vol:.3f}")
             out.append(AudioExtra(label=f"[{idx}:a]", filters=f, duck=cfg.ducking))
