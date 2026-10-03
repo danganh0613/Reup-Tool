@@ -26,7 +26,7 @@ def main_locale(cfg) -> str:
         return cfg.edge_language
     if cfg.tts_provider == "Google Cloud TTS":
         return cfg.google_language
-    if cfg.tts_provider.startswith("VieNeu"):
+    if cfg.tts_provider.startswith("VieNeu") or cfg.tts_provider.startswith("FPT"):
         return "vi-VN"
     return ""
 

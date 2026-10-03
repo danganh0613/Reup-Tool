@@ -27,7 +27,7 @@ from app.core.platform import open_path
 KEY_LINKS = {"Gemini": "https://aistudio.google.com/apikey", "Groq": "https://console.groq.com/keys",
              "DeepSeek": "https://platform.deepseek.com/api_keys", "OpenAI": "https://platform.openai.com/api-keys",
              "ElevenLabs": "https://elevenlabs.io/app/settings/api-keys",
-             "Google": "https://console.cloud.google.com/apis/credentials"}
+             "Google": "https://console.cloud.google.com/apis/credentials", "FPT": "https://console.fpt.ai/"}
 MODEL_CHOICES = {"Gemini": [],          # lấy từ gemini_models.text_models() (có thể cập nhật từ Google)
                  "Groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b"],
                  "DeepSeek": ["deepseek-chat", "deepseek-reasoner"],
@@ -246,7 +246,8 @@ class SettingsWindow(ctk.CTkToplevel):
         # ── Cột 3 ────────────────────────────────────────────────────────
         c3 = cols[2]
         self._col_title(c3, "🎙 GIỌNG CLOUD & CẤU HÌNH")
-        b = self._card(c3, "Giọng đọc cloud (ElevenLabs · Google · VieNeu)", "Key lưu tại settings.json trên máy này.")
+        b = self._card(c3, "Giọng đọc cloud (ElevenLabs · Google · FPT.AI)",
+                       "Key lưu tại settings.json trên máy này. Gemini TTS dùng key Gemini ở cột giữa.")
         r = ctk.CTkFrame(b, fg_color="transparent")
         r.pack(fill="x")
         ctk.CTkLabel(r, text="ElevenLabs API keys (mỗi dòng một key)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
@@ -264,6 +265,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.google_key.pack(fill="x", pady=(0, 6))
         self.google_json = EntryRow(b, "Google JSON", value=st.google_sa_json, browse="file", placeholder="Service Account JSON (tuỳ chọn)")
         self.google_json.pack(fill="x", pady=3)
+        r = ctk.CTkFrame(b, fg_color="transparent")
+        r.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(r, text="FPT.AI API keys (giọng Việt 3 miền)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        ctk.CTkButton(r, text="Lấy key ↗", width=80, height=32, command=lambda: webbrowser.open(KEY_LINKS["FPT"]), **T.secondary_button()).pack(side="right")
+        self.fpt_keys = ctk.CTkTextbox(b, height=52, font=T.mono(11))
+        self.fpt_keys.insert("1.0", st.fpt_api_key)
+        self.fpt_keys.pack(fill="x", pady=(0, 6))
         hint(b, "Mọi ô key đều nhận nhiều key, mỗi dòng một key: hết hạn mức hoặc key lỗi thì tự chuyển sang key kế tiếp.").pack(fill="x", pady=(2, 0))
 
         b = self._card(c3, "Mẫu cấu hình sẵn (Preset 1-Click)", "Chọn nhanh mẫu dựng video chuẩn hoặc lưu cấu hình riêng.")
@@ -526,6 +534,7 @@ class SettingsWindow(ctk.CTkToplevel):
         st.elevenlabs_api_keys = self.eleven_keys.get("1.0", "end").strip()
         st.elevenlabs_api_key = st.elevenlabs_api_keys.splitlines()[0].strip() if st.elevenlabs_api_keys else ""
         st.google_api_key = self.google_key.get("1.0", "end").strip()
+        st.fpt_api_key = self.fpt_keys.get("1.0", "end").strip()
         st.google_sa_json = self.google_json.get().strip()
         out = self.out_var.get().strip()
         if out:

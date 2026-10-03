@@ -11,7 +11,7 @@ from app.config import theme as T
 from app.core.languages import LocaleLabels
 from app.core.state import TTS_PROVIDERS
 from app.services.tts.base import Voice
-from app.services.tts.generator import make_engine, preview_text, synthesize_cached
+from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list
 from app.ui.widgets.common import ButtonRow, OptionRow, StatusLabel
 
 VoiceSel = tuple[str, str, str]          # (provider, locale, voice_id)
@@ -48,7 +48,7 @@ class VoicePicker(ctk.CTkFrame):
         cfg = replace(self.window.app_state.tts)
         cfg.tts_provider = provider
         cfg.edge_language = cfg.google_language = locale
-        cfg.edge_voice = cfg.google_voice = cfg.eleven_voice_id = cfg.vieneu_voice = vid
+        cfg.set_voice(vid)
         cfg.tts_speed = self.get_speed()
         return cfg
 
@@ -81,7 +81,7 @@ class VoicePicker(ctk.CTkFrame):
         provider, locale, vid = self.get_sel()
         self._loading = True
         try:
-            if provider == "ElevenLabs" or provider.startswith("VieNeu"):
+            if not uses_language_list(provider):
                 self.language.pack_forget()
                 subset = self._voices
             else:

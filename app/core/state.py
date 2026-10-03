@@ -60,7 +60,11 @@ POSITIONS = ["Trên trái", "Trên giữa", "Trên phải", "Giữa trái", "Ch�
 SAFE_ZONES = ["Toàn khung", "TikTok/Reels (né UI phải & dưới)"]
 KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → trái", "Trên → dưới"]
 
-TTS_PROVIDERS = ["Edge TTS", "ElevenLabs", "Google Cloud TTS", "VieNeu (local, tiếng Việt)"]
+TTS_PROVIDERS = ["Edge TTS", "Gemini TTS (Google AI)", "ElevenLabs", "Google Cloud TTS", "FPT.AI",
+                 "VieNeu (local, tiếng Việt)"]
+#: model Gemini TTS — model đầu không dùng được với key thì tự thử model kế tiếp
+GEMINI_TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview",
+                     "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 ELEVEN_MODELS = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
@@ -162,6 +166,11 @@ class TTSConfig:
     google_language: str = "vi-VN"
     google_voice: str = "vi-VN-Neural2-A"
     vieneu_voice: str = "Minh Quân Pro"
+    gemini_voice: str = "Leda"
+    gemini_tts_model: str = GEMINI_TTS_MODELS[0]
+    gemini_style: str = "Tự nhiên"            # phong cách đọc (xem gemini_tts.STYLES)
+    gemini_style_custom: str = ""              # hướng dẫn tự gõ khi chọn «Tự viết…»
+    fpt_voice: str = "banmai"
     tts_speed: float = 1.0
     tts_pitch: int = 0                 # Hz, Edge only
     max_tempo: float = 1.5             # tăng tốc tối đa để khớp thời lượng cue
@@ -172,6 +181,11 @@ class TTSConfig:
     speaker_count: str = SPEAKER_COUNTS[0]
     #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
     speaker_voices: list = field(default_factory=list)
+
+    def set_voice(self, voice_id: str) -> None:
+        """Ghi cùng một mã giọng cho mọi nhà cung cấp (dùng khi đổi giọng theo nhân vật / người nói)."""
+        self.edge_voice = self.google_voice = self.eleven_voice_id = self.vieneu_voice = voice_id
+        self.gemini_voice = self.fpt_voice = voice_id
 
 
 @dataclass
@@ -328,6 +342,7 @@ class Settings:
     openai_api_key: str = ""
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
     elevenlabs_api_keys: str = ""      # nhiều key, mỗi dòng một key
+    fpt_api_key: str = ""              # FPT.AI (console.fpt.ai) — nhiều key, mỗi dòng một key
 
     @staticmethod
     def split_keys(text: str) -> list[str]:

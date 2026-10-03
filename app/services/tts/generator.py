@@ -56,18 +56,34 @@ def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
         from app.services.tts.vieneu import VieNeuTTS
 
         return VieNeuTTS(precision=settings.vieneu_precision)
+    if cfg.tts_provider.startswith("Gemini"):
+        from app.services.tts.gemini_tts import GeminiTTS
+
+        return GeminiTTS(settings.gemini_keys(), model=cfg.gemini_tts_model, style=cfg.gemini_style,
+                         custom_style=cfg.gemini_style_custom)
+    if cfg.tts_provider.startswith("FPT"):
+        from app.services.tts.fpt import FptTTS
+
+        return FptTTS(settings.split_keys(settings.fpt_api_key))
     from app.services.tts.edge import EdgeTTS
 
     return EdgeTTS()
 
 
+def uses_language_list(provider: str) -> bool:
+    """Nhà cung cấp chia giọng theo ngôn ngữ (Edge, Google Cloud) → có ô «Ngôn ngữ»; còn lại chọn thẳng giọng."""
+    return provider in ("Edge TTS", "Google Cloud TTS")
+
+
 def _voice_lang(cfg: TTSConfig, voice_id: str) -> str:
     """Mã ngôn ngữ của giọng đang chọn (vi, zh, ja, ko, en…) — '' nếu không rõ (ElevenLabs đa ngôn ngữ)."""
     if cfg.tts_provider == "Edge TTS":
+        if "Multilingual" in voice_id:          # giọng đa ngôn ngữ đọc được mọi thứ tiếng
+            return ""
         return (voice_id.split("-")[0] if "-" in voice_id else cfg.edge_language.split("-")[0]).lower()
     if cfg.tts_provider == "Google Cloud TTS":
         return voice_id.split("-")[0].lower() if "-" in voice_id else ""
-    if cfg.tts_provider.startswith("VieNeu"):
+    if cfg.tts_provider.startswith("VieNeu") or cfg.tts_provider.startswith("FPT"):
         return "vi"
     return ""
 
@@ -93,6 +109,10 @@ def voice_id_for(cfg: TTSConfig) -> str:
         return cfg.google_voice
     if cfg.tts_provider.startswith("VieNeu"):
         return cfg.vieneu_voice
+    if cfg.tts_provider.startswith("Gemini"):
+        return cfg.gemini_voice
+    if cfg.tts_provider.startswith("FPT"):
+        return cfg.fpt_voice
     return cfg.edge_voice
 
 
@@ -101,7 +121,7 @@ def config_with_voice(cfg: TTSConfig, provider: str, voice_id: str, locale: str 
     """Bản sao ``cfg`` đổi sang giọng khác (giữ các tham số khớp thời gian, ElevenLabs…)."""
     c = replace(cfg)
     c.tts_provider = provider or cfg.tts_provider
-    c.edge_voice = c.google_voice = c.eleven_voice_id = c.vieneu_voice = voice_id
+    c.set_voice(voice_id)
     if locale:
         c.edge_language = c.google_language = locale
     if speed:

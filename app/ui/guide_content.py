@@ -136,8 +136,10 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bật «Thêm lồng tiếng vào video».",
             "«Đọc từ»: chọn «Sub đã dịch» (đọc tiếng Việt) hoặc «Sub gốc».",
-            "Chọn «Nhà cung cấp»: Edge TTS (miễn phí, cần mạng, có giọng HoaiMy nữ và NamMinh nam) là đủ tốt. "
-            "VieNeu là giọng Việt chạy trên máy. ElevenLabs/Google hay hơn nhưng cần key trả tiền.",
+            "Chọn «Nhà cung cấp»: Edge TTS miễn phí (HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ). "
+            "Gemini TTS: 30 giọng rất tự nhiên, chọn «Phong cách» (review phim, kể chuyện, giọng miền Nam/Bắc…), dùng key Gemini. "
+            "VieNeu: 25 giọng Việt 3 miền chạy trên máy. FPT.AI: giọng Việt 3 miền. ElevenLabs: có thư viện giọng Việt "
+            "🌐 cộng đồng chia sẻ. Google Cloud: 30 giọng Chirp3-HD.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
             "Để «Khớp mềm» bật: giọng đọc tự nhiên, máy tự dồn cho vừa video.",
             "Bấm «Render MP4» ở trên. Giọng đã tạo được giữ lại, lần sau render lại rất nhanh.",

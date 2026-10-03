@@ -55,11 +55,11 @@ class StoryEngine:
         base = replace(self.state.tts)
         cfg = self.state.story
         base.tts_provider, base.tts_speed = cfg.provider, cfg.speed
-        base.edge_voice = base.google_voice = base.eleven_voice_id = base.vieneu_voice = cfg.voice_id
+        base.set_voice(cfg.voice_id)
         ch = proj.character(speaker)
         if ch and ch.voice_id:
             base.tts_provider = ch.voice_provider or cfg.provider
-            base.edge_voice = base.google_voice = base.eleven_voice_id = base.vieneu_voice = ch.voice_id
+            base.set_voice(ch.voice_id)
             base.tts_speed = ch.speed or cfg.speed
         return base
 

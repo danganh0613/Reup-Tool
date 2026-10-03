@@ -138,9 +138,12 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                          "" if g else "Cài đặt → cột giữa «API keys Gemini» (miễn phí tại aistudio.google.com)."))
         e = len(settings.split_keys(settings.elevenlabs_api_keys)) + bool(settings.elevenlabs_api_key)
         gg = len(settings.google_keys())
-        out.append(Check("Key giọng cloud", "ok" if (e or gg) else "warn",
-                         f"ElevenLabs {e} key · Google {gg} key" if (e or gg) else "Chưa có — chỉ Edge TTS (miễn phí) và VieNeu dùng được",
-                         "" if (e or gg) else "Chỉ cần khi muốn giọng ElevenLabs/Google."))
+        fp = len(settings.split_keys(settings.fpt_api_key))
+        any_key = e or gg or fp or g
+        out.append(Check("Key giọng cloud", "ok" if any_key else "warn",
+                         f"Gemini TTS {g} · ElevenLabs {e} · Google {gg} · FPT.AI {fp} key" if any_key
+                         else "Chưa có — chỉ Edge TTS (miễn phí) và VieNeu dùng được",
+                         "" if any_key else "Chỉ cần khi muốn giọng Gemini / ElevenLabs / Google / FPT.AI."))
 
     # 7. Font icon
     step("Font")

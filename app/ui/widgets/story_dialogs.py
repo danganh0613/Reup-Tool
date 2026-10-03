@@ -8,6 +8,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from app.config import theme as T
+from app.core.state import TTS_PROVIDERS
 from app.services.story.prompts import LANGUAGES, MASTER_PROMPTS, load_competitors, save_competitors
 from app.ui.widgets.ui import button
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, pack_rows
@@ -58,7 +59,7 @@ class CompetitorDialog(ctk.CTkToplevel):
         self.language = OptionRow(sec.body, "Ngôn ngữ", LANGUAGES)
         self.style = OptionRow(sec.body, "Phong cách ảnh", [v[0] for v in MASTER_PROMPTS.values()])
         self.style_custom = EntryRow(sec.body, "Prompt thêm")
-        self.provider = OptionRow(sec.body, "Engine giọng", ["Edge TTS", "ElevenLabs", "Google Cloud TTS"])
+        self.provider = OptionRow(sec.body, "Engine giọng", TTS_PROVIDERS)
         self.speed = EntryRow(sec.body, "Tốc độ giọng", placeholder="0.95")
         rows = [self.name, self.language, self.style, self.style_custom, self.provider, self.speed]
         self.fields: dict[str, EntryRow] = {}

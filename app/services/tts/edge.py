@@ -59,8 +59,13 @@ class EdgeTTS(TTSEngine):
                 friendly = (v.get("FriendlyName") or short).replace("Microsoft ", "").replace(" Online (Natural)", "")
                 voices.append(Voice(id=short, name=friendly, locale=loc, gender=v.get("Gender", ""),
                                     extra={"personalities": (v.get("VoiceTag") or {}).get("VoicePersonalities", [])}))
+            # giọng «Multilingual» đọc được tiếng Việt (hơi lơ lớ giọng Tây) → thêm vào danh sách tiếng Việt
+            multi = [v for v in voices if "Multilingual" in v.id]
+            for v in multi:
+                voices.append(Voice(id=v.id, name=f"🌐 {v.name.split(' - ')[0]} (đa ngôn ngữ, hơi lơ lớ)",
+                                    locale="vi-VN", gender=v.gender, extra=dict(v.extra)))
             voices.sort(key=lambda x: (PREFERRED_LOCALES.index(x.locale) if x.locale in PREFERRED_LOCALES else 99,
-                                       x.locale, x.gender, x.name))
+                                       x.locale, "🌐" in x.name, x.gender, x.name))
             self._voices = voices
         if locale:
             return [v for v in self._voices if v.locale == locale]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -13,6 +14,16 @@ from app.services.tts.base import TTSEngine, Voice, part_path
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.elevenlabs.io/v1"
+#: nhãn của thư viện giọng ElevenLabs → tiếng Việt
+_VI_LABELS = {"northern": "miền Bắc", "southern": "miền Nam", "central": "miền Trung", "standard": "chuẩn",
+              "narrative_story": "kể chuyện", "social_media": "mạng xã hội", "conversational": "trò chuyện",
+              "characters_animation": "nhân vật hoạt hình", "informative_educational": "thuyết minh",
+              "entertainment_tv": "giải trí / TV", "advertisement": "quảng cáo", "news": "tin tức",
+              "warm": "ấm", "calm": "điềm tĩnh", "deep": "trầm", "young": "trẻ", "middle_aged": "trung niên",
+              "old": "lớn tuổi", "confident": "tự tin", "casual": "tự nhiên", "professional": "chuyên nghiệp",
+              "soft": "nhẹ", "energetic": "sôi nổi", "pleasant": "dễ nghe", "mature": "chín chắn"}
+_ADDED: set[str] = set()                 # giọng cộng đồng đã thêm vào tài khoản trong phiên này
+_ADD_LOCK = threading.Lock()
 
 
 class ElevenLabsTTS(TTSEngine):
@@ -66,8 +77,63 @@ class ElevenLabsTTS(TTSEngine):
                                     gender=labels.get("gender", ""),
                                     extra={"category": v.get("category", ""), "preview_url": v.get("preview_url", "")}))
             voices.sort(key=lambda x: (x.extra.get("category") != "cloned", x.name))
+            own = {v.id for v in voices}
+            try:
+                voices += [v for v in self.community_voices("vi") if v.id.split(":")[-1] not in own]
+            except Exception as exc:              # thư viện cộng đồng lỗi → vẫn dùng giọng của tài khoản
+                logger.info("ElevenLabs: không tải được thư viện giọng cộng đồng: %s", exc)
             self._voices = voices
         return list(self._voices)
+
+    def community_voices(self, language: str = "vi", pages: int = 3) -> list[Voice]:
+        """Giọng người dùng ElevenLabs chia sẻ (Voice Library) theo ngôn ngữ — nhiều giọng Việt review phim, kể chuyện…
+
+        Mã giọng dạng ``lib:<public_owner_id>:<voice_id>``; lần đầu đọc sẽ tự thêm giọng vào tài khoản."""
+        out: list[Voice] = []
+        for page in range(pages):
+            r = requests.get(f"{_BASE}/shared-voices", headers=self._headers(), timeout=30,
+                             params={"language": language, "page_size": 100, "page": page})
+            if r.status_code != 200:
+                if not out:
+                    raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+                break
+            data = r.json()
+            for v in data.get("voices", []):
+                vid, owner = v.get("voice_id"), v.get("public_owner_id")
+                if not vid or not owner:
+                    continue
+                bits = [_VI_LABELS.get(str(b).lower(), str(b).replace("_", " "))
+                        for b in (v.get("accent"), v.get("descriptive"), v.get("use_case")) if b]
+                uses = v.get("cloned_by_count") or 0
+                label = f"🌐 {v.get('name', vid)}" + (f" — {', '.join(bits)}" if bits else "") + (f" · {uses:,} lượt dùng" if uses else "")
+                out.append(Voice(id=f"lib:{owner}:{vid}", name=label, locale=v.get("locale") or language,
+                                 gender=v.get("gender", ""),
+                                 extra={"category": "library", "preview_url": v.get("preview_url", ""), "uses": uses}))
+            if not data.get("has_more"):
+                break
+        out.sort(key=lambda x: -int(x.extra.get("uses") or 0))
+        return out
+
+    def _ensure_library_voice(self, voice_id: str) -> str:
+        """``lib:owner:id`` → thêm giọng cộng đồng vào tài khoản (một lần) rồi trả về id thật để đọc."""
+        if not voice_id.startswith("lib:"):
+            return voice_id
+        _l, owner, vid = voice_id.split(":", 2)
+        if vid in _ADDED:
+            return vid
+        r = requests.get(f"{_BASE}/voices/{vid}", headers=self._headers(), timeout=20)
+        if r.status_code != 200:
+            name = next((v.name for v in (self._voices or []) if v.id == voice_id), vid)
+            name = name.replace("🌐 ", "").split(" — ")[0][:40] or vid
+            r = requests.post(f"{_BASE}/voices/add/{owner}/{vid}", headers={**self._headers(), "content-type": "application/json"},
+                              json={"new_name": name}, timeout=30)
+            if r.status_code not in (200, 201) and "already" not in r.text.lower():
+                raise RuntimeError("Không thêm được giọng cộng đồng vào tài khoản ElevenLabs "
+                                   f"({r.status_code}: {r.text[:200]}). Tài khoản có thể đã hết chỗ chứa giọng — "
+                                   "xoá bớt giọng ở elevenlabs.io → My Voices.")
+            logger.info("ElevenLabs: đã thêm giọng cộng đồng %s vào tài khoản", name)
+        _ADDED.add(vid)
+        return vid
 
     def subscription(self) -> dict:
         r = requests.get(f"{_BASE}/user/subscription", headers=self._headers(), timeout=20)
@@ -81,6 +147,8 @@ class ElevenLabsTTS(TTSEngine):
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
         if not voice_id:
             raise RuntimeError("Chưa chọn giọng ElevenLabs.")
+        with _ADD_LOCK:
+            voice_id = self._ensure_library_voice(voice_id)
         body = {
             "text": text,
             "model_id": self.model_id,

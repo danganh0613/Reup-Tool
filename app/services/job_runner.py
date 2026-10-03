@@ -197,7 +197,10 @@ class Pipeline:
         raw = "|".join(str(x) for x in (
             t.tts_provider, t.edge_voice, t.eleven_voice_id, t.eleven_model, t.eleven_stability, t.eleven_similarity,
             t.eleven_style, t.eleven_speaker_boost, t.google_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo,
-            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key) + ((multi,) if multi else ()))
+            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key) + ((multi,) if multi else ())
+            + ((t.gemini_voice, t.gemini_tts_model, t.gemini_style, t.gemini_style_custom)
+               if t.tts_provider.startswith("Gemini") or multi else ())
+            + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,

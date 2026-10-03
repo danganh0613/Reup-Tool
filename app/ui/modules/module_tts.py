@@ -14,9 +14,9 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import VOICE_DIR
-from app.core.state import ELEVEN_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
+from app.core.state import ELEVEN_MODELS, GEMINI_TTS_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
 from app.services.tts.base import Voice
-from app.services.tts.generator import make_engine, preview_text, synthesize_cached, voice_id_for
+from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list, voice_id_for
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, hint, pack_rows
 from app.core.languages import LocaleLabels
@@ -95,6 +95,20 @@ class TTSModule(BaseModule):
         pack_rows(self.eleven_frame, [self.eleven_model, self.stability, self.similarity, self.style, self.boost])
         self.eleven_quota = StatusLabel(self.eleven_frame, "")
         self.eleven_quota.pack(fill="x")
+        hint(self.eleven_frame, "Danh sách có cả giọng 🌐 do cộng đồng ElevenLabs chia sẻ (tiếng Việt, xếp theo lượt dùng) — "
+                                "lần đầu đọc máy tự thêm giọng vào tài khoản của bạn.").pack(fill="x")
+        from app.services.tts.gemini_tts import STYLES
+
+        self.gemini_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
+        self.gemini_style = OptionRow(self.gemini_frame, "Phong cách", list(STYLES), on_change=self._gemini_style_changed)
+        self.gemini_custom = EntryRow(self.gemini_frame, "Lời dặn", value=cfg.gemini_style_custom,
+                                      placeholder="vd: Đọc giọng miền Tây, chậm rãi, hài hước",
+                                      on_change=s(cfg, "gemini_style_custom", preview=False))
+        self.gemini_model = OptionRow(self.gemini_frame, "Model", GEMINI_TTS_MODELS,
+                                      on_change=s(cfg, "gemini_tts_model", preview=False))
+        pack_rows(self.gemini_frame, [self.gemini_style, self.gemini_custom, self.gemini_model])
+        hint(self.gemini_frame, "Gemini TTS dùng key Gemini trong Cài đặt. Gói miễn phí chỉ vài lượt/ngày (mỗi câu một lượt) "
+                                "— video dài nên bật thanh toán cho key (rất rẻ) hoặc nhập nhiều key.").pack(fill="x")
 
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
@@ -158,6 +172,9 @@ class TTSModule(BaseModule):
             self.max_tempo.set(cfg.max_tempo)
             self.min_gap.set(cfg.min_gap)
             self.multi.set(cfg.multi_voice)
+            self.gemini_style.set(cfg.gemini_style)
+            self.gemini_custom.set(cfg.gemini_style_custom)
+            self.gemini_model.set(cfg.gemini_tts_model)
             self.speaker_count.set(cfg.speaker_count)
         finally:
             self._loading = False
@@ -185,22 +202,45 @@ class TTSModule(BaseModule):
         p = self.state.tts.tts_provider
         self.eleven_frame.pack_forget()
         self.vieneu_frame.pack_forget()
+        self.gemini_frame.pack_forget()
         hints = {
-            "Edge TTS": "Edge TTS: miễn phí, giọng Microsoft Neural, cần mạng.",
-            "ElevenLabs": "ElevenLabs: cần API key trong Cài đặt (nhiều key sẽ tự xoay khi hết quota).",
-            "Google Cloud TTS": "Google Chirp3-HD / Neural2: cần API key hoặc Service Account JSON trong Cài đặt.",
+            "Edge TTS": "Edge TTS: miễn phí, cần mạng. Tiếng Việt: HoaiMy (nữ), NamMinh (nam) + các giọng 🌐 đa ngôn ngữ.",
+            "ElevenLabs": "ElevenLabs: cần API key trong Cài đặt (nhiều key sẽ tự xoay khi hết quota). Có thư viện giọng Việt cộng đồng.",
+            "Google Cloud TTS": "Google Chirp3-HD (30 giọng tiếng Việt chất lượng cao) / Neural2 / Wavenet: cần API key hoặc "
+                                "Service Account JSON trong Cài đặt.",
+            "FPT.AI": "FPT.AI: giọng Việt 3 miền (Bắc / Trung / Nam), cần key console.fpt.ai trong Cài đặt.",
         }
-        self.provider_hint.configure(text=hints.get(p, "VieNeu: giọng tiếng Việt chạy local, có clone giọng."))
+        if p.startswith("Gemini"):
+            hint_text = "Gemini TTS: 30 giọng đọc tiếng Việt tự nhiên, chỉnh phong cách & giọng miền bằng lời dặn."
+        elif p.startswith("VieNeu"):
+            hint_text = "VieNeu: 25 giọng tiếng Việt chạy local (Bắc / Trung / Nam), có clone giọng."
+        else:
+            hint_text = hints.get(p, "")
+        self.provider_hint.configure(text=hint_text)
         if p == "ElevenLabs":
             self.eleven_frame.pack(fill="x", pady=(4, 0))
-            self.language.pack_forget()
         elif p.startswith("VieNeu"):
             self.vieneu_frame.pack(fill="x", pady=(4, 0))
+        elif p.startswith("Gemini"):
+            self.gemini_frame.pack(fill="x", pady=(4, 0))
+            self._layout_gemini()
+        if not uses_language_list(p):
             self.language.pack_forget()
         else:
             if not self.language.winfo_ismapped():
                 self.language.pack(fill="x", pady=3, before=self.voice)
         self.pitch.slider.configure(state="normal" if p == "Edge TTS" else "disabled")
+
+    def _layout_gemini(self) -> None:
+        if self.state.tts.gemini_style == "Tự viết…":
+            if not self.gemini_custom.winfo_ismapped():
+                self.gemini_custom.pack(fill="x", pady=3, after=self.gemini_style)
+        else:
+            self.gemini_custom.pack_forget()
+
+    def _gemini_style_changed(self, v: str) -> None:
+        self.set_value(self.state.tts, "gemini_style", v, preview=False)
+        self._layout_gemini()
 
     # ── Voices ────────────────────────────────────────────────────────────
     def _provider_changed(self, v: str) -> None:
@@ -252,9 +292,9 @@ class TTSModule(BaseModule):
         q = self.search.get().strip().lower()
         self._loading = True
         try:
-            if p == "ElevenLabs" or p.startswith("VieNeu"):
+            if not uses_language_list(p):
                 subset = self._voices
-                wanted = cfg.vieneu_voice if p.startswith("VieNeu") else cfg.eleven_voice_id
+                wanted = voice_id_for(cfg)
             else:
                 locales: dict[str, None] = {}
                 for v in self._voices:
@@ -286,6 +326,10 @@ class TTSModule(BaseModule):
             cfg.eleven_voice_id, cfg.eleven_voice_name = v.id, v.name
         elif cfg.tts_provider.startswith("VieNeu"):
             cfg.vieneu_voice = v.id
+        elif cfg.tts_provider.startswith("Gemini"):
+            cfg.gemini_voice = v.id
+        elif cfg.tts_provider.startswith("FPT"):
+            cfg.fpt_voice = v.id
         elif cfg.tts_provider == "Google Cloud TTS":
             cfg.google_voice, cfg.google_language = v.id, v.locale
         else:
