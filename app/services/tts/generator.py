@@ -15,7 +15,7 @@ import threading
 import wave
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config.paths import TTS_CACHE_DIR
@@ -96,6 +96,39 @@ def voice_id_for(cfg: TTSConfig) -> str:
     return cfg.edge_voice
 
 
+def config_with_voice(cfg: TTSConfig, provider: str, voice_id: str, locale: str = "", speed: float = 0.0,
+                      pitch: int | None = None) -> TTSConfig:
+    """Bản sao ``cfg`` đổi sang giọng khác (giữ các tham số khớp thời gian, ElevenLabs…)."""
+    c = replace(cfg)
+    c.tts_provider = provider or cfg.tts_provider
+    c.edge_voice = c.google_voice = c.eleven_voice_id = c.vieneu_voice = voice_id
+    if locale:
+        c.edge_language = c.google_language = locale
+    if speed:
+        c.tts_speed = speed
+    if pitch is not None:
+        c.tts_pitch = pitch
+    return c
+
+
+def speaker_configs(cfg: TTSConfig) -> dict[str, TTSConfig]:
+    """Người nói → cấu hình giọng riêng (chỉ khi bật «Nhiều giọng»). Người chưa chọn giọng dùng giọng chính."""
+    out: dict[str, TTSConfig] = {}
+    if not cfg.multi_voice:
+        return out
+    for sv in cfg.speaker_voices or []:
+        if not isinstance(sv, dict) or not sv.get("name") or not sv.get("voice_id"):
+            continue
+        try:
+            speed = float(sv.get("speed") or 0)
+            pitch = int(sv["pitch"]) if sv.get("pitch") is not None else None
+        except (TypeError, ValueError):
+            speed, pitch = 0.0, None
+        out[str(sv["name"])] = config_with_voice(cfg, str(sv.get("provider") or ""), str(sv["voice_id"]),
+                                                 str(sv.get("locale") or ""), speed, pitch)
+    return out
+
+
 def cache_path(engine: TTSEngine, voice_id: str, text: str, speed: float, pitch: int) -> Path:
     key = hashlib.sha1(f"{engine.cache_signature(voice_id, speed, pitch)}|{text}".encode("utf-8")).hexdigest()
     return TTS_CACHE_DIR / engine.name / f"{key}{getattr(engine, 'ext', '.mp3')}"
@@ -119,12 +152,34 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     tới khi track giọng không dài quá video — giọng tự nhiên nhất có thể mà không bị cắt cụt ở cuối."""
     engine = make_engine(cfg, settings)
     voice_id = voice_id_for(cfg)
-    speed, pitch = cfg.tts_speed, cfg.tts_pitch
-    residual = engine.residual_tempo(speed)
     items = [(i, c, c.plain) for i, c in enumerate(cues) if c.plain]
     if not items:
         raise RuntimeError("Phụ đề trống — không có gì để đọc.")
+
+    # giọng cho từng câu: nhiều giọng theo người nói (meta["speaker"]), còn lại giọng chính
+    spk_cfgs = speaker_configs(cfg)
+    engines: dict[str, TTSEngine] = {cfg.tts_provider: engine}
+    plan: dict[int, tuple[TTSEngine, str, float, int]] = {}      # cue → (engine, giọng, tốc độ, cao độ)
+    used: dict[str, int] = {}
+    for i, c, _t in items:
+        sc = spk_cfgs.get(str(c.meta.get("speaker", "")), cfg)
+        if sc.tts_provider not in engines:
+            engines[sc.tts_provider] = make_engine(sc, settings)
+        eng = engines[sc.tts_provider]
+        pitch_i = sc.tts_pitch if sc.tts_provider == "Edge TTS" else 0
+        vid = voice_id_for(sc)
+        plan[i] = (eng, vid, sc.tts_speed, pitch_i)
+        key = f"{vid}{f' {pitch_i:+d}Hz' if pitch_i else ''}"
+        used[key] = used.get(key, 0) + 1
     _check_script_matches_voice(items, cfg, voice_id)
+
+    def synth(i: int, text: str) -> Path:
+        eng, vid, sp, pt = plan[i]
+        return synthesize_cached(eng, vid, text, speed=sp, pitch=pt)
+
+    def residual_of(i: int) -> float:
+        eng, _vid, sp, _pt = plan[i]
+        return eng.residual_tempo(sp)
 
     def _check() -> None:
         if cancel is not None and cancel.is_set():
@@ -135,10 +190,11 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     workers = max(1, min(engine.workers, settings.tts_workers or engine.workers))
     if log:
         log(f"Tổng hợp {len(items)} cue bằng {cfg.tts_provider} ({workers} luồng)…")
+        if len(used) > 1:
+            log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(synthesize_cached, engine, voice_id, text, speed=speed, pitch=pitch): i
-                for i, _, text in items}
+        futs = {pool.submit(synth, i, text): i for i, _, text in items}
         failed: list[int] = []
         for fut in as_completed(futs):
             _check()
@@ -158,7 +214,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             _check()
             text = next(t for j, _c, t in items if j == i)
             try:
-                paths[i] = synthesize_cached(engine, voice_id, text, speed=speed, pitch=pitch)
+                paths[i] = synth(i, text)
             except Exception as exc:
                 logger.warning("TTS cue %d lỗi lần 2: %s", i + 1, exc)
                 still.append(i)
@@ -187,7 +243,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
 
     def natural(pos: int) -> tuple[int, bytes]:
         _check()
-        return pos, ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE, tempo=residual)
+        return pos, ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE, tempo=residual_of(order[pos]))
 
     base: dict[int, bytes] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -240,7 +296,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         pcm = base[pos]
         sped = False
         if tempo > 1.0:
-            pcm = ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual * tempo)
+            pcm = ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo)
             sped = True
         dur = len(pcm) / _BYTES_PER_SEC
         overflow = (not cfg.natural_sync) and dur > slot_for(pos) + 0.05

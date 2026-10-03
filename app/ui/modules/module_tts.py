@@ -14,7 +14,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import VOICE_DIR
-from app.core.state import ELEVEN_MODELS, TTS_PROVIDERS, TTS_SOURCES
+from app.core.state import ELEVEN_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, voice_id_for
 from app.ui.modules.base_module import BaseModule
@@ -96,6 +96,25 @@ class TTSModule(BaseModule):
         self.eleven_quota = StatusLabel(self.eleven_frame, "")
         self.eleven_quota.pack(fill="x")
 
+        sec = Section(self, "Nhiều giọng theo người nói")
+        sec.pack(fill="x", pady=4)
+        self.multi = SwitchRow(sec.body, "Mỗi người nói một giọng", on_change=self._multi_changed)
+        self.multi.pack(fill="x")
+        hint(sec.body, "Video có nhiều người nói: máy nhận ra ai nói câu nào rồi lồng tiếng mỗi người một giọng. "
+                       "Chọn giọng cho từng người bên dưới; người chưa chọn dùng giọng chính ở trên.").pack(fill="x")
+        self.multi_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
+        self.speaker_count = OptionRow(self.multi_frame, "Số người nói", SPEAKER_COUNTS,
+                                       on_change=s(cfg, "speaker_count", preview=False))
+        self.speaker_count.pack(fill="x", pady=(6, 3))
+        ButtonRow(self.multi_frame, [("🎙 Nhận diện người nói", self._detect_speakers, T.primary_button()),
+                                     ("📝 Gán từng câu…", self._assign_speakers, None)]).pack(fill="x", pady=(4, 2))
+        self.speaker_status = StatusLabel(self.multi_frame, "")
+        self.speaker_status.pack(fill="x")
+        from app.ui.widgets.speaker_panel import SpeakerPanel
+
+        self.speakers = SpeakerPanel(self.multi_frame, self)
+        self.speakers.pack(fill="x", pady=(4, 0))
+
         sec = Section(self, "Đồng bộ mềm")
         sec.pack(fill="x", pady=4)
         self.soft = SwitchRow(sec.body, "Bật Soft Timing (dời câu vào khoảng lặng, nén ≤1.10×)", on_change=s(cfg, "soft_timing", preview=False))
@@ -138,14 +157,19 @@ class TTSModule(BaseModule):
             self.natural.set(cfg.natural_sync)
             self.max_tempo.set(cfg.max_tempo)
             self.min_gap.set(cfg.min_gap)
+            self.multi.set(cfg.multi_voice)
+            self.speaker_count.set(cfg.speaker_count)
         finally:
             self._loading = False
+        self._layout_multi()
         self._layout_provider()
         self._load_voices()
         self.on_active_changed()
 
     def on_active_changed(self) -> None:
         item = self.state.active
+        if self.state.tts.multi_voice:
+            self.speakers.refresh()
         if item is None:
             self.track_status.info("")
             self.lib_status.info("Chưa chọn voice cũ — render sẽ tạo giọng mới.")
@@ -294,6 +318,66 @@ class TTSModule(BaseModule):
             self.eleven_quota.info(f"Ký tự đã dùng: {result['used']:,}/{result['limit']:,} ({result['tier']})")
 
         self.window.run_bg(engine.subscription, done)
+
+    # ── Nhiều giọng ───────────────────────────────────────────────────────
+    def _layout_multi(self) -> None:
+        if self.state.tts.multi_voice:
+            if not self.multi_frame.winfo_ismapped():
+                self.multi_frame.pack(fill="x")
+            self.speakers.refresh()
+        else:
+            self.multi_frame.pack_forget()
+
+    def _multi_changed(self, v: bool) -> None:
+        self.set_value(self.state.tts, "multi_voice", bool(v), preview=False)
+        self._layout_multi()
+
+    def _detect_speakers(self) -> None:
+        from app.services.diarize import onnx_available
+
+        item = self.state.active
+        if item is None:
+            messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
+            return
+        if not item.srt_path or not Path(item.srt_path).exists():
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào mục STT bấm «Nhận diện ngay» "
+                                               "(hoặc chọn file SRT) trước — máy dựa vào từng câu phụ đề để biết ai nói.")
+            return
+        if not onnx_available():
+            self.speaker_status.error("Thiếu thư viện onnxruntime — chạy: pip install onnxruntime  (hoặc dùng «Gán từng câu…»)")
+            return
+        pipe = self.window.pipeline
+        self.speaker_status.warn("Đang nhận diện người nói… (xem log)")
+
+        def work(cancel):
+            return pipe.diarize(item, progress=self.window.set_busy_progress, log=self.window.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if error:
+                self.speaker_status.error(f"Lỗi: {error}")
+                return
+            n = len(result.speakers)
+            self.speaker_status.ok(f"Tìm thấy {n} người nói. Nghe thử «Nghe giọng gốc» rồi chọn giọng cho từng người; "
+                                   "nhận sai câu nào thì sửa ở «Gán từng câu…».")
+            self.speakers.refresh(force=True)
+
+        self.window.run_task("Nhận diện người nói", work, done)
+
+    def _assign_speakers(self) -> None:
+        item = self.state.active
+        if item is None:
+            messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
+            return
+        if not item.srt_path or not Path(item.srt_path).exists():
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
+            return
+        from app.ui.widgets.speaker_panel import SpeakerAssignDialog
+
+        def saved() -> None:
+            self.speaker_status.ok("Đã lưu người nói từng câu — chọn giọng cho từng người bên dưới.")
+            self.speakers.refresh(force=True)
+
+        SpeakerAssignDialog(self.window, item, on_saved=saved)
 
     # ── VieNeu ────────────────────────────────────────────────────────────
     def _install_vieneu(self) -> None:

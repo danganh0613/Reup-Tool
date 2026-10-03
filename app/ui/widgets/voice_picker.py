@@ -8,6 +8,7 @@ from dataclasses import replace
 import customtkinter as ctk
 
 from app.config import theme as T
+from app.core.languages import LocaleLabels
 from app.core.state import TTS_PROVIDERS
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached
@@ -31,7 +32,7 @@ class VoicePicker(ctk.CTkFrame):
         self._loading = False
 
         self.provider = OptionRow(self, "Engine", TTS_PROVIDERS, on_change=self._provider_changed)
-        self.language = OptionRow(self, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed)
+        self.language = OptionRow(self, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(self, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         for r in (self.provider, self.language, self.voice):
             r.pack(fill="x", pady=2)

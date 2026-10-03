@@ -170,6 +170,20 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                              else "Bản .exe không hỗ trợ (cần torch ~2 GB)."))
     except Exception:
         pass
+
+    # 10. Nhận diện người nói (lồng tiếng nhiều giọng)
+    try:
+        from app.services.diarize import MODEL_PATH, MODEL_SIZE_MB, onnx_available
+
+        if not onnx_available():
+            out.append(Check("Nhận diện người nói", "warn", "Thiếu onnxruntime — «Mỗi người nói một giọng» phải gán tay",
+                             "Chạy: pip install onnxruntime" if not _frozen() else "Bản đóng gói thiếu onnxruntime."))
+        elif MODEL_PATH.exists():
+            out.append(Check("Nhận diện người nói", "ok", "Sẵn sàng"))
+        else:
+            out.append(Check("Nhận diện người nói", "ok", f"Sẵn sàng (model ~{MODEL_SIZE_MB} MB tải ở lần dùng đầu)"))
+    except Exception:
+        pass
     return out
 
 
