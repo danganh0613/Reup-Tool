@@ -105,6 +105,10 @@ class Pipeline:
         save_srt(res.cues, out)
         item.srt_path = str(out)
         item.srt_translated_path = None
+        try:
+            self.speakers_path(item).unlink()          # người nói theo phụ đề cũ không còn khớp
+        except OSError:
+            pass
         if log:
             log(f"Nhận diện xong: {len(res.cues)} cue · ngôn ngữ {res.language} "
                 f"({res.language_probability:.0%}) → {out.name}")
@@ -132,16 +136,67 @@ class Pipeline:
             log(f"Dịch xong → {out.name}")
         return out_cues
 
+    # ── Người nói (lồng tiếng nhiều giọng) ────────────────────────────────
+    def speakers_path(self, item: VideoItem) -> Path:
+        h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
+        return SUBS_DIR / f"{_safe_stem(item.stem)[:60]}_{h}.speakers.json"
+
+    def speaker_map(self, item: VideoItem):
+        from app.services.diarize import SpeakerMap
+
+        return SpeakerMap.load(self.speakers_path(item))
+
+    def annotate_speakers(self, item: VideoItem, cues: list[Cue]) -> None:
+        """Ghi người nói vào ``meta`` của cue (mốc thời gian video gốc) khi bật «Nhiều giọng»."""
+        if not self.state.tts.multi_voice or not cues:
+            return
+        smap = self.speaker_map(item)
+        if smap is not None:
+            smap.annotate(cues)
+
+    def ensure_speakers(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
+                        cancel: threading.Event | None = None) -> None:
+        """Bật «Nhiều giọng» mà video chưa nhận diện người nói → nhận diện luôn (lỗi thì lồng tiếng một giọng)."""
+        if not self.state.tts.multi_voice or self.speakers_path(item).exists():
+            return
+        try:
+            self.diarize(item, progress=progress, log=log, cancel=cancel)
+        except RenderCancelled:
+            raise
+        except Exception as exc:
+            if log:
+                log(f"⚠ Không nhận diện được người nói ({exc}) — lồng tiếng một giọng.")
+
+    def diarize(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
+                cancel: threading.Event | None = None):
+        """Nhận diện ai nói câu nào (theo phụ đề gốc) → lưu ``speakers.json`` cạnh phụ đề."""
+        from app.services.diarize import diarize
+
+        if not item.srt_path or not Path(item.srt_path).exists():
+            raise RuntimeError("Chưa có phụ đề gốc — bấm «Nhận diện ngay» ở mục STT hoặc chọn file SRT trước.")
+        sc = self.state.tts.speaker_count
+        n = int(sc) if sc.isdigit() else 0
+        smap = diarize(item.path, load_srt(item.srt_path), self.ffmpeg, n_speakers=n, on_progress=progress, log=log,
+                       cancel=cancel)
+        smap.save(self.speakers_path(item))
+        return smap
+
     def voice_signature(self, item: VideoItem, srt_path: str, extra_key: str = "") -> str:
         t = self.state.tts
         try:
             mtime = int(Path(srt_path).stat().st_mtime)
         except OSError:
             mtime = 0
+        multi = ""
+        if t.multi_voice:
+            try:
+                multi = f"{t.speaker_voices!r}{int(self.speakers_path(item).stat().st_mtime_ns)}"
+            except OSError:
+                multi = repr(t.speaker_voices)
         raw = "|".join(str(x) for x in (
             t.tts_provider, t.edge_voice, t.eleven_voice_id, t.eleven_model, t.eleven_stability, t.eleven_similarity,
             t.eleven_style, t.eleven_speaker_boost, t.google_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo,
-            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key))
+            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key) + ((multi,) if multi else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,
@@ -153,6 +208,8 @@ class Pipeline:
         if cues is None:
             srt_path = srt_path or self._tts_srt_path(item)
             cues = load_srt(srt_path)
+            self.ensure_speakers(item, log=log, cancel=cancel)
+            self.annotate_speakers(item, cues)
         srt_path = srt_path or item.srt_path or ""
         out = VOICE_DIR / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
         if out.exists() and not force:
@@ -279,6 +336,10 @@ class Pipeline:
         if tts_on:
             src_cues = cues_tr if (tcfg.tts_source == TTS_SOURCES[0] and cues_tr) else cues_orig
             src_path = item.srt_translated_path if (tcfg.tts_source == TTS_SOURCES[0] and cues_tr) else item.srt_path
+            if tcfg.multi_voice:
+                self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
+                src_cues = [Cue(c.index, c.start, c.end, c.text, dict(c.meta)) for c in src_cues]
+                self.annotate_speakers(item, src_cues)
             src_cues = rp.remap_cues_for_trim(src_cues, trim)
             fit = trim.kept_duration if trim.active else info.duration   # track giọng tính theo thời gian nguồn (atempo theo tốc độ sau)
             voice_path = self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,

@@ -143,6 +143,15 @@ TOPICS: list[dict] = [
             ("Tốc độ tối đa", "Máy được phép đọc nhanh tới mức này khi câu dài. 1.3–1.5 là vẫn dễ nghe."),
             ("Đồng bộ tự nhiên", "Không ép giọng nhanh lên; chữ và giọng đi cùng nhau, video có thể cần bật «Lặp video cho đủ giọng»."),
         ]),
+        ("h", "Video có nhiều người nói"),
+        ("steps", [
+            "Cần có phụ đề gốc trước (mục STT bấm «Nhận diện ngay», hoặc chọn file SRT).",
+            "Mục TTS bật «Mỗi người nói một giọng», bấm «Nhận diện người nói». Lần đầu máy tải model ~28 MB.",
+            "Máy chia ra Người 1, Người 2… và tự gợi ý giọng (nam/nữ). Bấm «Nghe giọng gốc» để biết ai là ai, rồi chọn giọng "
+            "cho từng người. Edge tiếng Việt chỉ có 2 giọng — người thứ ba dùng lại giọng nhưng đổi «Cao độ» cho khác đi.",
+            "Máy nhận sai câu nào thì bấm «Gán từng câu…» sửa tay. Không nhận diện được thì cũng tự chia tay ở đây.",
+            "Render hàng loạt: video nào chưa nhận diện, máy tự nhận diện trước khi lồng tiếng.",
+        ]),
     ]},
     {"key": "blur", "title": "Che mờ: giấu chữ, logo, mặt người", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),

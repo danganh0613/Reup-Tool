@@ -62,6 +62,7 @@ KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → tr
 
 TTS_PROVIDERS = ["Edge TTS", "ElevenLabs", "Google Cloud TTS", "VieNeu (local, tiếng Việt)"]
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
+SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 ELEVEN_MODELS = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
 
 
@@ -167,6 +168,10 @@ class TTSConfig:
     min_gap: float = 0.08              # khoảng nghỉ tối thiểu giữa 2 cue (giây)
     natural_sync: bool = False         # đọc tốc độ tự nhiên, dời phụ đề theo giọng (không tăng tốc)
     soft_timing: bool = False          # dời câu vào khoảng lặng, nén tối đa 1.10×
+    multi_voice: bool = False          # mỗi người nói một giọng (cần nhận diện / gán người nói)
+    speaker_count: str = SPEAKER_COUNTS[0]
+    #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
+    speaker_voices: list = field(default_factory=list)
 
 
 @dataclass

@@ -5,3 +5,5 @@ faster-whisper>=1.1
 requests>=2.31
 tkinterdnd2>=0.4
 packaging
+onnxruntime>=1.14          # nhận diện người nói (lồng tiếng nhiều giọng); faster-whisper cũng cần
+numpy
