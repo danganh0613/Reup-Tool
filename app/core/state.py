@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from app.config.paths import CONFIG_FILE, PRESETS_DIR, SETTINGS_FILE, VIDEOS_DIR
+from app.config.paths import CONFIG_FILE, SETTINGS_FILE, VIDEOS_DIR
 from app.services.gemini_models import DEFAULT_TEXT, migrate_model
 
 logger = logging.getLogger(__name__)
@@ -384,6 +384,9 @@ class VideoItem:
     fps: float = 0.0
     has_audio: bool = True
     output_path: str | None = None
+    template: str = ""                     # mẫu đã áp riêng cho video này (chỉ để hiển thị)
+    #: cấu hình riêng (các phần của mẫu) — None = dùng cấu hình chung đang mở
+    config: dict | None = None
 
     @property
     def name(self) -> str:
@@ -394,8 +397,27 @@ class VideoItem:
         return Path(self.path).stem
 
     def persist_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "srt_path": self.srt_path,
-                "srt_translated_path": self.srt_translated_path, "voice_path": self.voice_path}
+        d = {"path": self.path, "srt_path": self.srt_path,
+             "srt_translated_path": self.srt_translated_path, "voice_path": self.voice_path}
+        if self.config is not None:
+            d["config"], d["template"] = self.config, self.template
+        return d
+
+
+#: các phần cấu hình thuộc về «mẫu» / cấu hình riêng của từng video (không gồm Dựng Truyện, thư mục xuất, settings máy)
+TEMPLATE_SECTIONS: dict[str, str] = {
+    "video": "Khung hình, tốc độ & âm lượng",
+    "subtitle": "Phụ đề, nhận diện giọng & dịch",
+    "tts": "Lồng tiếng (giọng đọc)",
+    "blur": "Che mờ",
+    "bgm": "Nhạc nền",
+    "brand": "Logo, chữ & watermark",
+    "trim": "Cắt đầu / cuối",
+    "color": "Màu, hiệu ứng & chống trùng",
+}
+_SECTION_CLASSES: dict[str, type] = {}
+#: thông số gắn với máy (GPU…) — áp mẫu không đổi
+MACHINE_FIELDS = {"video": ("use_gpu", "gpu_backend", "video_codec")}
 
 
 # ── Tiện ích chuyển đổi ──────────────────────────────────────────────────
@@ -427,8 +449,15 @@ def _from_dict(cls, data: dict[str, Any] | None):
     return obj
 
 
+_SECTION_CLASSES.update(video=VideoConfig, subtitle=SubtitleConfig, tts=TTSConfig, blur=BlurConfig, bgm=BGMConfig,
+                        brand=BrandConfig, trim=TrimConfig, color=ColorConfig)
+
+
 class AppState:
-    """Nguồn sự thật duy nhất cho UI và pipeline."""
+    """Nguồn sự thật duy nhất cho UI và pipeline.
+
+    Cấu hình đang hiển thị (``self.video``…) là của video đang chọn: video có cấu hình riêng (``item.config``) thì
+    nạp cấu hình đó, cấu hình chung được cất ở ``_shared`` và trả lại khi chọn video không có cấu hình riêng."""
 
     CONFIG_VERSION = 1
 
@@ -447,6 +476,8 @@ class AppState:
         self.active_index: int = -1
         self.output_dir: str = str(VIDEOS_DIR)
         self.ui: dict[str, Any] = {"active_module": "video"}
+        self.template_name: str = ""                    # mẫu đã áp vào cấu hình chung
+        self._shared: dict[str, Any] | None = None      # cấu hình chung khi đang chọn video có cấu hình riêng
 
         self._listeners: dict[str, list[Callable[..., None]]] = {}
         self._dirty_timer: threading.Timer | None = None
@@ -498,24 +529,119 @@ class AppState:
     def remove_video(self, index: int) -> None:
         if not (0 <= index < len(self.videos)):
             return
+        prev = self.active
         del self.videos[index]
-        if self.active_index >= len(self.videos):
-            self.active_index = len(self.videos) - 1
+        new = self.active_index
+        if index < new:
+            new -= 1
+        new = min(new, len(self.videos) - 1)
+        self._activate(new, prev)
         self.emit("videos_changed")
         self.emit("active_changed")
         self.mark_dirty()
 
     def clear_videos(self) -> None:
+        prev = self.active
         self.videos.clear()
-        self.active_index = -1
+        self._activate(-1, prev)
         self.emit("videos_changed")
         self.emit("active_changed")
         self.mark_dirty()
 
     def set_active(self, index: int) -> None:
         if index != self.active_index and 0 <= index < len(self.videos):
-            self.active_index = index
+            self._activate(index, self.active)
             self.emit("active_changed")
+
+    # ── Cấu hình riêng từng video ────────────────────────────────────────
+    def sections_dict(self) -> dict[str, Any]:
+        """Bản sao các phần cấu hình đang hiển thị."""
+        return {k: dataclasses.asdict(getattr(self, k)) for k in TEMPLATE_SECTIONS}
+
+    def apply_sections(self, data: dict[str, Any], only: list[str] | tuple[str, ...] | None = None,
+                       keep_machine: bool = False) -> None:
+        for k in only or TEMPLATE_SECTIONS:
+            if k not in TEMPLATE_SECTIONS or not isinstance(data.get(k), dict):
+                continue
+            new = _from_dict(_SECTION_CLASSES[k], data[k])
+            if keep_machine:
+                for f in MACHINE_FIELDS.get(k, ()):
+                    setattr(new, f, getattr(getattr(self, k), f))
+            setattr(self, k, new)
+
+    def _activate(self, index: int, prev: VideoItem | None) -> bool:
+        """Đổi video đang chọn + đổi cấu hình hiển thị theo video (riêng / chung). Trả về True nếu cấu hình đã đổi."""
+        if prev is not None and prev.config is not None and prev in self.videos:
+            prev.config = self.sections_dict()              # lưu chỉnh sửa của video vừa rời
+        self.active_index = index
+        new = self.active
+        changed = False
+        if new is not None and new.config is not None:
+            if self._shared is None:
+                self._shared = self.sections_dict()        # cất cấu hình chung
+            self.apply_sections(new.config)
+            changed = True
+        elif self._shared is not None:
+            self.apply_sections(self._shared)
+            self._shared = None
+            changed = True
+        if changed:
+            self.emit("config_loaded")
+        return changed
+
+    def shared_sections(self) -> dict[str, Any]:
+        """Cấu hình chung (cho video không có cấu hình riêng)."""
+        return self._shared if self._shared is not None else self.sections_dict()
+
+    def effective_sections(self, item: VideoItem) -> dict[str, Any]:
+        """Cấu hình thật sự dùng để render ``item``."""
+        if item.config is not None:
+            return self.sections_dict() if item is self.active else item.config
+        return self.shared_sections()
+
+    def make_own(self, item: VideoItem, sections: dict[str, Any] | None = None, template: str = "") -> None:
+        """Cho ``item`` cấu hình riêng (mặc định: chép cấu hình đang hiển thị; ``sections``: các phần muốn đè)."""
+        import copy
+
+        cfg = copy.deepcopy(self.effective_sections(item))
+        for k, v in (sections or {}).items():
+            if k in TEMPLATE_SECTIONS and isinstance(v, dict):
+                merged = dict(v)
+                for f in MACHINE_FIELDS.get(k, ()):
+                    merged[f] = cfg.get(k, {}).get(f, merged.get(f))
+                cfg[k] = merged
+        if item is self.active and item.config is None and self._shared is None:
+            self._shared = self.sections_dict()
+        item.config = cfg
+        item.template = template or item.template
+        if item is self.active:
+            self.apply_sections(cfg)
+            self.emit("config_loaded")
+        self.mark_dirty()
+
+    def drop_own(self, item: VideoItem) -> None:
+        """Bỏ cấu hình riêng → video dùng lại cấu hình chung."""
+        if item.config is None:
+            return
+        item.config, item.template = None, ""
+        if item is self.active and self._shared is not None:
+            self.apply_sections(self._shared)
+            self._shared = None
+            self.emit("config_loaded")
+        self.mark_dirty()
+
+    def state_for(self, item: VideoItem) -> AppState:
+        """Bản sao trạng thái để render ``item`` theo đúng cấu hình của nó (an toàn khi UI đổi cấu hình lúc đang chạy)."""
+        import copy
+
+        clone = copy.copy(self)
+        clone._listeners = {}
+        clone._save_scheduler = None
+        clone._dirty_timer = None
+        clone._shared = None
+        clone.apply_sections(copy.deepcopy(self.effective_sections(item)))
+        clone.story = copy.deepcopy(self.story)
+        return clone
 
     # ── Cấu hình ──────────────────────────────────────────────────────────
     def config_changed(self, section: str = "") -> None:
@@ -540,17 +666,14 @@ class AppState:
             self._dirty_timer.start()
 
     def to_config_dict(self) -> dict[str, Any]:
+        act = self.active
+        if act is not None and act.config is not None:
+            act.config = self.sections_dict()               # cấu hình riêng của video đang chọn = cái đang hiển thị
         return {
             "_meta": {"app": "edit_studio", "version": self.CONFIG_VERSION},
-            "video": dataclasses.asdict(self.video),
-            "subtitle": dataclasses.asdict(self.subtitle),
-            "tts": dataclasses.asdict(self.tts),
-            "blur": dataclasses.asdict(self.blur),
-            "bgm": dataclasses.asdict(self.bgm),
-            "brand": dataclasses.asdict(self.brand),
-            "trim": dataclasses.asdict(self.trim),
-            "color": dataclasses.asdict(self.color),
+            **self.shared_sections(),                       # cấu hình chung (không phải của video đang chọn)
             "story": dataclasses.asdict(self.story),
+            "template": self.template_name,
             "videos": [v.persist_dict() for v in self.videos],
             "active_index": self.active_index,
             "output_dir": self.output_dir,
@@ -572,6 +695,8 @@ class AppState:
                           (self.subtitle, "gemini_model")):
             setattr(obj, attr, migrate_model(getattr(obj, attr)))
         if include_videos:
+            self._shared = None
+            self.template_name = str(data.get("template") or "")
             self.videos = []
             for row in data.get("videos", []) or []:
                 if not isinstance(row, dict) or not row.get("path"):
@@ -584,9 +709,13 @@ class AppState:
                     srt_translated_path=row.get("srt_translated_path")
                     if row.get("srt_translated_path") and Path(row["srt_translated_path"]).exists() else None,
                     voice_path=row.get("voice_path") if row.get("voice_path") and Path(row["voice_path"]).exists() else None,
+                    config=row.get("config") if isinstance(row.get("config"), dict) else None,
+                    template=str(row.get("template") or ""),
                 ))
             idx = data.get("active_index", 0)
-            self.active_index = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
+            idx = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
+            self.active_index = -1
+            self._activate(idx, None)                   # video đang chọn có cấu hình riêng → nạp cấu hình đó
         out = data.get("output_dir")
         if isinstance(out, str) and out:
             self.output_dir = out
@@ -617,31 +746,6 @@ class AppState:
         except Exception:
             logger.exception("Cấu hình hỏng, dùng mặc định: %s", target)
             return False
-
-    # ── Preset ────────────────────────────────────────────────────────────
-    def list_presets(self) -> list[str]:
-        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-        return sorted(p.stem for p in PRESETS_DIR.glob("*.json"))
-
-    def save_preset(self, name: str) -> Path:
-        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-        safe = "".join(c for c in name if c not in '\\/:*?"<>|').strip() or "preset"
-        target = PRESETS_DIR / f"{safe}.json"
-        data = self.to_config_dict()
-        data.pop("videos", None)
-        data.pop("active_index", None)
-        target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return target
-
-    def load_preset(self, name: str) -> bool:
-        target = PRESETS_DIR / f"{name}.json"
-        if not target.exists():
-            return False
-        data = json.loads(target.read_text(encoding="utf-8"))
-        self.apply_config_dict(data, include_videos=False)
-        self.emit("config_loaded")
-        self.mark_dirty()
-        return True
 
     # ── Settings máy ──────────────────────────────────────────────────────
     def load_settings(self) -> None:

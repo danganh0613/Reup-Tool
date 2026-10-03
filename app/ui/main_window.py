@@ -173,6 +173,10 @@ class MainWindow(_Root):
         self.busy_label = ctk.CTkLabel(left, text="", font=T.font(12), text_color=T.WARNING)
         self.busy_label.pack(side="left", padx=12)
 
+        from app.ui.widgets.template_dialogs import TemplateBar
+
+        self.template_bar = TemplateBar(head, self)
+        self.template_bar.grid(row=0, column=1, pady=8)
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
         self._hbtn(right, "Thư mục xuất", "folder", self.open_output_dir, tip="Mở thư mục chứa video đã xuất").pack(side="left", padx=4)
@@ -257,7 +261,8 @@ class MainWindow(_Root):
         w, h = self.winfo_width() / k, self.winfo_height() / k
         if w < 50:
             return
-        compact_header = w < 1500
+        compact_header = w < 1740               # thanh «Mẫu» ở giữa cần chỗ → nút đầu trang chỉ còn icon sớm hơn
+        self.template_bar.set_compact(w < 1250)
         if compact_header != self._compact_header:
             self._compact_header = compact_header
             for b, label, width in self.header_btns:

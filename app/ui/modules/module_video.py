@@ -7,7 +7,8 @@ from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIO_VALUES
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
 from app.ui.queue_panel import QueuePanel
-from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, SwitchRow, hint, pack_rows
+from app.ui.widgets.common import (ButtonRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, hint,
+                                  pack_rows)
 
 FPS_LABELS = {"Giữ nguyên": "Giữ nguyên", "60": "60 FPS (Mượt mà)", "30": "30 FPS (Tiêu chuẩn)",
               "24": "24 FPS (Điện ảnh)", "25": "25 FPS", "50": "50 FPS"}
@@ -36,6 +37,17 @@ class VideoModule(BaseModule):
         self.queue = QueuePanel(self, self.window, compact=True, height=200)
         self.queue.pack(fill="x", pady=(0, 6))
         ButtonRow(self, [("＋ Thêm từ thư mục…", self._add_folder, None)]).pack(fill="x", pady=(0, 4))
+
+        sec = Section(self, "Cấu hình của video đang chọn")
+        sec.pack(fill="x", pady=4)
+        self.own_status = StatusLabel(sec.body, "")
+        self.own_status.pack(fill="x")
+        self.own = SwitchRow(sec.body, "Chỉnh riêng cho video này", on_change=self._own_toggled)
+        self.own.pack(fill="x", pady=(4, 0))
+        self.own_tpl = OptionRow(sec.body, "Áp mẫu riêng", ["Chọn mẫu…"], on_change=self._own_template)
+        self.own_tpl.pack(fill="x", pady=3)
+        hint(sec.body, "Mặc định mọi video dùng chung mẫu chọn ở thanh trên cùng. Bật «Chỉnh riêng» khi video này cần khác "
+                       "(vd. chữ cứng nằm chỗ khác → che mờ chỗ khác): chỉnh gì lúc chọn video này chỉ áp cho nó.").pack(fill="x")
 
         sec = Section(self, "Khung hình & tốc độ")
         sec.pack(fill="x", pady=4)
@@ -133,10 +145,68 @@ class VideoModule(BaseModule):
         finally:
             self._loading = False
         self.update_fit_hint()
+        self.update_own()
         self._update_gpu_hint()
 
     def on_active_changed(self) -> None:
         self.update_fit_hint()
+        self.update_own()
+
+    def update_own(self) -> None:
+        from app.services.templates import list_templates
+
+        it = self.state.active
+        self._loading = True
+        try:
+            self.own.set(bool(it is not None and it.config is not None))
+            self.own_tpl.set_values(["Chọn mẫu…"] + [t.name for t in list_templates()], keep=False)
+            self.own_tpl.set(it.template if it is not None and it.config is not None and it.template else "Chọn mẫu…")
+        finally:
+            self._loading = False
+        state = "normal" if it is not None else "disabled"
+        self.own.switch.configure(state=state)
+        self.own_tpl.menu.configure(state=state)
+        if it is None:
+            self.own_status.info("Chưa chọn video.")
+        elif it.config is not None:
+            self.own_status.ok(f"✎ {it.name}: cấu hình riêng" + (f" · mẫu «{it.template}»" if it.template else ""))
+        else:
+            tpl = self.state.template_name
+            self.own_status.info(f"{it.name}: theo cấu hình chung" + (f" · mẫu «{tpl}»" if tpl else ""))
+
+    def _own_toggled(self, on: bool) -> None:
+        if self._loading:
+            return
+        it = self.state.active
+        if it is None:
+            return
+        if on:
+            self.state.make_own(it)
+            self.window.log(f"{it.name}: bật cấu hình riêng — chỉnh gì lúc chọn video này chỉ áp cho nó.")
+        else:
+            from tkinter import messagebox
+
+            if not messagebox.askyesno("Edit Studio", f"Bỏ cấu hình riêng của «{it.name}»?\nVideo sẽ dùng lại cấu hình chung."):
+                self.update_own()
+                return
+            self.state.drop_own(it)
+        self.window.queue_update(it)
+        self.update_own()
+        self.window.preview.schedule_refresh(0)
+
+    def _own_template(self, name: str) -> None:
+        if self._loading or name == "Chọn mẫu…":
+            return
+        from app.services import templates as TP
+
+        it, t = self.state.active, TP.get_template(name)
+        if it is None or t is None:
+            return
+        TP.apply_to_item(self.state, it, t)
+        self.window.queue_update(it)
+        self.window.log(f"{it.name}: dùng mẫu riêng «{t.name}».")
+        self.update_own()
+        self.window.preview.schedule_refresh(0)
 
     def update_fit_hint(self) -> None:
         """Video đang chọn đã đúng tỉ lệ xuất (vd. 1080×1920 → 9:16) thì khung vừa khít, không có chỗ cho viền / nền mờ."""

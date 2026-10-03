@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import webbrowser
 from pathlib import Path
@@ -12,7 +11,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
-from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRESETS_DIR, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
+from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
 from app.core.platform import exe_name
 from app.core.state import GPU_BACKENDS, TRANSLATE_PROVIDERS, VIDEO_CODECS
 from app.services.ffmpeg import FFmpeg
@@ -45,7 +44,7 @@ GUIDE = [
         ("Dịch thuật AI & từ điển thuật ngữ", "Kết nối Gemini, Groq, DeepSeek hoặc OpenAI, nhiều key xoay vòng khi hết quota. "
                                               "Nạp bảng thuật ngữ để dịch chuẩn tên riêng, xưng hô theo ngữ cảnh."),
         ("Giọng đọc cloud & local", "Edge TTS miễn phí, ElevenLabs/Google Cloud chất lượng cao (cần key), VieNeu tiếng Việt chạy local có clone giọng."),
-        ("Thư mục xuất & preset", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu cấu hình hiện tại thành preset 1-click hoặc file JSON để chia sẻ."),
+        ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
     ]),
     ("Bộ công cụ video (F1 – F5)", T.SUCCESS, [
         ("F1 · Nạp video & hàng đợi", "Kéo thả hoặc mở video (MP4, MKV, MOV…). Ứng dụng tự đo độ phân giải, fps, kiểm tra luồng âm thanh."),
@@ -274,34 +273,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.fpt_keys.pack(fill="x", pady=(0, 6))
         hint(b, "Mọi ô key đều nhận nhiều key, mỗi dòng một key: hết hạn mức hoặc key lỗi thì tự chuyển sang key kế tiếp.").pack(fill="x", pady=(2, 0))
 
-        b = self._card(c3, "Mẫu cấu hình sẵn (Preset 1-Click)", "Chọn nhanh mẫu dựng video chuẩn hoặc lưu cấu hình riêng.")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x")
-        ctk.CTkLabel(row, text="Chọn mẫu:", font=T.font(12), text_color=T.TEXT_DIM, width=80, anchor="w").pack(side="left")
-        self.preset_var = ctk.StringVar(value="-- Không dùng (Mặc định) --")
-        self.preset_menu = Select(row, ["-- Không dùng (Mặc định) --"] + self.app_state.list_presets(),
-                                  variable=self.preset_var, height=34, command=self._load_preset)
-        self.preset_menu.pack(side="left", fill="x", expand=True)
-        row2 = ctk.CTkFrame(b, fg_color="transparent")
-        row2.pack(fill="x", pady=(6, 0))
-        button(row2, "Đặt lại", icon_name="refresh", size="sm", command=self._reset_config).pack(side="left")
-        button(row2, "Lưu mới", icon_name="add", variant="primary", size="sm", command=self._save_preset).pack(side="left", padx=6)
-        button(row2, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self._delete_preset).pack(side="left")
-        hint(b, "Cấu hình chuẩn ban đầu: tỉ lệ gốc, không zoom/lật, âm lượng chuẩn, không phụ đề/hiệu ứng. "
-                "Mẹo: chọn preset sẽ nạp ngay mọi thông số; Ctrl+Z trên cửa sổ chính để hoàn tác khung/vùng che.").pack(fill="x", pady=(4, 0))
-
-        b = self._card(c3, "Thư mục xuất MP4 & quản lý cấu hình")
+        b = self._card(c3, "Thư mục xuất MP4", "Mẫu dựng video (trước đây là Preset) nằm ở ô «Mẫu» trên cùng cửa sổ chính.")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x")
         self.out_var = ctk.StringVar(value=self.app_state.output_dir)
         ctk.CTkEntry(row, textvariable=self.out_var, height=32, font=T.font(12)).pack(side="left", fill="x", expand=True)
         ctk.CTkButton(row, text="Chọn", width=60, height=32, command=self._browse_out, **T.secondary_button()).pack(side="left", padx=4)
         ctk.CTkButton(row, text="Mở", width=50, height=32, command=self._open_out, **T.primary_button()).pack(side="left")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x", pady=(8, 0))
-        ctk.CTkLabel(row, text="Cấu hình file:", font=T.font(12), text_color=T.TEXT_DIM, width=100, anchor="w").pack(side="left")
-        button(row, "Lưu cấu hình (JSON)", icon_name="save", variant="primary", size="sm", command=self._export_config).pack(side="left")
-        button(row, "Nhập cấu hình (JSON)", icon_name="openfolder", size="sm", command=self._import_config).pack(side="left", padx=6)
         self.after(200, self._scan_encoders)
 
     # ── Trang phím tắt & cẩm nang ────────────────────────────────────────
@@ -434,48 +412,6 @@ class SettingsWindow(ctk.CTkToplevel):
         self._cache_sizes()
         self.window.log("Đã xoá job tạm và cache TTS.")
 
-    def _load_preset(self, name: str) -> None:
-        if name.startswith("--"):
-            return
-        if self.app_state.load_preset(name):
-            self.window.refresh_modules()
-            self.window.log(f"Đã nạp preset “{name}”.")
-
-    def _save_preset(self) -> None:
-        dlg = ctk.CTkInputDialog(text="Tên preset:", title="Lưu preset")
-        name = (dlg.get_input() or "").strip()
-        if not name:
-            return
-        self.app_state.save_preset(name)
-        self.preset_menu.configure(values=["-- Không dùng (Mặc định) --"] + self.app_state.list_presets())
-        self.preset_var.set(name)
-        self.window.log(f"Đã lưu preset “{name}”.")
-
-    def _delete_preset(self) -> None:
-        name = self.preset_var.get()
-        if name.startswith("--"):
-            return
-        if messagebox.askyesno("Xóa preset", f"Xoá preset “{name}”?"):
-            try:
-                (PRESETS_DIR / f"{name}.json").unlink()
-            except OSError:
-                pass
-            self.preset_menu.configure(values=["-- Không dùng (Mặc định) --"] + self.app_state.list_presets())
-            self.preset_var.set("-- Không dùng (Mặc định) --")
-
-    def _reset_config(self) -> None:
-        if not messagebox.askyesno("Đặt lại", "Đưa mọi module về cấu hình mặc định (giữ hàng đợi)?"):
-            return
-        from app.core.state import (BGMConfig, BlurConfig, BrandConfig, ColorConfig, SubtitleConfig, TTSConfig, TrimConfig,
-                                    VideoConfig)
-
-        s = self.app_state
-        s.video, s.subtitle, s.tts = VideoConfig(), SubtitleConfig(), TTSConfig()
-        s.blur, s.bgm, s.brand, s.trim, s.color = BlurConfig(), BGMConfig(), BrandConfig(), TrimConfig(), ColorConfig()
-        s.emit("config_loaded")
-        s.mark_dirty()
-        self.window.log("Đã đặt lại cấu hình mặc định.")
-
     def _browse_out(self) -> None:
         d = filedialog.askdirectory(title="Thư mục xuất")
         if d:
@@ -486,26 +422,6 @@ class SettingsWindow(ctk.CTkToplevel):
         if d:
             Path(d).mkdir(parents=True, exist_ok=True)
             open_path(d)
-
-    def _export_config(self) -> None:
-        p = filedialog.asksaveasfilename(defaultextension=".json", initialfile="edit_studio_config.json",
-                                         filetypes=[("JSON", "*.json")])
-        if p:
-            data = self.app_state.to_config_dict()
-            data.pop("videos", None)
-            Path(p).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.window.log(f"Đã lưu cấu hình: {p}")
-
-    def _import_config(self) -> None:
-        p = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
-        if p:
-            try:
-                self.app_state.apply_config_dict(json.loads(Path(p).read_text(encoding="utf-8")), include_videos=False)
-                self.app_state.emit("config_loaded")
-                self.app_state.mark_dirty()
-                self.window.log(f"Đã nhập cấu hình: {p}")
-            except Exception as exc:
-                messagebox.showerror("Nhập cấu hình", str(exc))
 
     def _save(self, close: bool = True, silent: bool = False) -> None:
         st = self.app_state.settings

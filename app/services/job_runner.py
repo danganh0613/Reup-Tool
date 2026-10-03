@@ -506,6 +506,9 @@ class JobRunner:
         if self.running or not items:
             return False
         self.cancel.clear()
+        # mỗi video một bản sao cấu hình (của mẫu / cấu hình riêng) — chụp lúc bấm Render, UI đổi gì sau đó không ảnh hưởng
+        base = self.pipeline
+        jobs = [(it, base.state.state_for(it)) for it in items]
 
         def _ui_update(it: VideoItem) -> None:
             self.ui_call(lambda: on_update(it))
@@ -516,13 +519,17 @@ class JobRunner:
 
         def run() -> None:
             ok = fail = 0
-            for it in items:
+            for it, st in jobs:
                 if self.cancel.is_set():
                     it.status, it.message = "Đã huỷ", ""
                     _ui_update(it)
                     continue
                 try:
-                    self.pipeline.process(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
+                    pipe = Pipeline(st, base.ffmpeg)
+                    pipe.audio_only = base.audio_only
+                    if it.config is not None or it.template:
+                        _ui_log(f"{it.name}: dùng cấu hình riêng" + (f" (mẫu «{it.template}»)" if it.template else ""))
+                    pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
                     ok += 1
                 except RenderCancelled:
                     it.status, it.message = "Đã huỷ", ""

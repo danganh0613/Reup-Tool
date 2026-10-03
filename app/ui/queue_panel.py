@@ -82,6 +82,8 @@ class QueueRow(ctk.CTkFrame):
             flags.append("Dịch")
         if it.voice_path:
             flags.append("Giọng")
+        if it.config is not None:
+            flags.append("✎ Riêng")
         if flags:
             parts.append(" · ".join(flags))
         if it.message and it.status in ("Đang xử lý", "Lỗi"):
