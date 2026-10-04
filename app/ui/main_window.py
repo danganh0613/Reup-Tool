@@ -61,6 +61,8 @@ except Exception:  # pragma: no cover
     _Root = ctk.CTk  # type: ignore[misc,assignment]
     _HAS_DND = False
 
+RAIL_W = 72                      # thanh tính năng bên trái (gọn: chỉ icon + nhãn ngắn)
+RAIL_LABELS = {"story": "Truyện"}  # nhãn ngắn trên thanh bên (tiêu đề đầy đủ vẫn ở đầu bảng tính năng)
 MODULES: list[type[BaseModule]] = [VideoModule, SubtitleModule, STTModule, SRTModule, TTSModule, BlurModule,
                                    BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
 _FKEYS = {f"<F{i + 1}>": m.key for i, m in enumerate(MODULES)}
@@ -213,11 +215,11 @@ class MainWindow(_Root):
                 return
 
     def _build_body(self) -> None:
-        self.rail = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=94)
+        self.rail = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=RAIL_W)
         self.rail.grid(row=1, column=0, sticky="ns", padx=(10, 4))
         self.rail.grid_propagate(False)
-        self.rail_label = ctk.CTkLabel(self.rail, text="Tính Năng", font=T.font(11, "bold"), text_color=T.ACCENT)
-        self.rail_label.pack(pady=(10, 2))
+        self.rail.pack_propagate(False)          # giữ đúng bề rộng RAIL_W dù nhãn nút dài
+        ctk.CTkFrame(self.rail, fg_color="transparent", height=4, width=1).pack()     # lề trên nhỏ, không tiêu đề
         for cls in MODULES:
             self._add_rail_button(cls)
         self.sync_review_rail()
@@ -237,11 +239,11 @@ class MainWindow(_Root):
 
     def _add_rail_button(self, cls: type[BaseModule]) -> None:
         compact = self._compact_rail
-        b = ctk.CTkButton(self.rail, text=cls.title, width=82, height=32 if compact else 56, corner_radius=T.RADIUS,
-                          fg_color="transparent", hover_color=T.BG_HOVER, text_color=T.TEXT_DIM, font=T.font(8 if compact else 11),
-                          image=icon(MODULE_ICONS.get(cls.key, "grid"), 14 if compact else 20, T.TEXT_DIM), compound="top",
+        b = ctk.CTkButton(self.rail, text=RAIL_LABELS.get(cls.key, cls.title), width=RAIL_W - 10, height=30 if compact else 48, corner_radius=T.RADIUS,
+                          fg_color="transparent", hover_color=T.BG_HOVER, text_color=T.TEXT_DIM, font=T.font(8 if compact else 10),
+                          image=icon(MODULE_ICONS.get(cls.key, "grid"), 14 if compact else 18, T.TEXT_DIM), compound="top",
                           command=lambda k=cls.key: self.show_module(k))
-        b.pack(pady=(0 if compact else 4, 0), padx=6)
+        b.pack(pady=(0 if compact else 2, 0), padx=5)
         self._rail_buttons[cls.key] = b
 
     # ── Responsive ────────────────────────────────────────────────────────
@@ -263,7 +265,7 @@ class MainWindow(_Root):
 
     def _apply_layout(self) -> None:
         """Bố cục theo kích thước cửa sổ (đơn vị logic, đã chia DPI):
-        header gọn < 1500 · rail gọn khi thấp < 880 · bảng tính năng 360–470 · hướng dẫn 300–400, hẹp quá thì ẩn ·
+        header gọn < 1500 · rail gọn khi thấp < 800 · bảng tính năng 360–470 · hướng dẫn 300–400, hẹp quá thì ẩn ·
         thanh công cụ xem trước gọn khi khung < 760."""
         self._resize_after = None
         k = self._scaling()
@@ -279,17 +281,13 @@ class MainWindow(_Root):
                     continue
                 relabel(b, "" if compact_header else label, width=36 if compact_header else width)
             self.version_label.configure(text="" if compact_header else f"v{APP_VERSION}")
-        compact_rail = h < 880
+        compact_rail = h < 800
         if compact_rail != self._compact_rail:
             self._compact_rail = compact_rail
             cur = self._current_module
             for b in self._rail_buttons.values():
                 b.destroy()
             self._rail_buttons.clear()
-            if compact_rail:
-                self.rail_label.pack_forget()
-            elif not self.rail_label.winfo_ismapped():
-                self.rail_label.pack(pady=(10, 2))
             for cls in MODULES:
                 self._add_rail_button(cls)
             self.sync_review_rail()
@@ -301,7 +299,7 @@ class MainWindow(_Root):
             self._panel_help_w = (panel_w, help_w)
             self.panel.configure(width=panel_w)
             self.help.set_width(help_w)
-        room_for_help = w - 94 - panel_w - help_w - 60 >= 560
+        room_for_help = w - RAIL_W - panel_w - help_w - 60 >= 560
         if self._help_open and not room_for_help:
             self._help_wanted = True
             self.help.grid_forget()
@@ -310,7 +308,7 @@ class MainWindow(_Root):
         elif self._help_wanted and room_for_help and not self._help_open:
             self._help_wanted = False
             self.open_guide(self.help.key)
-        preview_w = w - 94 - panel_w - (help_w if self._help_open else 0) - 60
+        preview_w = w - RAIL_W - panel_w - (help_w if self._help_open else 0) - 60
         self.preview.set_compact(preview_w < 760)
         # ẩn/hiện lại các khung (vẽ lại toàn bộ) chỉ khi bố cục thực sự đổi, không phải mỗi lần _apply_layout được gọi
         sig = (round(w), round(h), panel_w, help_w, self._help_open)
