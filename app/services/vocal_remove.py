@@ -87,6 +87,9 @@ class _MDX:
 
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
+        # tắt bộ nhớ đệm (arena) của onnxruntime: RAM đỉnh 2,5 GB → 1,3 GB, tốc độ không đổi
+        opts.enable_cpu_mem_arena = False
+        opts.enable_mem_pattern = False
         provs = [p for p in ("CUDAExecutionProvider", "DmlExecutionProvider", "CoreMLExecutionProvider")
                  if p in ort.get_available_providers()] + ["CPUExecutionProvider"]
         try:
@@ -135,50 +138,44 @@ class _MDX:
         out, norm = out[:, pad:pad + self.chunk], norm[pad:pad + self.chunk]
         return out / np.maximum(norm, 1e-8)
 
-    def vocals(self, mix, on_progress=None, cancel=None):
-        """mix: (2, n) float32 ở 44.1 kHz → phần giọng (2, n)."""
+    def separate_file(self, src: Path, dst: Path, on_progress=None, cancel=None) -> float:
+        """Đọc WAV nguồn theo từng đoạn ~6 s, ghi thẳng bản đã khử giọng ra ``dst`` — RAM không phụ thuộc độ dài
+        video (phim 2 giờ vẫn chỉ vài chục MB). Trả thời lượng (giây)."""
         import numpy as np
 
-        n = mix.shape[1]
-        pad = self.gen - n % self.gen
-        mp = np.concatenate([np.zeros((2, self.trim), np.float32), mix, np.zeros((2, pad + self.trim), np.float32)], 1)
-        starts = list(range(0, n + pad, self.gen))
-        out = np.zeros((2, n + pad), dtype=np.float32)
-        for k, i in enumerate(starts):
-            if (cancel is not None and cancel.is_set()) or SHUTDOWN.is_set():
-                raise RenderCancelled("Đã huỷ khử giọng")
-            spec = self._stft(mp[:, i:i + self.chunk])[None]
-            # một lượt model (lượt «khử nhiễu» f(x) − f(−x) của UVR không khác gì về mức khử giọng mà chậm gấp đôi)
-            wav = self._istft(self.sess.run(None, {self.input: spec})[0][0])
-            out[:, i:i + self.gen] = wav[:, self.trim:self.trim + self.gen]
-            if on_progress:
-                on_progress((k + 1) / len(starts))
-        return out[:, :n]
+        tmp = dst.with_suffix(".part.wav")
+        with wave.open(str(src), "rb") as rf, wave.open(str(tmp), "wb") as wf:
+            ch, n = rf.getnchannels(), rf.getnframes()
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(SR)
 
+            def read(a: int, length: int):
+                """Mẫu [a, a+length) của nguồn, ngoài phạm vi là 0 (giống đệm 0 hai đầu của UVR)."""
+                out = np.zeros((2, length), dtype=np.float32)
+                s0, e0 = max(0, a), min(n, a + length)
+                if e0 > s0:
+                    rf.setpos(s0)
+                    x = np.frombuffer(rf.readframes(e0 - s0), dtype=np.int16).astype(np.float32) / 32768.0
+                    x = x.reshape(-1, ch).T
+                    out[:, s0 - a:s0 - a + x.shape[1]] = x[:2] if ch >= 2 else np.vstack([x, x])
+                return out
 
-def _read_wav(path: Path):
-    import numpy as np
-
-    with wave.open(str(path), "rb") as wf:
-        ch, n = wf.getnchannels(), wf.getnframes()
-        data = np.frombuffer(wf.readframes(n), dtype=np.int16).astype(np.float32) / 32768.0
-    data = data.reshape(-1, ch).T
-    if ch == 1:
-        data = np.vstack([data, data])
-    return np.ascontiguousarray(data[:2])
-
-
-def _write_wav(path: Path, x) -> None:
-    import numpy as np
-
-    pcm = (np.clip(x.T, -1.0, 1.0) * 32767.0).astype(np.int16)
-    tmp = path.with_suffix(".part.wav")
-    with wave.open(str(tmp), "wb") as wf:
-        wf.setnchannels(2)
-        wf.setsampwidth(2)
-        wf.setframerate(SR)
-        wf.writeframes(pcm.tobytes())
-    tmp.replace(path)
+            starts = list(range(0, n, self.gen))
+            for k, i in enumerate(starts):
+                if (cancel is not None and cancel.is_set()) or SHUTDOWN.is_set():
+                    raise RenderCancelled("Đã huỷ khử giọng")
+                seg = read(i - self.trim, self.chunk)
+                spec = self._stft(seg)[None]
+                # một lượt model (lượt «khử nhiễu» f(x) − f(−x) của UVR không khác gì về mức khử giọng mà chậm gấp đôi)
+                voc = self._istft(self.sess.run(None, {self.input: spec})[0][0])
+                m = min(self.gen, n - i)
+                inst = seg[:, self.trim:self.trim + m] - voc[:, self.trim:self.trim + m] * COMPENSATE
+                wf.writeframes((np.clip(inst.T, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes())
+                if on_progress:
+                    on_progress((k + 1) / len(starts))
+        tmp.replace(dst)
+        return n / SR
 
 
 _RUN = threading.Lock()            # mỗi lúc chỉ khử một video (model nặng CPU/RAM; xem trước + render dùng chung)
@@ -228,11 +225,10 @@ def _separate(video_path, ffmpeg: FFmpeg, *, log, progress, cancel) -> Path | No
     src_wav = out_dir / f"{_key(video_path)}.src.wav"
     try:
         ffmpeg.extract_audio_wav(Path(video_path), src_wav, sample_rate=SR, channels=2)
-        mix = _read_wav(src_wav)
         if log:
-            log(f"Khử giọng gốc bằng AI ({mix.shape[1] / SR:.0f}s âm thanh)…")
-        voc = _MDX(model).vocals(mix, on_progress=progress, cancel=cancel)
-        _write_wav(result, mix - voc * COMPENSATE)
+            with wave.open(str(src_wav), "rb") as rf:
+                log(f"Khử giọng gốc bằng AI ({rf.getnframes() / SR:.0f}s âm thanh)…")
+        _MDX(model).separate_file(src_wav, result, on_progress=progress, cancel=cancel)
         if log:
             log("Đã khử giọng gốc — giữ nhạc nền & tiếng động.")
         return result
@@ -245,3 +241,4 @@ def _separate(video_path, ffmpeg: FFmpeg, *, log, progress, cancel) -> Path | No
         return None
     finally:
         src_wav.unlink(missing_ok=True)
+        result.with_suffix(".part.wav").unlink(missing_ok=True)
