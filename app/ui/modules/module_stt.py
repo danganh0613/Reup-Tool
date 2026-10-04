@@ -222,6 +222,6 @@ class STTModule(BaseModule):
     def _open_srt(self) -> None:
         it = self.state.active
         if it and it.srt_path and Path(it.srt_path).exists():
-            self.window._open_srt_editor()          # trình sửa SRT trong app (mở bằng app ngoài: tab SRT › «Mở SRT»)
+            self.window.show_module("srt")          # xem / sửa ngay ở tab «Lời thoại»
         else:
             messagebox.showinfo("Edit Studio", "Chưa có file SRT cho video này.")

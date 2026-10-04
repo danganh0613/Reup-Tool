@@ -170,8 +170,12 @@ class PreviewPanel(ctk.CTkFrame):
         self.bar = bar
         self.bar_label = ctk.CTkLabel(bar, text="Che mờ + Phụ đề (kéo thả)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.bar_label.pack(side="left", padx=(0, 10))
-        button(bar, "", icon_name="undo", variant="ghost", size="sm", command=self.undo, tip="Hoàn tác (Ctrl+Z)").pack(side="left", padx=1)
-        button(bar, "", icon_name="redo", variant="ghost", size="sm", command=self.redo, tip="Làm lại (Ctrl+Y)").pack(side="left", padx=(1, 8))
+        # công cụ chỉnh trên hình (khung phụ đề, ô che mờ): chỉ hiện ở tab Phụ đề / Che mờ — tab khác chỉ còn xem video
+        tools = ctk.CTkFrame(bar, fg_color="transparent")
+        self.tools = tools
+        tools.pack(side="left")
+        button(tools, "", icon_name="undo", variant="ghost", size="sm", command=self.undo, tip="Hoàn tác (Ctrl+Z)").pack(side="left", padx=1)
+        button(tools, "", icon_name="redo", variant="ghost", size="sm", command=self.redo, tip="Làm lại (Ctrl+Y)").pack(side="left", padx=(1, 8))
         self.tool_btns: dict[str, ctk.CTkButton] = {}
         self._tool_icons = {"V": "pointer", "T": "font", "B": "blur"}
         self._full_w: dict[ctk.CTkButton, int] = {}      # bề rộng đầy đủ (có chữ) của từng nút → khôi phục sau chế độ gọn
@@ -179,19 +183,19 @@ class PreviewPanel(ctk.CTkFrame):
         tool_tips = {"V": "Chọn / kéo hình xem trước (phím V)", "T": "Kéo, đổi cỡ khung phụ đề (phím T)",
                      "B": "Vẽ / kéo ô che mờ (phím B)"}
         for key in ("V", "T", "B"):
-            b = button(bar, key, icon_name=self._tool_icons[key], size="sm", command=lambda k=key: self.set_tool(k), tip=tool_tips[key])
+            b = button(tools, key, icon_name=self._tool_icons[key], size="sm", command=lambda k=key: self.set_tool(k), tip=tool_tips[key])
             b.pack(side="left", padx=1)
             self.tool_btns[key] = b
-        self.del_btn = button(bar, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
+        self.del_btn = button(tools, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
                               tip="Xoá ô che đang chọn · đang ở khung phụ đề thì tắt phụ đề (Delete)")
         self.del_btn.pack(side="left", padx=(8, 1))
         # Sub/Blur đổi chữ (Sub ↔ Sub ẩn): lấy bề rộng của nhãn dài hơn để nút không nhảy
-        self.sub_toggle = button(bar, "Sub", icon_name="eye", size="sm", command=self._toggle_sub,
-                                 width=button_width(bar, "Sub ẩn", size="sm", icon=True),
+        self.sub_toggle = button(tools, "Sub", icon_name="eye", size="sm", command=self._toggle_sub,
+                                 width=button_width(tools, "Sub ẩn", size="sm", icon=True),
                                  tip="Ẩn / hiện phụ đề trên khung xem trước (Shift+T) — không ảnh hưởng video xuất")
         self.sub_toggle.pack(side="left", padx=(8, 1))
-        self.blur_toggle = button(bar, "Blur", icon_name="eye", size="sm", command=self._toggle_blur,
-                                  width=button_width(bar, "Blur ẩn", size="sm", icon=True),
+        self.blur_toggle = button(tools, "Blur", icon_name="eye", size="sm", command=self._toggle_blur,
+                                  width=button_width(tools, "Blur ẩn", size="sm", icon=True),
                                   tip="Ẩn / hiện ô che mờ trên khung xem trước — không ảnh hưởng video xuất")
         self.blur_toggle.pack(side="left", padx=1)
         right = ctk.CTkFrame(bar, fg_color="transparent")
@@ -237,20 +241,17 @@ class PreviewPanel(ctk.CTkFrame):
         self.time_label.pack(side="left", padx=(8, 0))
         self.cue_label = ctk.CTkLabel(ctrl, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w")
         button(ctrl, "", icon_name="fullscreen", size="sm", command=self.fullscreen, tip="Xem trước toàn màn hình (F)").pack(side="right")
-        self.ext_btn = button(ctrl, "", icon_name="export", size="sm", command=self._open_external,
-                              tip="Mở video bằng trình phát mặc định của máy")
-        self.ext_btn.pack(side="right", padx=(0, 4))
-        self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform,
-                               tip="Vẽ dạng sóng âm thanh dưới thanh thời gian")
-        self.wave_btn.pack(side="right", padx=(0, 4))
+        self.more_btn = button(ctrl, "", icon_name="list", variant="ghost", size="sm", command=self._more_menu,
+                               tip="Thêm: hiệu ứng khi phát · vẽ lại sóng âm · mở bằng trình phát của máy")
+        self.more_btn.pack(side="right", padx=(0, 4))
+        # ít dùng → nằm trong menu ⋯ (giữ đối tượng nút để mã cũ đổi nhãn không lỗi, chỉ không hiện)
+        self.ext_btn = button(ctrl, "", icon_name="export", size="sm", command=self._open_external)
+        self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform)
         self.clip_btn = button(ctrl, "Render thử", icon_name="film", size="sm", command=self.render_clip,
                                tip=f"Render thử {CLIP_SECONDS} giây từ vị trí đang xem với đầy đủ chỉnh sửa (phụ đề, lồng tiếng, "
                                    "nhạc nền, hiệu ứng, cắt, tốc độ) rồi phát ngay — giống hệt file sẽ xuất")
         self.clip_btn.pack(side="right", padx=(0, 4))
-        self.fx_btn = button(ctrl, "Hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx,
-                             tip="Khi phát: áp đủ hiệu ứng như bản render (khung hình, màu, che mờ, logo, phụ đề thật). "
-                                 "Máy yếu bị giật thì tắt — khi đó phát hình gốc, phụ đề vẽ đè.")
-        self.fx_btn.pack(side="right", padx=(0, 4))
+        self.fx_btn = button(ctrl, "Hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx)
         for b in (self.wave_btn, self.clip_btn, self.fx_btn):
             self._full_w[b] = b.cget("width")
         # chữ của câu phụ đề xếp sau cùng: thiếu chỗ thì nó co lại, các nút không bị đẩy ra ngoài
@@ -274,8 +275,8 @@ class PreviewPanel(ctk.CTkFrame):
             self.head.grid(row=0, column=0, sticky="w")
             self.bar.grid(row=0, column=1, sticky="ew", padx=(12, 0))
         else:
-            if not self._compact:
-                self.bar_label.pack(side="left", padx=(0, 10), before=self.bar.winfo_children()[1])
+            if not self._compact and self.tools.winfo_ismapped():
+                self.bar_label.pack(side="left", padx=(0, 10), before=self._bar_first())
             self.head.grid(row=0, column=0, columnspan=2, sticky="ew")
             self.bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
@@ -299,6 +300,36 @@ class PreviewPanel(ctk.CTkFrame):
             total += ch.winfo_reqwidth() + pad
         return total
 
+    def _bar_first(self):
+        """Widget đang hiện đầu tiên của thanh công cụ (sau nhãn) — để xếp nhãn «Che mờ + Phụ đề» lên trước."""
+        return self.tools if self.tools.winfo_ismapped() else self.bar.winfo_children()[-1]
+
+    def set_edit_tools(self, on: bool) -> None:
+        """Công cụ chỉnh trên hình chỉ hiện ở tab Phụ đề / Che mờ (tab khác: thanh gọn, chỉ xem video)."""
+        if on == self.tools.winfo_ismapped():
+            return
+        if on:
+            self.tools.pack(side="left", before=self.bar.winfo_children()[-1])
+        else:
+            self.tools.pack_forget()
+            self.bar_label.pack_forget()          # nhãn «Che mờ + Phụ đề (kéo thả)» đi cùng công cụ
+            self.set_tool("V")
+        self._relayout_top()
+
+    def _more_menu(self) -> None:
+        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
+                    activeforeground=T.TEXT, selectcolor=T.ACCENT, bd=0)
+        fx = tk.BooleanVar(value=self.fx_play)
+        m.add_checkbutton(label="Hiệu ứng khi phát (giống bản xuất — máy yếu bị giật thì tắt)", variable=fx,
+                          command=self.toggle_fx)
+        m.add_command(label="Vẽ lại sóng âm", command=self.load_waveform)
+        m.add_command(label="Mở video gốc bằng trình phát của máy", command=self._open_external)
+        b = self.more_btn
+        try:
+            m.tk_popup(b.winfo_rootx(), b.winfo_rooty() - 80)
+        finally:
+            m.grab_release()
+
     def set_compact(self, compact: bool) -> None:
         """Khung xem trước hẹp (< ~760 px): bỏ nhãn chữ, chỉ giữ icon để thanh công cụ không tràn."""
         if compact == self._compact:
@@ -306,8 +337,8 @@ class PreviewPanel(ctk.CTkFrame):
         self._compact = compact
         if compact:
             self.bar_label.pack_forget()
-        elif self._top_rows == 2:
-            self.bar_label.pack(side="left", padx=(0, 10), before=self.bar.winfo_children()[1])
+        elif self._top_rows == 2 and self.tools.winfo_ismapped():
+            self.bar_label.pack(side="left", padx=(0, 10), before=self._bar_first())
         labels = {self.del_btn: "Xóa", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
                   self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.wave_btn: "Sóng âm",
                   self.clip_btn: "Render thử", self.fx_btn: "Hiệu ứng" if self.fx_play else "Hiệu ứng tắt",

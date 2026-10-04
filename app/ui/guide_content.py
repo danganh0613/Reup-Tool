@@ -70,7 +70,7 @@ TOPICS: list[dict] = [
             "Mục STT: bấm «Tạo SRT từ Video trong hàng đợi». Máy nghe video rồi ghi ra chữ (tiếng gốc). Chờ vài chục giây. "
             "Máy nào có card NVIDIA thì chọn Model = large-v3-turbo cho chữ đúng nhất.",
             "Mục SRT: bật «Dịch AI», chọn «Tiếng Việt», bấm «Dịch». Cần có API key Gemini (miễn phí, lấy tại aistudio.google.com, "
-            "dán vào Cài đặt). Muốn sửa câu nào thì bấm «Xem / Sửa SRT».",
+            "dán vào Cài đặt). Muốn sửa câu nào thì mở tab «Lời thoại».",
             "Mục Phụ đề: chọn «Sub đã dịch». Chữ Việt hiện trên video. Muốn dời chữ thì bấm T rồi kéo ô chữ.",
             "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không. Để «Khớp mềm» bật.",
             "Mục Che mờ (nếu video có chữ tiếng nước ngoài dính sẵn trên hình): bấm B rồi vẽ một ô đè lên dòng chữ đó.",
@@ -78,7 +78,7 @@ TOPICS: list[dict] = [
             "khoảng 70, «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
         ]),
         ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh. "
-                 "Nếu cuối video bị mất tiếng: tab SRT, ô «Phong cách dịch» chọn «Ngắn gọn hơn», bấm «Dịch lại»."),
+                 "Nếu cuối video bị mất tiếng: tab Lời thoại, ô «Phong cách dịch» chọn «Ngắn gọn hơn», bấm «Dịch lại»."),
     ]},
     {"key": "flow_short", "title": "Video ngang → video dọc TikTok", "group": "Bắt đầu", "blocks": [
         ("steps", [
@@ -126,18 +126,20 @@ TOPICS: list[dict] = [
         ]),
         ("tip", "Chữ hiện sớm hay muộn hơn tiếng? Chỉnh ô «Trễ phụ đề» (số dương = chữ hiện muộn hơn)."),
     ]},
-    {"key": "review", "title": "Duyệt: xem, sửa, duyệt từng video trước khi xuất", "group": "Từng mục", "blocks": [
-        ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Khung xem trước bên phải luôn hiện video đang duyệt."),
+    {"key": "review", "title": "Duyệt: xem từng video, chỗ nào chưa ổn thì sửa", "group": "Từng mục", "blocks": [
+        ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Video là trung tâm: khung xem trước bên phải luôn "
+              "hiện video đang duyệt, bảng bên trái tóm tắt video đó sẽ ra sao."),
         ("steps", [
-            "Đổi video bằng ‹ › hoặc ô chọn (dấu ● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
-            "Bấm vào ô câu → khung xem trước nhảy tới cảnh câu đó. Bấm «▶ số câu» → phát đúng câu đó có giọng lồng rồi tự dừng.",
-            "Sửa câu: Enter / ↑ ↓ để sang câu kế. Một câu dịch dở: bấm ↻ cạnh câu đó.",
-            "Ô «Nhờ AI sửa phụ đề»: gõ yêu cầu như nhắn tin, vd «câu hỏi bắt về nuôi thì thêm Con này ở đầu», «sửa tên "
-            "Tiểu Long thành Lý Tiểu Long», «dịch lại cho tự nhiên hơn» → Enter. AI tự tìm đúng các câu liên quan, chỉ sửa "
-            "những câu đó (tô vàng, chưa lưu); không ưng bấm «Hoàn tác».",
-            "«Lưu & tạo lại giọng» → nghe lại → «Duyệt» (Ctrl+Enter) hoặc «Bỏ qua». Xong hết bấm «Xuất (n)» trên cùng.",
+            "Đổi video bằng ‹ › hoặc ô chọn (● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
+            "Đọc «Video này sẽ ra sao»: khung hình, lời thoại (bao nhiêu câu, đã dịch chưa), phụ đề, mấy người nói & ai "
+            "lồng tiếng, âm thanh gốc, che mờ, nhạc nền, logo, cắt, hiệu ứng. Dòng tô vàng ⚠ là chỗ nên xem lại.",
+            "Bấm ▶ Phát xem video. Thấy chỗ chưa ổn → bấm «Sửa ›» ở dòng đó → mở đúng tab tính năng. Chỉnh gì ở đó cũng CHỈ "
+            "áp cho video đang duyệt (dải trên cùng ghi «✎ Chỉnh riêng»); muốn dùng cho mọi video thì bấm «Áp cho tất cả».",
+            "Chỉnh xong bấm ▶ Phát xem lại → «‹ Về Duyệt» → «Duyệt» (hoặc Ctrl+Enter ở bất kỳ tab nào) → tự sang video chờ kế.",
+            "Duyệt hết thì bấm «Xuất (n)» trên cùng. Menu ☰ cạnh nút Duyệt: chuẩn bị lại video này, duyệt hết video đang chờ.",
         ]),
-        ("tip", "Chỉnh khung phụ đề, che mờ, giọng… của riêng video đang duyệt: mở tab tương ứng như bình thường, xong quay lại tab Duyệt."),
+        ("tip", "Sửa câu thoại: «Sửa ›» ở dòng Lời thoại → tab Lời thoại (bấm ô câu là video nhảy tới câu đó, ▶ phát đúng câu, "
+                "ô «Nhờ AI sửa» chỉ sửa đúng những câu liên quan)."),
     ]},
     {"key": "stt", "title": "STT: nghe video và ghi ra chữ", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
@@ -149,7 +151,7 @@ TOPICS: list[dict] = [
             "Với Whisper, chọn Model: máy có card NVIDIA → «large-v3-turbo» (đúng nhất). Máy thường → «small». Lần đầu máy sẽ tải model, chờ vài phút.",
             "Ngôn ngữ để «auto» — máy tự nhận.",
             "Bấm «Tạo SRT từ Video trong hàng đợi». Xong sẽ thấy dòng «SRT: … cue». Bấm «Mở SRT» để xem chữ.",
-            "Chữ sai chỗ nào, vào mục SRT → «Xem / Sửa SRT» để sửa tay.",
+            "Chữ sai chỗ nào, mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó).",
         ]),
         ("kv", [
             ("Thiết bị = auto", "Máy tự thử card NVIDIA trước, không được thì dùng CPU."),
@@ -158,7 +160,7 @@ TOPICS: list[dict] = [
             ("PC yếu", "Bật nếu máy chậm, hay bị treo."),
         ]),
     ]},
-    {"key": "srt", "title": "SRT: dịch chữ sang tiếng khác, sửa chữ", "group": "Từng mục", "blocks": [
+    {"key": "srt", "title": "Lời thoại: xem, sửa, dịch câu thoại của video", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
         ("p", "Dịch file chữ (.srt) sang tiếng Việt hoặc tiếng khác bằng AI. Sửa lại câu nào chưa hay."),
         ("h", "Làm thế nào?"),
@@ -168,14 +170,14 @@ TOPICS: list[dict] = [
             "Bật «Dịch AI», chọn ngôn ngữ đích (Tiếng Việt).",
             "Ô «Phong cách dịch» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
             "Bấm «Dịch». Chờ khoảng 30 giây cho video 5 phút. Xong thấy «Dịch xong».",
-            "Bấm «Xem / Sửa SRT» để đọc lại. Sửa trực tiếp, bấm «Lưu». Chỉ câu nào sửa thì lần sau mới đọc lại giọng câu đó.",
+            "Đọc lại ngay ở mục «Lời thoại của video đang chọn» đầu tab. Sửa trực tiếp, bấm «Lưu & tạo lại giọng» — chỉ câu nào sửa mới đọc lại giọng.",
         ]),
         ("h", "Dịch chưa hay — bảo AI dịch lại"),
         ("steps", [
             "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: ghi yêu cầu vào ô «Phong cách dịch», "
             "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «Dịch lại (bản mới)». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
-            "Chỉ vài câu dở: «Mở bảng dịch từng câu» → tick các câu đó → «AI dịch / dịch lại đã chọn».",
-            "Ở tab Duyệt: nút ↻ cạnh từng câu, hoặc ô «Nhờ AI sửa phụ đề» — gõ yêu cầu, AI chỉ sửa đúng những câu liên quan "
+            "Chỉ vài câu dở: bấm ↻ cạnh câu đó, hoặc gõ yêu cầu vào ô «Nhờ AI sửa» — AI chỉ sửa đúng những câu liên quan.",
+            "Đang duyệt: từ tab Duyệt bấm «Sửa ›» ở dòng Lời thoại để tới đây; nút ↻ cạnh từng câu, hoặc ô «Nhờ AI sửa» — gõ yêu cầu, AI chỉ sửa đúng những câu liên quan "
             "(tô vàng, xem trước được) — ưng thì bấm «Lưu & tạo lại giọng».",
             "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),

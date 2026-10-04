@@ -23,7 +23,7 @@ SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "�
 
 class SRTModule(BaseModule):
     key = "srt"
-    title = "SRT"
+    title = "Lời thoại"
     icon = "📄"
     section = "subtitle"
 
@@ -31,11 +31,20 @@ class SRTModule(BaseModule):
         cfg = self.state.subtitle
         s = self.setter
 
+        # ── Lời thoại của video đang chọn: sửa ngay, gắn với khung xem trước (nơi DUY NHẤT sửa từng câu) ──
+        from app.ui.widgets.cue_editor import CueEditor
+
+        sec = Section(self, "Lời thoại của video đang chọn")
+        sec.pack(fill="x", pady=4)
+        self.editor = CueEditor(sec.body, self.window, on_saved=lambda it: (self.on_active_changed(),
+                                                                             self.window.queue_update(it)))
+        self.editor.pack(fill="x")
+
         sec = Section(self, "Tệp phụ đề")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("Chọn SRT", self._pick_srt, None), ("Sửa SRT", self.open_editor, T.primary_button())]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Xuất SRT", self._export_srt, T.primary_button()), ("Mở SRT", self._open_srt, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Sửa thời gian…", self.open_editor, None), ("Dán bản dịch ngoài…", self._manual_translate, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None), ("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
         self.file_status = StatusLabel(sec.body, "Chưa có SRT — nhập file hoặc tạo bằng tab STT.")
         self.file_status.pack(fill="x", pady=(4, 0))
 
@@ -67,12 +76,6 @@ class SRTModule(BaseModule):
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
-        sec = Section(self, "Sửa / dịch từng câu")
-        sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("Mở bảng dịch từng câu", self._manual_translate, T.primary_button())]).pack(fill="x", pady=2)
-        hint(sec.body, "Gõ bản dịch từng câu, dán bản dịch từ nơi khác, hoặc tick vài câu dở rồi «AI dịch / dịch lại đã "
-                       "chọn». Timestamp giữ nguyên. Đang dùng chế độ Duyệt thì sửa ngay ở tab Duyệt (vừa xem video).").pack(fill="x")
-
         sec = Section(self, "Tùy chọn nâng cao")
         sec.pack(fill="x", pady=4)
         self.reflow = SwitchRow(sec.body, "AI tối ưu câu + gộp timeline", on_change=s(cfg, "ai_reflow", preview=False))
@@ -93,8 +96,23 @@ class SRTModule(BaseModule):
             self._loading = False
         self.on_active_changed()
 
+    def on_shown(self) -> None:
+        super().on_shown()
+        self.editor.start_tick()
+
+    def on_hidden(self) -> None:
+        self.editor.stop_tick()
+        self._ask_save()
+
+    def _ask_save(self) -> None:
+        if self.editor.dirty() and messagebox.askyesno("Edit Studio", "Lưu các câu lời thoại vừa sửa?"):
+            self.editor.save()
+
     def on_active_changed(self) -> None:
         it = self.state.active
+        if self.editor.item is not it:
+            self._ask_save()
+            self.editor.load(it)
         if it is None:
             self.file_status.info("Chưa có video được chọn.")
             self.tr_status.info("")
@@ -131,6 +149,8 @@ class SRTModule(BaseModule):
         self._after_change(it)
 
     def _after_change(self, it) -> None:
+        if it is self.state.active and not self.editor.dirty():
+            self.editor.load(it)                    # file SRT / bản dịch đổi → nạp lại danh sách câu
         self.on_active_changed()
         self.window.queue_update(it)
         self.window.preview.schedule_refresh(0)

@@ -491,6 +491,9 @@ class AppState:
         self.ui: dict[str, Any] = {"active_module": "video"}
         self.template_name: str = ""                    # mẫu đã áp vào cấu hình chung
         self._shared: dict[str, Any] | None = None      # cấu hình chung khi đang chọn video có cấu hình riêng
+        # Đang duyệt: chỉnh gì cũng chỉ cho video đang chọn → giữ bản cấu hình chung trước lần chỉnh đầu tiên
+        self.review_scope = False
+        self._pristine: dict[str, Any] | None = None
 
         self._listeners: dict[str, list[Callable[..., None]]] = {}
         self._dirty_timer: threading.Timer | None = None
@@ -508,6 +511,8 @@ class AppState:
             pass
 
     def emit(self, event: str, *args: Any) -> None:
+        if event in ("config_loaded", "active_changed", "videos_changed"):
+            self._snap_pristine()             # áp mẫu / đổi video / nạp cấu hình → mốc «chưa chỉnh» mới
         for cb in list(self._listeners.get(event, [])):
             try:
                 cb(*args)
@@ -659,9 +664,43 @@ class AppState:
         clone.story = copy.deepcopy(self.story)
         return clone
 
+    # ── Chỉnh riêng khi duyệt ─────────────────────────────────────────────
+    def set_review_scope(self, on: bool) -> None:
+        self.review_scope = bool(on)
+        self._snap_pristine()
+
+    def _snap_pristine(self) -> None:
+        a = self.active
+        self._pristine = self.sections_dict() if (self.review_scope and a is not None and a.config is None) else None
+
+    def _scope_edit(self) -> None:
+        """Lần chỉnh đầu tiên trên video đang duyệt (đang theo cấu hình chung) → tách thành cấu hình riêng của video
+        đó; cấu hình chung (cho các video khác) trở về như trước lần chỉnh."""
+        a = self.active
+        if not self.review_scope or self._pristine is None or a is None or a.config is not None:
+            return
+        cur = self.sections_dict()
+        if cur == self._pristine:
+            return
+        a.config = cur
+        a.template = a.template or self.template_name
+        self._shared, self._pristine = self._pristine, None
+        self.emit("scoped", a)
+
+    def apply_to_all(self, item: VideoItem) -> None:
+        """Nút «Áp cho tất cả»: cấu hình riêng của ``item`` (đang chọn) thành cấu hình chung, bỏ «riêng» của nó.
+        Video khác đã chỉnh riêng giữ nguyên."""
+        if item is not self.active or item.config is None:
+            return
+        item.config, item.template = None, ""
+        self._shared = None                   # cấu hình đang hiển thị (của item) giờ là cấu hình chung
+        self.emit("config_loaded")
+        self.mark_dirty()
+
     # ── Cấu hình ──────────────────────────────────────────────────────────
     def config_changed(self, section: str = "") -> None:
         """Module UI gọi sau khi ghi một giá trị vào cấu hình."""
+        self._scope_edit()
         self.emit("config_changed", section)
         self.mark_dirty()
 

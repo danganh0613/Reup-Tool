@@ -174,11 +174,6 @@ class MainWindow(_Root):
         self.version_label = ctk.CTkLabel(left, text=f"v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED)
         self.version_label.pack(side="left", padx=(8, 0))
         self.header_btns: list[list] = []   # [nút, nhãn đầy đủ, bề rộng đầy đủ] — cửa sổ hẹp thì chỉ còn icon
-        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: API key, GPU, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
-        self._hbtn(left, "Hướng dẫn", "book", lambda: self.toggle_help(), tip="Bật / tắt bảng hướng dẫn bên cạnh (Ctrl+H)").pack(side="left", padx=4)
-        self._hbtn(left, "Phím tắt", "keyboard", self.open_shortcuts, tip="Danh sách phím tắt").pack(side="left", padx=4)
-        self.notif_btn = self._hbtn(left, "Thông báo", "bell", self.open_notifications, tip="Trung tâm thông báo (kết quả render, lỗi)")
-        self.notif_btn.pack(side="left", padx=4)
         self.busy_label = ctk.CTkLabel(left, text="", font=T.font(12), text_color=T.WARNING)
         self.busy_label.pack(side="left", padx=12)
 
@@ -188,15 +183,18 @@ class MainWindow(_Root):
         self.template_bar.grid(row=0, column=1, pady=8)
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
-        self._hbtn(right, "Thư mục xuất", "folder", self.open_output_dir, tip="Mở thư mục chứa video đã xuất").pack(side="left", padx=4)
-        self.mp3_btn = self._hbtn(right, "Render MP3", "music", lambda: self.start_render(list(self.app_state.videos), audio_only=True),
-                                  tip="Chỉ xuất âm thanh (lồng tiếng + nhạc) thành MP3")
-        self.mp3_btn.pack(side="left", padx=4)
+        # một nút chính duy nhất (Render / Chuẩn bị / Xuất); việc phụ gom vào menu ☰; «Dừng» chỉ hiện khi đang chạy
+        self.notif_btn = self._hbtn(right, "", "bell", self.open_notifications, variant="ghost",
+                                    tip="Thông báo (kết quả render, lỗi)")
+        self.notif_btn.pack(side="left", padx=2)
+        self.menu_btn = self._hbtn(right, "", "list", self._app_menu, variant="ghost",
+                                   tip="Menu: cài đặt, hướng dẫn, phím tắt, thư mục xuất, xuất MP3, kiểm tra máy")
+        self.menu_btn.pack(side="left", padx=(2, 6))
         self.render_btn = button(right, "Render MP4", icon_name="play", variant="primary", size="lg",
                                  command=lambda: self.start_render(list(self.app_state.videos)), tip="Dựng toàn bộ hàng đợi thành MP4 (Ctrl+R)")
-        self.render_btn.pack(side="left", padx=(8, 4))
-        self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", state="disabled", tip="Dừng mọi việc đang chạy (Esc)")
-        self.stop_btn.pack(side="left", padx=4)
+        self.render_btn.pack(side="left", padx=(4, 4))
+        self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", tip="Dừng mọi việc đang chạy (Esc)")
+        self._running = False
         self.after(300, self.update_render_button)
 
     def _hbtn(self, parent, text: str, icon_name: str, command, *, variant: str = "secondary", **kw) -> ctk.CTkButton:
@@ -228,7 +226,8 @@ class MainWindow(_Root):
         self.panel.grid(row=1, column=1, sticky="ns", padx=4)
         self.panel.grid_propagate(False)
         self.panel.grid_columnconfigure(0, weight=1)
-        self.panel.grid_rowconfigure(0, weight=1)
+        self.panel.grid_rowconfigure(1, weight=1)
+        self._build_scope_strip()
 
         from app.ui.widgets.guide_window import HelpPane
 
@@ -345,7 +344,7 @@ class MainWindow(_Root):
             if k != key and m.winfo_ismapped():
                 m.grid_forget()
                 m.on_hidden()
-        self.modules[key].grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        self.modules[key].grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
         self.modules[key].on_shown()
         self.after(30, self.modules[key].scroll_top)
         prev = self._current_module
@@ -356,10 +355,12 @@ class MainWindow(_Root):
                         text_color=T.ACCENT if k == key else T.TEXT_DIM,
                         image=icon(MODULE_ICONS.get(k, "grid"), 20, T.ACCENT if k == key else T.TEXT_DIM))
         self._current_module = key
+        self._update_scope_strip()
         self.app_state.ui["active_module"] = key
         self.app_state.mark_dirty()
         if self._help_open and self.help.key not in ("start", "flow_dub", "flow_short", "faq", "settings", "shortcuts"):
             self.help.show(key)
+        self.preview.set_edit_tools(key in ("subtitle", "blur"))
         if key == "blur":
             self.preview.set_tool("B")
         elif key == "subtitle":
@@ -405,6 +406,8 @@ class MainWindow(_Root):
         self.preview.set_item(item)
         for m in self.modules.values():
             m.on_active_changed()
+        self._scope_note = ""
+        self._update_scope_strip()
 
     def _on_drop(self, event) -> None:
         try:
@@ -559,7 +562,7 @@ class MainWindow(_Root):
         else:
             self._notif_win.refresh()
             self._notif_win.lift()
-        self._set_header_label(self.notif_btn, "Thông báo")
+        self._set_header_label(self.notif_btn, "")
 
     def open_selfcheck(self) -> None:
         from app.ui.widgets.selfcheck_window import SelfCheckWindow
@@ -584,7 +587,7 @@ class MainWindow(_Root):
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
         del self.notifications[:-100]
-        self._set_header_label(self.notif_btn, f"{len(self.notifications)} Thông báo")
+        self._set_header_label(self.notif_btn, f"{len(self.notifications)}")
         if self._notif_win is not None and self._notif_win.winfo_exists():
             self._notif_win.refresh()
 
@@ -605,6 +608,9 @@ class MainWindow(_Root):
             "equal": lambda _e: self.preview.zoom_step(1),
             "minus": lambda _e: self.preview.zoom_step(-1),
             "0": lambda _e: self.preview.set_zoom(None),
+            "Return": lambda _e: self._review_key("approve"),
+            "Down": lambda _e: self._review_key("next"),
+            "Up": lambda _e: self._review_key("prev"),
         }
         for k, fn in mod_keys.items():
             self.bind(f"<Control-{k}>", fn)
@@ -771,9 +777,31 @@ class MainWindow(_Root):
         self.ui_call(lambda: self.progress.set_progress(p))
 
     def set_running(self, running: bool) -> None:
+        self._running = running
         self.render_btn.configure(state="disabled" if running else "normal")
-        self.mp3_btn.configure(state="disabled" if running else "normal")
-        self.stop_btn.configure(state="normal" if running else "disabled")
+        if running:
+            self.stop_btn.pack(side="left", padx=4)       # «Dừng» chỉ hiện khi có việc đang chạy
+        else:
+            self.stop_btn.pack_forget()
+
+    def _app_menu(self) -> None:
+        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
+                    activeforeground=T.TEXT, bd=0)
+        m.add_command(label="Cài đặt (API key, GPU, giao diện)…", command=self.open_settings)
+        m.add_command(label="Hướng dẫn  (Ctrl+H)", command=lambda: self.toggle_help())
+        m.add_command(label="Phím tắt", command=self.open_shortcuts)
+        m.add_separator()
+        m.add_command(label="Mở thư mục xuất", command=self.open_output_dir)
+        m.add_command(label="Chỉ xuất âm thanh (MP3)", state="disabled" if self._running else "normal",
+                      command=lambda: self.start_render(list(self.app_state.videos), audio_only=True))
+        m.add_separator()
+        m.add_command(label="Xem log", command=self.open_log)
+        m.add_command(label="Kiểm tra máy…", command=self.open_selfcheck)
+        b = self.menu_btn
+        try:
+            m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+        finally:
+            m.grab_release()
 
     # ── Log ───────────────────────────────────────────────────────────────
     def log(self, msg: str) -> None:
@@ -946,8 +974,97 @@ class MainWindow(_Root):
         self.sync_review_rail()
         self.show_module("review")
 
+    # ── Đang duyệt: sửa ở tab tính năng = sửa riêng video đó; dải nhắc ở đầu bảng tính năng ──
+    def _build_scope_strip(self) -> None:
+        self.scope_strip = ctk.CTkFrame(self.panel, fg_color=T.ACCENT_SOFT, corner_radius=8)
+        self.scope_strip.grid_columnconfigure(0, weight=1)
+        self.scope_label = ctk.CTkLabel(self.scope_strip, text="", font=T.font(11), anchor="w", justify="left",
+                                        text_color=T.TEXT, wraplength=210)
+        self.scope_label.grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=6)
+        self.scope_all_btn = button(self.scope_strip, "Áp cho tất cả", size="sm", variant="ghost",
+                                    command=self._apply_to_all,
+                                    tip="Dùng cách chỉnh của video này làm cấu hình chung cho các video chưa chỉnh riêng")
+        self.scope_all_btn.grid(row=0, column=1, padx=2)
+        self.scope_back_btn = button(self.scope_strip, "‹ Về Duyệt", size="sm", variant="primary",
+                                     command=lambda: self.show_module("review"),
+                                     tip="Quay lại bảng duyệt video (Ctrl+Enter: duyệt luôn video này)")
+        self.scope_back_btn.grid(row=0, column=2, padx=(2, 8))
+        self._scope_note = ""
+        if not getattr(self, "_scope_listening", False):        # dựng lại giao diện (đổi theme) → không đăng ký lặp
+            self._scope_listening = True
+            self.app_state.on("scoped", self._on_scoped)
+            self.app_state.on("config_changed", self._scope_changed)
+
+    def _update_scope_strip(self) -> None:
+        strip = getattr(self, "scope_strip", None)
+        if strip is None or not strip.winfo_exists():
+            return
+        it = self.app_state.active
+        show = self.review_mode and it is not None and self._current_module not in (None, "review")
+        if not show:
+            self.scope_strip.grid_remove()
+            return
+        own = it.config is not None
+        name = it.name if len(it.name) <= 22 else it.name[:20] + "…"
+        text = (f"✎ Chỉnh riêng: {name}" if own else f"Đang duyệt {name} · chỉnh ở đây chỉ áp cho video này")
+        if self._scope_note:
+            text += f"\n{self._scope_note}"
+        self.scope_label.configure(text=text)
+        if own:
+            self.scope_all_btn.grid()
+        else:
+            self.scope_all_btn.grid_remove()
+        self.scope_strip.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 0))
+
+    def _on_scoped(self, item: VideoItem) -> None:
+        self.log(f"{item.name}: tách cấu hình riêng (video khác không bị đổi).")
+        self.queue_update(item)
+
+    def _scope_changed(self, _section: str = "") -> None:
+        if self.review_mode and not self.preview.player.playing:
+            self._scope_note = "✓ Đã chỉnh — ▶ Phát để xem lại"
+        self._update_scope_strip()
+
+    def _apply_to_all(self) -> None:
+        it = self.app_state.active
+        if it is None or it.config is None:
+            return
+        if not messagebox.askyesno(APP_NAME, f"Dùng cách chỉnh của «{it.name}» cho mọi video chưa chỉnh riêng?"):
+            return
+        self.app_state.apply_to_all(it)
+        self.queue_update(it)
+        self._scope_note = "✓ Đã áp cho tất cả video chưa chỉnh riêng"
+        self._update_scope_strip()
+        self.log(f"Đã dùng cấu hình của {it.name} làm cấu hình chung.")
+
+    def edit_in(self, key: str) -> None:
+        """«Sửa ›» ở bảng Duyệt: mở đúng tab tính năng cho video đang duyệt."""
+        self._scope_note = ""
+        self.show_module(key)
+
+    def review_panel(self):
+        """Bảng Duyệt (tạo nếu chưa có — để phím tắt duyệt dùng được ở mọi tab)."""
+        if "review" not in self.modules:
+            from app.ui.widgets.review_window import ReviewPanel
+
+            self.modules["review"] = ReviewPanel(self.panel, self)
+        return self.modules["review"]
+
+    def _review_key(self, action: str) -> None:
+        if not self.review_mode or not self.app_state.videos:
+            return
+        rv = self.review_panel()
+        if action == "approve":
+            rv.approve()
+        else:
+            rv._step(1 if action == "next" else -1)
+        self._scope_note = ""
+        self._update_scope_strip()
+
     def sync_review_rail(self) -> None:
         """Nút «Duyệt» trên thanh tính năng chỉ hiện khi bật chế độ Duyệt trước khi xuất."""
+        self.app_state.set_review_scope(self.review_mode)
+        self._update_scope_strip()
         b = self._rail_buttons.get("review")
         if self.review_mode and b is None:
             from app.ui.widgets.review_window import ReviewPanel
