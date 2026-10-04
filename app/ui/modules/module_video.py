@@ -39,9 +39,9 @@ class VideoModule(BaseModule):
         ButtonRow(self, [("＋ Thêm từ thư mục…", self._add_folder, None)]).pack(fill="x", pady=(0, 4))
         self.review = SwitchRow(self, "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)", on_change=self._review_toggled)
         self.review.pack(fill="x", pady=(2, 0))
-        self.review_row = ButtonRow(self, [("✔ Mở màn hình duyệt", lambda: self.window.open_review(), None)])
-        self.review_hint = hint(self, "Bấm nút Chuẩn bị (thay cho Render) → máy làm phụ đề, dịch, giọng cho cả hàng đợi → "
-                                      "bạn xem / sửa / duyệt từng video → Xuất. Tắt = render một mạch như cũ.")
+        self.review_hint = hint(self, "Bấm «Chuẩn bị» (thay cho Render) → máy làm phụ đề, dịch, giọng cho cả hàng đợi → "
+                                      "tab «Duyệt» (thanh bên trái) để xem / sửa / duyệt từng video → «Xuất». "
+                                      "Tắt = render một mạch như cũ.")
 
         from app.services.watch_folder import SHARED, WATCH_ACTIONS
 
@@ -256,15 +256,14 @@ class VideoModule(BaseModule):
         self.state.ui["review_mode"] = bool(on)
         self.state.mark_dirty()
         self._layout_review()
+        self.window.sync_review_rail()
         self.window.update_render_button()
 
     def _layout_review(self) -> None:
         if self.state.ui.get("review_mode"):
-            if not self.review_row.winfo_ismapped():
-                self.review_row.pack(fill="x", pady=(2, 0), after=self.review)
-                self.review_hint.pack(fill="x", pady=(0, 4), after=self.review_row)
+            if not self.review_hint.winfo_ismapped():
+                self.review_hint.pack(fill="x", pady=(0, 4), after=self.review)
         else:
-            self.review_row.pack_forget()
             self.review_hint.pack_forget()
 
     def update_own(self) -> None:

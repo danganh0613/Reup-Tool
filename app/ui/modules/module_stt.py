@@ -12,7 +12,6 @@ from app.core.state import STT_DEVICES, STT_ENGINES, STT_LANGUAGES, STT_MODELS, 
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
-from app.core.platform import open_path
 
 
 class STTModule(BaseModule):
@@ -55,9 +54,9 @@ class STTModule(BaseModule):
         sec.pack(fill="x", pady=4)
         ButtonRow(sec.body, [("Tạo SRT từ Video trong hàng đợi", self._run_active, T.primary_button())]).pack(fill="x", pady=2)
         ButtonRow(sec.body, [("🎞 Nhận dạng từ File Media (Audio/Video)…", self._run_file, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Mở SRT", self._open_srt, None),
+        ButtonRow(sec.body, [("Xem / sửa SRT", self._open_srt, None),
                              ("⬇ Tải trước model Whisper", self._download_model, None)]).pack(fill="x", pady=2)
-        self.status = StatusLabel(sec.body, "Chưa có file SRT — tạo xong rồi bấm «Mở SRT».")
+        self.status = StatusLabel(sec.body, "Chưa có file SRT — tạo xong rồi bấm «Xem / sửa SRT».")
         self.status.pack(fill="x", pady=(4, 0))
 
     def refresh(self) -> None:
@@ -85,7 +84,7 @@ class STTModule(BaseModule):
             except Exception:
                 self.status.ok(f"SRT: {Path(it.srt_path).name}")
         else:
-            self.status.info("Chưa có file SRT — tạo xong rồi bấm «Mở SRT».")
+            self.status.info("Chưa có file SRT — tạo xong rồi bấm «Xem / sửa SRT».")
 
     def _update_cuda_hint(self, ready: bool | None = None) -> None:
         """Dò GPU (nvidia-smi/PowerShell) + nạp thử DLL CUDA trong nền — không làm đơ giao diện khi mở module."""
@@ -223,6 +222,6 @@ class STTModule(BaseModule):
     def _open_srt(self) -> None:
         it = self.state.active
         if it and it.srt_path and Path(it.srt_path).exists():
-            open_path(it.srt_path)
+            self.window._open_srt_editor()          # trình sửa SRT trong app (mở bằng app ngoài: tab SRT › «Mở SRT»)
         else:
             messagebox.showinfo("Edit Studio", "Chưa có file SRT cho video này.")

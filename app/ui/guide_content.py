@@ -46,11 +46,11 @@ TOPICS: list[dict] = [
         ("steps", [
             "Mục Video bật «Duyệt trước khi xuất». Nút Render trên cùng đổi thành «Chuẩn bị (n)».",
             "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa render). "
-            "Xong tự mở màn hình duyệt.",
-            "Màn hình duyệt: chọn từng video (khung xem trước chính hiện đúng video đó). Sửa câu phụ đề / dịch sai → "
-            "«Lưu sửa & tạo lại giọng» (câu không đổi dùng lại, rất nhanh). «Phát trên khung chính» hoặc «Render thử 15 giây» để nghe.",
-            "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video kế), không dùng thì «Bỏ qua».",
-            "Bấm «Xuất N video đã duyệt» (hoặc nút «Xuất (n)» trên cùng): chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
+            "Xong tự mở tab «Duyệt» (thanh bên trái) — khung xem trước vẫn ở ngay cạnh.",
+            "Tab Duyệt: ‹ › hoặc ô chọn để đổi video. Bấm vào ô câu nào thì khung xem trước nhảy tới câu đó; ▶ phát đúng "
+            "câu đó có giọng lồng; đang phát thì câu đang đọc sáng lên. Sửa câu sai → «Lưu & tạo lại giọng» (câu không đổi dùng lại, rất nhanh).",
+            "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video chờ kế), không dùng thì «Bỏ qua».",
+            "Bấm «Xuất (n)» trên cùng: chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
         ]),
         ("h", "Tự động hoá thêm"),
         ("kv", [
@@ -77,7 +77,7 @@ TOPICS: list[dict] = [
             "Mục Video: kéo «Âm gốc» xuống khoảng 20–30 (để tiếng gốc nhỏ), «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
         ]),
         ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh. "
-                 "Nếu cuối video bị mất tiếng: vào Cài đặt, ô «Phong cách dịch» gõ «dịch thật ngắn gọn», dịch lại."),
+                 "Nếu cuối video bị mất tiếng: tab SRT, ô «Phong cách dịch» chọn «Ngắn gọn hơn», bấm «Dịch lại»."),
     ]},
     {"key": "flow_short", "title": "Video ngang → video dọc TikTok", "group": "Bắt đầu", "blocks": [
         ("steps", [
@@ -124,6 +124,16 @@ TOPICS: list[dict] = [
         ]),
         ("tip", "Chữ hiện sớm hay muộn hơn tiếng? Chỉnh ô «Trễ phụ đề» (số dương = chữ hiện muộn hơn)."),
     ]},
+    {"key": "review", "title": "Duyệt: xem, sửa, duyệt từng video trước khi xuất", "group": "Từng mục", "blocks": [
+        ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Khung xem trước bên phải luôn hiện video đang duyệt."),
+        ("steps", [
+            "Đổi video bằng ‹ › hoặc ô chọn (dấu ● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
+            "Bấm vào ô câu → khung xem trước nhảy tới cảnh câu đó. Bấm «▶ số câu» → phát đúng câu đó có giọng lồng rồi tự dừng.",
+            "Sửa câu: Enter / ↑ ↓ để sang câu kế. Dịch chưa hay: ↻ (một câu) hoặc «Dịch lại cả video» theo ô phong cách / yêu cầu.",
+            "«Lưu & tạo lại giọng» → nghe lại → «Duyệt» (Ctrl+Enter) hoặc «Bỏ qua». Xong hết bấm «Xuất (n)» trên cùng.",
+        ]),
+        ("tip", "Chỉnh khung phụ đề, che mờ, giọng… của riêng video đang duyệt: mở tab tương ứng như bình thường, xong quay lại tab Duyệt."),
+    ]},
     {"key": "stt", "title": "STT: nghe video và ghi ra chữ", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
         ("p", "STT nghĩa là máy nghe lời nói trong video rồi gõ ra thành chữ, có kèm giờ giấc. Kết quả là file .srt — "
@@ -151,17 +161,17 @@ TOPICS: list[dict] = [
             "Cần API key một lần: mở Cài đặt (nút trên cùng), cột giữa «API keys Gemini», dán key vào, bấm «Lưu tất cả». "
             "Key lấy miễn phí ở aistudio.google.com → «Get API key».",
             "Bật «Dịch AI», chọn ngôn ngữ đích (Tiếng Việt).",
-            "Ô «Phong cách dịch» (không bắt buộc): gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
+            "Ô «Phong cách dịch» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
             "Bấm «Dịch». Chờ khoảng 30 giây cho video 5 phút. Xong thấy «Dịch xong».",
             "Bấm «Xem / Sửa SRT» để đọc lại. Sửa trực tiếp, bấm «Lưu». Chỉ câu nào sửa thì lần sau mới đọc lại giọng câu đó.",
         ]),
         ("h", "Dịch chưa hay — bảo AI dịch lại"),
         ("steps", [
-            "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: chọn hoặc gõ «Yêu cầu dịch lại», "
-            "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «AI dịch lại toàn bộ». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
-            "Chỉ vài câu dở: «Dịch lại vài câu…» → tick các câu đó → «AI dịch / dịch lại đã chọn».",
-            "Ở màn hình Duyệt: ô «Yêu cầu AI» + nút «AI dịch lại cả video», hoặc nút ↻ cạnh từng câu. Kết quả hiện trong ô "
-            "sửa để bạn xem trước — ưng thì bấm «Lưu sửa & tạo lại giọng».",
+            "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: ghi yêu cầu vào ô «Phong cách dịch», "
+            "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «Dịch lại (bản mới)». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
+            "Chỉ vài câu dở: «Mở bảng dịch từng câu» → tick các câu đó → «AI dịch / dịch lại đã chọn».",
+            "Ở tab Duyệt: nút ↻ cạnh từng câu hoặc «Dịch lại cả video» (cùng ô phong cách / yêu cầu). Kết quả hiện trong ô "
+            "sửa để bạn nghe / xem trước — ưng thì bấm «Lưu & tạo lại giọng».",
             "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
         ("kv", [
@@ -309,7 +319,7 @@ TOPICS: list[dict] = [
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
             ("Nghe video (STT) chậm dù có card NVIDIA", "Mục STT → bấm «Tải CUDA runtime» một lần (hoặc cài bản Setup đủ)."),
-            ("Giọng đọc bị mất ở cuối video", "Câu dịch quá dài. Vào Cài đặt gõ «dịch thật ngắn gọn» vào Phong cách dịch rồi dịch lại; hoặc mục TTS tăng «Tốc độ tối đa»; hoặc mục Video bật «Lặp video cho đủ giọng»."),
+            ("Giọng đọc bị mất ở cuối video", "Câu dịch quá dài. Tab SRT: ô «Phong cách dịch» chọn «Ngắn gọn hơn» rồi «Dịch lại»; hoặc mục TTS tăng «Tốc độ tối đa»; hoặc mục Video bật «Lặp video cho đủ giọng»."),
             ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm Render lại là được."),
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
             ("Gemini báo 429 / hết hạn mức", "Đợi 1 phút rồi thử lại, hoặc dán thêm key khác. Tạo ảnh/video AI cần tài khoản trả tiền."),

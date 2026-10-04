@@ -225,9 +225,9 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         ctk.CTkButton(foot, text="Đóng", width=90, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
         req = ctk.CTkFrame(self, fg_color="transparent")
         req.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
-        ctk.CTkLabel(req, text="Yêu cầu AI khi dịch lại", font=T.font(11), text_color=T.TEXT_DIM).pack(side="left")
+        ctk.CTkLabel(req, text="Phong cách / yêu cầu dịch", font=T.font(11), text_color=T.TEXT_DIM).pack(side="left")
         self.ai_req = ctk.CTkComboBox(req, values=RETRANSLATE_PRESETS, height=30, font=T.font(12))
-        self.ai_req.set("")
+        self.ai_req.set(window.app_state.subtitle.translate_style or "")     # chung với tab SRT / Duyệt
         self.ai_req.pack(side="left", fill="x", expand=True, padx=8)
         self._show_page(0, sync=False)
 
@@ -309,16 +309,20 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         previous = list(self.translated)
         redo = any(previous[i].strip() for i in idxs)     # đã có bản dịch → dịch LẠI (bỏ qua bộ nhớ dịch)
         req = self.ai_req.get().strip()
+        if req != cfg.translate_style:
+            cfg.translate_style = req
+            self.window.app_state.config_changed("subtitle")
+        style = "" if redo else cfg.translate_style
         self.status.configure(text=f"Đang {'dịch lại' if redo else 'dịch'} {len(idxs)} cue…")
 
         def work(cancel):
             if redo:
                 return retranslate(self.cues, previous, idxs, settings=st, target=cfg.translate_target,
-                                   source_hint=cfg.translate_source, style=cfg.translate_style, instruction=req,
+                                   source_hint=cfg.translate_source, style="", instruction=req,
                                    log=self.window.log_bg, cancel=cancel)
             subset = [self.cues[i] for i in idxs]
             res = translate_cues(subset, settings=st, target=cfg.translate_target, source_hint=cfg.translate_source,
-                                 style=cfg.translate_style, log=self.window.log_bg, cancel=cancel)
+                                 style=style, log=self.window.log_bg, cancel=cancel)
             return {i: c.plain for i, c in zip(idxs, res)}
 
         def done(result, error):

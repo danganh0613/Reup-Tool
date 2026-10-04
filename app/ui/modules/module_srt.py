@@ -14,7 +14,7 @@ from app.core.state import TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
 from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
-from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
+from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
 from app.core.platform import open_path
 
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
@@ -44,39 +44,34 @@ class SRTModule(BaseModule):
         hint(sec.body, "Giữ nguyên timestamp của SRT đã import hoặc SRT do STT tạo.").pack(fill="x")
         self.src_lang = OptionRow(sec.body, "Ngôn ngữ nguồn", SOURCE_LANGS, on_change=s(cfg, "translate_source", preview=False))
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
-        self.style = EntryRow(sec.body, "Phong cách", placeholder="vd: giọng kể ấm áp, xưng 'mình'…",
-                              on_change=s(cfg, "translate_style", preview=False))
-        pack_rows(sec.body, [self.src_lang, self.target, self.style])
-        ButtonRow(sec.body, [("Dịch phụ đề", self._translate_now, T.primary_button())]).pack(fill="x", pady=(6, 2))
-        # bản dịch chưa hay → dịch lại theo yêu cầu (bấm «Dịch phụ đề» lần nữa chỉ lấy lại bản cũ từ bộ nhớ dịch)
-        redo = ctk.CTkFrame(sec.body, fg_color="transparent")
-        redo.pack(fill="x", pady=(6, 2))
-        redo.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(redo, text="Yêu cầu dịch lại", font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
+        pack_rows(sec.body, [self.src_lang, self.target])
+        # một ô duy nhất cho phong cách dịch + yêu cầu khi dịch lại (dùng chung với tab Duyệt / bảng dịch từng câu)
+        row = ctk.CTkFrame(sec.body, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+        row.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row, text="Phong cách dịch", font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
             row=0, column=0, sticky="w")
-        self.redo_req = ctk.CTkComboBox(redo, values=RETRANSLATE_PRESETS, height=34, font=T.font(12))
-        self.redo_req.set("")
-        self.redo_req.grid(row=0, column=1, sticky="ew")
-        ButtonRow(sec.body, [("AI dịch lại toàn bộ", self._retranslate_all, None),
-                             ("Dịch lại vài câu…", self._manual_translate, None)]).pack(fill="x", pady=(4, 2))
-        hint(sec.body, "Dịch chưa hay? Chọn/gõ yêu cầu (vd «xưng anh–em, văn nói») rồi «AI dịch lại toàn bộ» — AI xem "
-                       "bản cũ để biết bạn chưa ưng chỗ nào. Chỉ vài câu: «Dịch lại vài câu…», tick câu đó. Giọng lồng "
-                       "tự tạo lại theo bản mới.").pack(fill="x")
-        hint(sec.body, "Tự động dịch thông minh: xoay vòng API key & nhà cung cấp (Gemini → Groq → DeepSeek → OpenAI) "
-                       "khi hết quota hoặc gặp lỗi, bảo toàn tiến độ liên tục.").pack(fill="x")
-        ButtonRow(sec.body, [("Dự án dịch dang dở", self._pending_projects, None),
-                             ("Mở tiến trình dịch", self.window.open_log, None)]).pack(fill="x", pady=(4, 2))
-        hint(sec.body, "Mỗi batch đều được lưu ngay. Mở «Dự án dịch dang dở» sau khi khởi động lại app.").pack(fill="x")
+        self.style = ctk.CTkComboBox(row, values=RETRANSLATE_PRESETS, height=34, font=T.font(12),
+                                     command=lambda _v: self._style_changed())
+        self.style.grid(row=0, column=1, sticky="ew")
+        self.style.bind("<FocusOut>", lambda _e: self._style_changed())
+        self.style.bind("<Return>", lambda _e: self._style_changed())
+        ButtonRow(sec.body, [("Dịch phụ đề", self._translate_now, T.primary_button()),
+                             ("Dịch lại (bản mới)", self._retranslate_all, None)]).pack(fill="x", pady=(6, 2))
+        hint(sec.body, "Dịch chưa hay? Chọn / gõ yêu cầu vào ô trên (vd «xưng anh–em, văn nói») rồi «Dịch lại» — AI xem "
+                       "bản cũ để biết bạn chưa ưng chỗ nào («Dịch phụ đề» lần nữa chỉ lấy lại bản cũ đã nhớ). Giọng lồng "
+                       "tự tạo lại theo bản mới. Xoay vòng key & nhà cung cấp khi hết quota; mỗi lô dịch đều được lưu.").pack(fill="x")
+        ButtonRow(sec.body, [("Dự án dịch dang dở", self._pending_projects, None)]).pack(fill="x", pady=(4, 2))
         self.tr_enable = SwitchRow(sec.body, "Tự dịch khi render (nếu chọn ghi Sub đã dịch)", on_change=s(cfg, "translate_enable", preview=False))
         self.tr_enable.pack(fill="x", pady=(4, 0))
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
-        sec = Section(self, "Dịch thủ công")
+        sec = Section(self, "Sửa / dịch từng câu")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("Mở bảng dịch tay", self._manual_translate, T.primary_button())]).pack(fill="x", pady=2)
-        hint(sec.body, "Tự dịch từng cue, dán bản dịch từ nơi khác hoặc bấm «Dịch AI đã chọn» ngay trong bảng. "
-                       "Timestamp giữ nguyên.").pack(fill="x")
+        ButtonRow(sec.body, [("Mở bảng dịch từng câu", self._manual_translate, T.primary_button())]).pack(fill="x", pady=2)
+        hint(sec.body, "Gõ bản dịch từng câu, dán bản dịch từ nơi khác, hoặc tick vài câu dở rồi «AI dịch / dịch lại đã "
+                       "chọn». Timestamp giữ nguyên. Đang dùng chế độ Duyệt thì sửa ngay ở tab Duyệt (vừa xem video).").pack(fill="x")
 
         sec = Section(self, "Tùy chọn nâng cao")
         sec.pack(fill="x", pady=4)
@@ -91,7 +86,7 @@ class SRTModule(BaseModule):
         try:
             self.src_lang.set(cfg.translate_source if cfg.translate_source in SOURCE_LANGS else SOURCE_LANGS[0])
             self.target.set(cfg.translate_target)
-            self.style.set(cfg.translate_style)
+            self.style.set(cfg.translate_style or "")
             self.tr_enable.set(cfg.translate_enable)
             self.reflow.set(cfg.ai_reflow)
         finally:
@@ -221,7 +216,8 @@ class SRTModule(BaseModule):
         if not it.srt_path or not Path(it.srt_path).exists():
             messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
             return
-        req = self.redo_req.get().strip()
+        self._style_changed()
+        req = self.state.subtitle.translate_style.strip()
         pipe = self.window.pipeline_for(it)
         self.tr_status.warn("Đang dịch lại… (xem log)" + (f" — «{req}»" if req else ""))
 
@@ -238,6 +234,13 @@ class SRTModule(BaseModule):
             self.window.add_notification("Dịch lại xong", f"{it.name}: {len(result)} câu", "ok")
 
         self.window.run_task("Dịch lại phụ đề", work, done)
+
+    def _style_changed(self) -> None:
+        if self._loading:
+            return
+        v = self.style.get().strip()
+        if v != self.state.subtitle.translate_style:
+            self.set_value(self.state.subtitle, "translate_style", v, preview=False)
 
     def _pending_projects(self) -> None:
         from app.ui.widgets.srt_editor import PendingTranslationsDialog

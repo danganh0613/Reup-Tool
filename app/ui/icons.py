@@ -67,7 +67,7 @@ EMOJI_ICONS: dict[str, str] = {
 }
 
 #: icon cho từng module (rail + tiêu đề bảng điều khiển)
-MODULE_ICONS = {"video": "video", "subtitle": "subtitles", "stt": "mic", "srt": "doc", "tts": "speaker", "blur": "blur",
+MODULE_ICONS = {"review": "check", "video": "video", "subtitle": "subtitles", "stt": "mic", "srt": "doc", "tts": "speaker", "blur": "blur",
                 "bgm": "music", "brand": "logo", "trim": "cut", "color": "color", "story": "story"}
 
 

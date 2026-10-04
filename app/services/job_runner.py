@@ -160,8 +160,9 @@ class Pipeline:
         if previous is None:
             previous = [c.plain for c in current]
         idxs = list(range(len(orig))) if idxs is None else idxs
+        style = "" if instruction.strip() == cfg.translate_style.strip() else cfg.translate_style   # khỏi lặp 2 lần
         new = retranslate(orig, previous, idxs, settings=self.state.settings, target=cfg.translate_target,
-                          source_hint=cfg.translate_source, style=cfg.translate_style, instruction=instruction,
+                          source_hint=cfg.translate_source, style=style, instruction=instruction,
                           on_progress=progress, log=log, cancel=cancel)
         if save and new:
             base = current or orig

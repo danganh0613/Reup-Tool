@@ -220,6 +220,7 @@ class MainWindow(_Root):
         self.rail_label.pack(pady=(10, 2))
         for cls in MODULES:
             self._add_rail_button(cls)
+        self.sync_review_rail()
 
         self.panel = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=470)
         self.panel.grid(row=1, column=1, sticky="ns", padx=4)
@@ -291,6 +292,7 @@ class MainWindow(_Root):
                 self.rail_label.pack(pady=(10, 2))
             for cls in MODULES:
                 self._add_rail_button(cls)
+            self.sync_review_rail()
             if cur:
                 self.show_module(cur)
         panel_w = int(max(360, min(470, w * 0.30)))
@@ -330,7 +332,14 @@ class MainWindow(_Root):
 
     # ── Module ────────────────────────────────────────────────────────────
     def show_module(self, key: str) -> None:
-        cls = next((c for c in MODULES if c.key == key), MODULES[0])
+        if key == "review" and not self.review_mode:
+            key = "video"                       # tab Duyệt chỉ có khi bật «Duyệt trước khi xuất»
+        if key == "review":
+            from app.ui.widgets.review_window import ReviewPanel
+
+            cls = ReviewPanel
+        else:
+            cls = next((c for c in MODULES if c.key == key), MODULES[0])
         key = cls.key
         if key not in self.modules:
             self.modules[key] = cls(self.panel, self)
@@ -383,6 +392,14 @@ class MainWindow(_Root):
         if m is not None:
             m.queue.update_row(item)
         self.update_render_button()
+        r = self.modules.get("review")
+        if r is not None and getattr(self, "_review_counts_after", None) is None:
+            # trạng thái đổi liên tục khi render → gom lại, cập nhật đếm / ô chọn video của tab Duyệt tối đa 2 lần/giây
+            def _upd() -> None:
+                self._review_counts_after = None
+                if r.winfo_exists():
+                    r._update_counts()
+            self._review_counts_after = self.after(500, _upd)
 
     # ── Trạng thái / sự kiện ──────────────────────────────────────────────
     def _active_changed(self) -> None:
@@ -774,8 +791,8 @@ class MainWindow(_Root):
         return bool(self.app_state.ui.get("review_mode"))
 
     def start_render(self, items: list[VideoItem], audio_only: bool = False, *, force: bool = False) -> None:
-        """Nút Render. Bật «Duyệt trước khi xuất»: video chưa chuẩn bị → Chuẩn bị; đã duyệt → xuất; còn lại → mở màn hình duyệt.
-        ``force``: xuất đúng các video được đưa vào (từ màn hình duyệt)."""
+        """Nút Render. Bật «Duyệt trước khi xuất»: video chưa chuẩn bị → Chuẩn bị; đã duyệt → xuất; còn lại → mở tab Duyệt.
+        ``force``: xuất đúng các video được đưa vào (đã duyệt)."""
         if not items:
             messagebox.showinfo(APP_NAME, "Hàng đợi trống — bấm Nạp video trước.")
             return
@@ -830,7 +847,7 @@ class MainWindow(_Root):
                 msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
                 self.progress.set_stage(-1 if fail else 2)
                 self.progress.set_progress(1.0 if not fail else 0.0)
-                self.progress.set_status(msg + " — mở màn hình duyệt.")
+                self.progress.set_status(msg + " — xem & duyệt ở tab «Duyệt» bên trái.")
                 self.log(msg)
                 self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
                 notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
@@ -853,7 +870,7 @@ class MainWindow(_Root):
             self.progress.set_stage(0)
             if prep:
                 self.busy_label.configure(text="⏳ Đang chuẩn bị…")
-                self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở màn hình duyệt.")
+                self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
             else:
                 self.busy_label.configure(text="⏳ Đang render…")
                 self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
@@ -916,15 +933,25 @@ class MainWindow(_Root):
 
     # ── Duyệt ─────────────────────────────────────────────────────────────
     def open_review(self) -> None:
-        from app.ui.widgets.review_window import ReviewWindow
+        """Tab «Duyệt» trong bảng tính năng — khung xem trước vẫn hiện cạnh bên để vừa xem vừa sửa."""
+        self.sync_review_rail()
+        self.show_module("review")
 
-        w = getattr(self, "_review_win", None)
-        if w is not None and w.winfo_exists():
-            w.reload()
-            w.deiconify()
-            w.lift()
-            return
-        self._review_win = ReviewWindow(self)
+    def sync_review_rail(self) -> None:
+        """Nút «Duyệt» trên thanh tính năng chỉ hiện khi bật chế độ Duyệt trước khi xuất."""
+        b = self._rail_buttons.get("review")
+        if self.review_mode and b is None:
+            from app.ui.widgets.review_window import ReviewPanel
+
+            self._add_rail_button(ReviewPanel)
+            first = self._rail_buttons.get("video")
+            if first is not None:
+                self._rail_buttons["review"].pack_configure(after=first)
+        elif not self.review_mode and b is not None:
+            if self._current_module == "review":
+                self.show_module("video")
+            b.destroy()
+            del self._rail_buttons["review"]
 
     def update_render_button(self) -> None:
         """Nhãn nút Render theo bước duyệt: Chuẩn bị (n) → Duyệt → Xuất (n)."""
