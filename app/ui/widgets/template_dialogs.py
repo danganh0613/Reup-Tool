@@ -118,7 +118,7 @@ class SaveTemplateDialog(ctk.CTkToplevel):
         self.app_state = window.app_state
         self.on_saved = on_saved
         self.title("Lưu mẫu")
-        self.geometry("520x600+120+80")
+        self.geometry("540x680+120+80")
         self.after(50, self.lift)
         self.transient(window)
         act = self.app_state.active
@@ -147,6 +147,17 @@ class SaveTemplateDialog(ctk.CTkToplevel):
             self.parts[k] = var
         hint(body, "Bỏ tick phần nào thì khi áp mẫu phần đó giữ nguyên (vd. bỏ «Che mờ» nếu mỗi video chữ cứng nằm một chỗ). "
                    "Đoạn cắt giữa video không lưu vào mẫu — chỉ lưu cắt đầu/cuối.").pack(fill="x", padx=14, pady=(4, 0))
+        self._order_voices()
+        tts = self.app_state.sections_dict().get("tts", {})
+        if "tts" in self.parts and tts.get("enable_tts"):
+            ctk.CTkLabel(body, text="Giọng lồng tiếng lưu vào mẫu", font=T.font(12, "medium"), text_color=T.TEXT_DIM,
+                         anchor="w").pack(fill="x", padx=14, pady=(10, 2))
+            self.voices = ctk.CTkLabel(body, text=TP.voice_summary(tts), font=T.font(12), text_color=T.TEXT,
+                                       anchor="w", justify="left", wraplength=470)
+            self.voices.pack(fill="x", padx=14)
+            if tts.get("multi_voice"):
+                hint(body, "Video sau nhận ra bao nhiêu người thì gán lần lượt theo thứ tự này; dư người thì tự chọn "
+                           "thêm giọng Nam/Nữ.").pack(fill="x", padx=14, pady=(2, 0))
         self.thumb = ctk.BooleanVar(value=self.window.preview._frame is not None)
         ctk.CTkCheckBox(body, text="Dùng khung xem trước hiện tại làm ảnh đại diện", variable=self.thumb,
                         font=T.font(12)).pack(anchor="w", padx=14, pady=(10, 0))
@@ -157,6 +168,25 @@ class SaveTemplateDialog(ctk.CTkToplevel):
         button(foot, "Lưu mẫu", icon_name="save", variant="primary", command=self._save).pack(side="right")
         ctk.CTkButton(foot, text="Huỷ", width=80, height=36, command=self.destroy, **T.secondary_button()).pack(
             side="right", padx=8)
+
+    def _order_voices(self) -> None:
+        """Danh sách giọng của mẫu = đúng thứ tự người nói của video đang xem (người 1 → giọng 1, …); giọng dư
+        (của mẫu cũ, cho video nhiều người hơn) giữ ở cuối danh sách."""
+        from app.services.diarize import resolve_voices
+
+        act = self.app_state.active
+        cfg = self.app_state.tts
+        try:
+            smap = self.window.pipeline_for(act).speaker_map(act) if act is not None else None
+        except Exception:
+            smap = None
+        if smap is None or not cfg.multi_voice:
+            return
+        ordered = resolve_voices(cfg.speaker_voices, smap)
+        taken = {e["name"] for e in ordered}
+        extra = [sv for sv in cfg.speaker_voices
+                 if isinstance(sv, dict) and sv.get("voice_id") and sv.get("name") not in taken]
+        cfg.speaker_voices = ordered + extra
 
     def _save(self) -> None:
         name = self.name.get().strip()

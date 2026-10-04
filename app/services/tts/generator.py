@@ -143,6 +143,17 @@ def voice_id_for(cfg: TTSConfig) -> str:
     return cfg.edge_voice
 
 
+def main_locale(cfg: TTSConfig) -> str:
+    """Ngôn ngữ của giọng chính (để gợi ý giọng người nói cùng ngôn ngữ); "" = engine không chia theo ngôn ngữ."""
+    if cfg.tts_provider == "Edge TTS":
+        return cfg.edge_language
+    if cfg.tts_provider == "Google Cloud TTS":
+        return cfg.google_language
+    if cfg.tts_provider.startswith("VieNeu") or cfg.tts_provider.startswith("FPT"):
+        return "vi-VN"
+    return ""
+
+
 def config_with_voice(cfg: TTSConfig, provider: str, voice_id: str, locale: str = "", speed: float = 0.0,
                       pitch: int | None = None) -> TTSConfig:
     """Bản sao ``cfg`` đổi sang giọng khác (giữ các tham số khớp thời gian, ElevenLabs…)."""

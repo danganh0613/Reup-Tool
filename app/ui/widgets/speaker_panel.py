@@ -13,22 +13,13 @@ from app.config import theme as T
 from app.config.paths import CACHE_DIR
 from app.core.state import VideoItem
 from app.services.diarize import SpeakerInfo, SpeakerMap, speaker_name
+from app.services.tts.generator import main_locale
 from app.services.srt_utils import format_ts, load_srt
 from app.ui.widgets.common import SliderRow, StatusLabel
 from app.ui.widgets.ui import Select, button
 from app.ui.widgets.voice_picker import VoicePicker
 
 CLIP_DIR = CACHE_DIR / "speaker_clips"
-
-
-def main_locale(cfg) -> str:
-    if cfg.tts_provider == "Edge TTS":
-        return cfg.edge_language
-    if cfg.tts_provider == "Google Cloud TTS":
-        return cfg.google_language
-    if cfg.tts_provider.startswith("VieNeu") or cfg.tts_provider.startswith("FPT"):
-        return "vi-VN"
-    return ""
 
 
 def play_segment(window, item: VideoItem, start: float, end: float, on_error: Callable[[str], None] | None = None) -> None:
@@ -75,13 +66,19 @@ class SpeakerPanel(ctk.CTkFrame):
         return self.window.pipeline
 
     # ── Mục giọng của một người nói (trong cfg.speaker_voices) ────────────
-    def _entry(self, name: str) -> dict:
+    def _entry(self, smap: SpeakerMap, name: str) -> dict:
+        """Mục giọng của người nói ``name`` trong video này. Chưa có mục đúng tên → lấy giọng theo thứ tự của mẫu
+        (người thứ k → giọng thứ k) làm mục riêng của người này — giống hệt lúc render."""
+        from app.services.diarize import resolve_voices
+
         cfg = self.state.tts
         for sv in cfg.speaker_voices:
             if isinstance(sv, dict) and sv.get("name") == name:
                 return sv
-        sv = {"name": name, "provider": cfg.tts_provider, "locale": main_locale(cfg), "voice_id": "", "voice_name": "",
-              "speed": 0.0}
+        base = next((r for r in resolve_voices(cfg.speaker_voices, smap) if r["name"] == name), None)
+        sv = dict(base) if base else {"provider": cfg.tts_provider, "locale": main_locale(cfg), "voice_id": "",
+                                      "voice_name": "", "speed": 0.0}
+        sv["name"] = name
         cfg.speaker_voices.append(sv)
         return sv
 
@@ -107,8 +104,9 @@ class SpeakerPanel(ctk.CTkFrame):
                             "để tự chia. Khi render, máy sẽ tự nhận diện nếu chưa có.")
             return
         names = smap.names()
-        self.empty.info(f"{len(names)} người nói · mỗi người chọn một giọng (người chưa chọn dùng giọng chính).")
-        missing = [n for n in names if not self._entry(n).get("voice_id")]
+        self.empty.info(f"{len(names)} người nói · mỗi người một giọng. «Lưu mẫu» nhớ giọng theo đúng thứ tự này — "
+                        "video sau: người 1 → giọng của Người 1, người 2 → giọng của Người 2…")
+        missing = [n for n in names if not self._entry(smap, n).get("voice_id")]
         if missing:
             self._suggest_then_build(smap)
         else:
@@ -123,10 +121,15 @@ class SpeakerPanel(ctk.CTkFrame):
 
         def done(result, error):
             if not error and result:
-                cfg.speaker_voices = suggest_voices(
-                    [smap.speakers[n] for n in smap.names()], result, provider=cfg.tts_provider,
-                    locale=main_locale(cfg), main_voice=voice_id_for(cfg),
-                    existing=[sv for sv in cfg.speaker_voices if sv.get("voice_id")])
+                from app.services.diarize import resolve_voices
+
+                have = resolve_voices(cfg.speaker_voices, smap)        # giọng đã chọn / của mẫu, đúng người nói
+                sug = suggest_voices([smap.speakers[n] for n in smap.names()], result, provider=cfg.tts_provider,
+                                     locale=main_locale(cfg), main_voice=voice_id_for(cfg), existing=have)
+                done_names = {h["name"] for h in have}
+                # giữ cả bảng giọng của mẫu (cho video khác), chỉ thêm gợi ý cho người chưa có giọng
+                cfg.speaker_voices = [sv for sv in cfg.speaker_voices if sv.get("voice_id")] + \
+                    [e for e in sug if e["name"] not in done_names]
                 self.state.config_changed("tts", auto=True)      # gợi ý tự động, không phải người dùng sửa
             self._build(smap)
 
@@ -141,7 +144,7 @@ class SpeakerPanel(ctk.CTkFrame):
 
     def _card(self, item: VideoItem, smap: SpeakerMap, info: SpeakerInfo) -> None:
         cfg = self.state.tts
-        e = self._entry(info.name)
+        e = self._entry(smap, info.name)
         card = ctk.CTkFrame(self.cards, fg_color=T.BG_INPUT, corner_radius=8)
         card.pack(fill="x", pady=4)
         head = ctk.CTkFrame(card, fg_color="transparent")

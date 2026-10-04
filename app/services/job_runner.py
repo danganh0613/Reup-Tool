@@ -261,7 +261,7 @@ class Pipeline:
                 log(f"Dùng lại track giọng đã có: {out.name}")
             item.voice_path = str(out)
             return out
-        res = generate_voice_track(cues, self.state.tts, self.state.settings, self.ffmpeg, out,
+        res = generate_voice_track(cues, self.voice_config(item), self.state.settings, self.ffmpeg, out,
                                    on_progress=progress, log=log, cancel=cancel, fit_duration=fit_duration)
         synced = out.with_suffix(".srt")
         if res.synced_cues:
@@ -280,6 +280,27 @@ class Pipeline:
             pass
         item.voice_path = str(out)
         return out
+
+    def voice_config(self, item: VideoItem):
+        """Cấu hình giọng cho video này: nhiều giọng → giọng đã chọn / của mẫu gán đúng người nói (theo giới tính)."""
+        t = self.state.tts
+        if not t.multi_voice:
+            return t
+        from app.services.diarize import resolve_voices, suggest_voices
+        from app.services.tts.generator import main_locale, make_engine, voice_id_for
+
+        smap = self.speaker_map(item)
+        voices = resolve_voices(t.speaker_voices, smap)
+        if smap is not None and len(voices) < len(smap.speakers):
+            # người nói chưa có giọng (chưa mở bảng người nói / mẫu thiếu giới tính đó) → tự gợi ý giọng riêng theo
+            # Nam / Nữ, khác nhau — không để ai cũng dùng chung giọng chính
+            try:
+                pool = make_engine(t, self.state.settings).list_voices()
+                voices = suggest_voices([smap.speakers[n] for n in smap.names()], pool, provider=t.tts_provider,
+                                        locale=main_locale(t), main_voice=voice_id_for(t), existing=voices)
+            except Exception:
+                logger.debug("Không gợi ý được giọng người nói", exc_info=True)
+        return dataclasses.replace(t, speaker_voices=voices)
 
     def _tts_srt_path(self, item: VideoItem) -> str:
         want_translated = self.state.tts.tts_source == TTS_SOURCES[0]

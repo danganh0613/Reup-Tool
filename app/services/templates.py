@@ -57,7 +57,7 @@ BUILTIN: list[Template] = [
     Template(
         name="🔥 Review phim dọc 9:16 (TikTok · Shorts · Reels)",
         description="Video ngang → dọc 9:16 nền mờ, phụ đề Việt chữ vàng viền đen to rõ, lồng tiếng Việt đọc nhanh "
-                    "(khớp mềm), tự dò & che phụ đề gốc in sẵn, khử giọng nói gốc bằng AI (giữ nhạc nền & tiếng động), tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
+                    "(khớp mềm), mỗi nhân vật một giọng (tự nhận diện người nói), tự dò & che phụ đề gốc in sẵn, khử giọng nói gốc bằng AI (giữ nhạc nền & tiếng động), tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
         badge="9:16", builtin=True, patch=True,
         parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
@@ -72,7 +72,7 @@ BUILTIN: list[Template] = [
                          "sub_bg_enable": False, "use_box": True, "box_x": 0.06, "box_y": 0.70, "box_w": 0.88,
                          "box_h": 0.06, "follow_hardsub": True, "text_effect": TEXT_EFFECTS[1], "bg_style": "Không nền", "karaoke": False},
             "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "soft_timing": True, "natural_sync": False,
-                    "tts_speed": 1.1, "max_tempo": 1.4, "multi_voice": False},
+                    "tts_speed": 1.1, "max_tempo": 1.4, "multi_voice": True, "speaker_count": "Tự động"},
             "blur": {"auto_detect": True},             # tự che phụ đề tiếng Trung in sẵn
             "trim": {"enable": False, "head": "0", "tail": "0", "segments": []},
             "color": {**_COLOR_OFF, "enable": True, "contrast": 1.05, "saturation": 1.1, "sharpen": 0.3,
@@ -222,6 +222,41 @@ def save_template(state: AppState, name: str, parts: list[str], description: str
         except Exception:
             logger.warning("Không lưu được ảnh mẫu", exc_info=True)
     return _read(path) or Template(name=name, sections=sections, parts=parts, description=description)
+
+
+def voice_summary(tts: dict) -> str:
+    """Giọng lưu trong phần lồng tiếng của mẫu, viết cho người đọc: giọng chính + danh sách giọng theo thứ tự người nói."""
+    import re
+
+    from app.core.state import TTSConfig
+    from app.services.tts.generator import voice_id_for
+
+    def short(name: str) -> str:
+        n = re.sub(r"^[a-z]{2,3}-[A-Z]{2}-", "", name or "").replace("MultilingualNeural", "").replace("Neural", "")
+        n = re.sub(r"\s*\(.*?\)\s*$", "", n.split(" — ")[0].split(" - ")[0])
+        return n.strip() or "—"
+
+    if not tts.get("enable_tts", True):
+        return "Lồng tiếng: tắt"
+    try:
+        cfg = TTSConfig(**{k: v for k, v in tts.items() if k in TTSConfig.__dataclass_fields__})
+        main = short(cfg.eleven_voice_name if cfg.tts_provider == "ElevenLabs" and cfg.eleven_voice_name
+                     else voice_id_for(cfg))
+        prov = cfg.tts_provider.split(" (")[0]
+    except Exception:
+        main, prov = "—", ""
+    out = f"Giọng chính: {main} ({prov})"
+    if not tts.get("multi_voice"):
+        return out + " — một người đọc hết."
+    seq = []
+    for sv in tts.get("speaker_voices") or []:
+        if isinstance(sv, dict) and sv.get("voice_id"):
+            p = str(sv.get("provider") or "").split(" (")[0]
+            seq.append(f"Người {len(seq) + 1} → {short(str(sv.get('voice_name') or sv['voice_id']))}"
+                       + (f" ({p})" if p != prov else ""))
+    if not seq:
+        return out + "\nMỗi người nói tự chọn một giọng Nam/Nữ."
+    return out + "\n" + " · ".join(seq)
 
 
 def delete_template(name: str) -> None:

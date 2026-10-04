@@ -36,6 +36,9 @@ TOPICS: list[dict] = [
         ("steps", [
             "Chọn mẫu có sẵn ở ô «Mẫu» trên cùng (Review phim dọc 9:16, Thuyết minh ngang 16:9, Reup nhanh không lời…), "
             "hoặc tự chỉnh một video cho ưng ý rồi bấm «Lưu mẫu» (chọn lưu những phần nào, kèm ảnh đại diện).",
+            "Giọng lồng tiếng: mẫu nhớ giọng chính + danh sách giọng theo thứ tự người nói (Người 1 → giọng 1, Người 2 → "
+            "giọng 2…). Video sau nhận ra bao nhiêu người thì gán lần lượt; dư người thì tự chọn thêm giọng Nam/Nữ. "
+            "Muốn một người đọc hết thì tắt «Mỗi người nói một giọng» ở tab TTS.",
             "Nạp nhiều video / cả thư mục vào hàng đợi — mọi video dùng chung mẫu đang chọn.",
             "Video nào cần khác (vd. chữ cứng nằm chỗ khác): chọn video đó, ở mục Video bật «Chỉnh riêng cho video này» "
             "hoặc «Áp mẫu riêng». Video đó có nhãn «✎ Riêng» trong hàng đợi.",

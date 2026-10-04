@@ -454,6 +454,31 @@ def gender_of(f0: float) -> str:
     return ""
 
 
+def resolve_voices(entries: list, smap: SpeakerMap | None) -> list[dict]:
+    """Giọng đã chọn (của video hoặc của mẫu) → người nói của video NÀY, theo THỨ TỰ.
+
+    Mẫu lưu danh sách giọng theo thứ tự (giọng 1, giọng 2, …). Video nhận diện được N người: người nào đã có giọng
+    đúng tên thì giữ, còn lại lần lượt nhận giọng tiếp theo trong danh sách — người 1 → giọng 1, người 2 → giọng 2…
+    Thừa người (mẫu ít giọng hơn) → để trống, bước tạo giọng tự gợi ý giọng riêng theo Nam / Nữ."""
+    entries = [e for e in (entries or []) if isinstance(e, dict) and e.get("name") and e.get("voice_id")]
+    if smap is None or not smap.speakers:
+        return entries
+    names = smap.names()
+    got: dict[str, dict] = {}
+    for nm in names:
+        e = next((e for e in entries if e["name"] == nm), None)
+        if e is not None:
+            got[nm] = e
+    rest = iter(e for e in entries if all(e is not g for g in got.values()))
+    for nm in names:
+        if nm not in got:
+            e = next(rest, None)
+            if e is None:
+                break
+            got[nm] = e
+    return [{**got[nm], "name": nm} for nm in names if nm in got]
+
+
 def suggest_voices(speakers: list[SpeakerInfo], voices: list, *, provider: str, locale: str, main_voice: str,
                    existing: list[dict] | None = None) -> list[dict]:
     """Gợi ý giọng cho người nói chưa có giọng: đúng ngôn ngữ của giọng chính, Nam → giọng nam, Nữ → giọng nữ,

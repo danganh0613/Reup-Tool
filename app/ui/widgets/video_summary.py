@@ -101,14 +101,17 @@ def summarize(window, item: VideoItem) -> list[Row]:
                                 "Nhiều giọng — chưa nhận diện người nói (bấm «Chuẩn bị»)", WARN))
             else:
                 names = smap.names()
-                pick = {sv.get("name"): sv for sv in t.speaker_voices if isinstance(sv, dict)}
+                from app.services.diarize import resolve_voices
+
+                pick = {sv["name"]: sv for sv in resolve_voices(t.speaker_voices, smap)}
                 parts = []
                 for nm in names[:6]:
                     info = smap.speakers.get(nm)
                     sv = pick.get(nm) or {}
                     voice = sv.get("voice_name") or _short_voice(sv.get("voice_id", ""))
                     g = f" ({info.gender})" if info and info.gender else ""
-                    parts.append(f"{nm}{g} → {voice if voice and voice != '—' else 'giọng chính'}")
+                    auto = "tự chọn giọng " + ({"Nam": "nam", "Nữ": "nữ"}.get(info.gender, "") if info else "")
+                    parts.append(f"{nm}{g} → {voice if voice and voice != '—' else auto.strip()}")
                 rows.append(Row("tts", "speaker", "Người nói & lồng tiếng",
                                 f"{len(names)} người nói · mỗi người một giọng"
                                 + ("" if has_voice else " · chưa tạo giọng"), OK if has_voice else WARN,
