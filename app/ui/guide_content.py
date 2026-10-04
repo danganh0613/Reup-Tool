@@ -320,7 +320,7 @@ TOPICS: list[dict] = [
     {"key": "shortcuts", "title": "Phím tắt", "group": "Khác", "blocks": [("shortcuts", None)]},
     {"key": "faq", "title": "Gặp lỗi thì làm gì?", "group": "Khác", "blocks": [
         ("kv", [
-            ("Chờ mãi không xong", "Nhìn thanh trạng thái dưới cùng (bước đang làm, thời gian còn lại) và bấm biểu tượng log ở góc phải. Bấm «Dừng» trên thanh đó nếu muốn huỷ."),
+            ("Chờ mãi không xong", "Nhìn thanh trạng thái dưới cùng (bước đang làm, thời gian còn lại) và bấm biểu tượng log ở góc phải. Bấm «Dừng» trên cùng nếu muốn huỷ."),
             ("Đang chạy việc này mà bấm việc khác", "Máy hỏi có xếp vào hàng chờ không — đồng ý thì việc đó tự chạy ngay khi "
              "việc trước xong (dòng trên cùng ghi «chờ: …»). Trong lúc chờ cứ chuyển tab, chọn video khác, chỉnh tiếp thoải "
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),

@@ -1,11 +1,11 @@
 """Thanh trạng thái dưới cùng — MỘT dòng, đọc là hiểu ngay:
 
-    ⟳  Đang chuẩn bị 1/3 · phim.mp4   Khử giọng gốc · bước 5/6        ▬▬▬▬░░ 42%  còn ~1:20   [Dừng] [log]
+    ⟳  Đang chuẩn bị 1/3 · phim.mp4   Khử giọng gốc · bước 5/6        ▬▬▬▬░░ 42%  còn ~1:20          [log]
     ✓  Chuẩn bị xong 3 video           Duyệt từng video ở tab «Duyệt»                          [Mở tab Duyệt] [log]
     ✖  1 video lỗi                     phim.mp4: Gemini quá tải (503)                          [Thử lại] [log]
 
 Trái → phải: trạng thái (biểu tượng + câu chính) → việc đang làm (chữ mờ) → tiến độ (một thanh, một con số,
-thời gian còn lại) → đúng MỘT việc nên bấm lúc đó (Dừng / Thử lại / Mở…) → log. Các bước hiển thị là bước thật của
+thời gian còn lại) → việc nên bấm khi xong (Thử lại / Mở thư mục) → log. Nút Dừng ở header. Các bước hiển thị là bước thật của
 video đó (bỏ bước không cần: đã có SRT, không lồng tiếng…), lấy từ thông điệp của pipeline.
 """
 
@@ -134,8 +134,6 @@ class ProgressPanel(ctk.CTkFrame):
         self.percent = ctk.CTkLabel(self, text="", width=40, font=T.font(12, "bold"), text_color=T.TEXT, anchor="e")
         self.eta = ctk.CTkLabel(self, text="", font=T.font(12), text_color=T.TEXT_MUTED, anchor="w")
         self.action_btn: ctk.CTkButton | None = None
-        self.stop_btn = button(self, "Dừng", icon_name="stop", size="sm", variant="destructive",
-                               command=window.stop_all, tip="Dừng việc đang chạy (Esc)")
         self.log_btn = button(self, "", icon_name="doc", size="sm", variant="ghost", command=window.open_log,
                               tip="Xem log chi tiết")
         self.log_btn.grid(row=0, column=8, padx=(4, 10))
@@ -179,13 +177,6 @@ class ProgressPanel(ctk.CTkFrame):
             self.action_btn = button(self, label, icon_name=icon_name, size="sm",
                                      variant="primary" if primary else "secondary", command=command)
             self.action_btn.grid(row=0, column=6, padx=(8, 0))
-
-    def set_running_ui(self, running: bool) -> None:
-        """Nút Dừng chỉ hiện khi có việc đang chạy."""
-        if running:
-            self.stop_btn.grid(row=0, column=7, padx=(8, 0))
-        else:
-            self.stop_btn.grid_remove()
 
     def _start_spin(self) -> None:
         if self._spin_id is None:

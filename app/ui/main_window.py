@@ -173,6 +173,11 @@ class MainWindow(_Root):
         self.version_label = ctk.CTkLabel(left, text=f"v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED)
         self.version_label.pack(side="left", padx=(8, 0))
         self.header_btns: list[list] = []   # [nút, nhãn đầy đủ, bề rộng đầy đủ] — cửa sổ hẹp thì chỉ còn icon
+        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: API key, GPU, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
+        self._hbtn(left, "Hướng dẫn", "book", lambda: self.toggle_help(), tip="Bật / tắt bảng hướng dẫn bên cạnh (Ctrl+H)").pack(side="left", padx=4)
+        self._hbtn(left, "Phím tắt", "keyboard", self.open_shortcuts, tip="Danh sách phím tắt").pack(side="left", padx=4)
+        self.notif_btn = self._hbtn(left, "Thông báo", "bell", self.open_notifications, tip="Trung tâm thông báo (kết quả render, lỗi)")
+        self.notif_btn.pack(side="left", padx=4)
 
         from app.ui.widgets.template_dialogs import TemplateBar
 
@@ -180,16 +185,15 @@ class MainWindow(_Root):
         self.template_bar.grid(row=0, column=1, pady=8)
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
-        # một nút chính duy nhất (Render / Chuẩn bị / Xuất); việc phụ gom vào menu ☰; «Dừng» nằm ở thanh trạng thái dưới
-        self.notif_btn = self._hbtn(right, "", "bell", self.open_notifications, variant="ghost",
-                                    tip="Thông báo (kết quả render, lỗi)")
-        self.notif_btn.pack(side="left", padx=2)
-        self.menu_btn = self._hbtn(right, "", "list", self._app_menu, variant="ghost",
-                                   tip="Menu: cài đặt, hướng dẫn, phím tắt, thư mục xuất, xuất MP3, kiểm tra máy")
-        self.menu_btn.pack(side="left", padx=(2, 6))
+        self._hbtn(right, "Thư mục xuất", "folder", self.open_output_dir, tip="Mở thư mục chứa video đã xuất").pack(side="left", padx=4)
+        self.mp3_btn = self._hbtn(right, "Render MP3", "music", lambda: self.start_render(list(self.app_state.videos), audio_only=True),
+                                  tip="Chỉ xuất âm thanh (lồng tiếng + nhạc) thành MP3")
+        self.mp3_btn.pack(side="left", padx=4)
         self.render_btn = button(right, "Render MP4", icon_name="play", variant="primary", size="lg",
                                  command=lambda: self.start_render(list(self.app_state.videos)), tip="Dựng toàn bộ hàng đợi thành MP4 (Ctrl+R)")
-        self.render_btn.pack(side="left", padx=(4, 4))
+        self.render_btn.pack(side="left", padx=(8, 4))
+        self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", state="disabled", tip="Dừng mọi việc đang chạy (Esc)")
+        self.stop_btn.pack(side="left", padx=4)
         self._running = False
         self.after(300, self.update_render_button)
 
@@ -557,7 +561,7 @@ class MainWindow(_Root):
         else:
             self._notif_win.refresh()
             self._notif_win.lift()
-        self._set_header_label(self.notif_btn, "")
+        self._set_header_label(self.notif_btn, "Thông báo")
 
     def open_selfcheck(self) -> None:
         from app.ui.widgets.selfcheck_window import SelfCheckWindow
@@ -582,7 +586,7 @@ class MainWindow(_Root):
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
         del self.notifications[:-100]
-        self._set_header_label(self.notif_btn, f"{len(self.notifications)}")
+        self._set_header_label(self.notif_btn, f"{len(self.notifications)} Thông báo")
         if self._notif_win is not None and self._notif_win.winfo_exists():
             self._notif_win.refresh()
 
@@ -769,13 +773,12 @@ class MainWindow(_Root):
     def set_running(self, running: bool) -> None:
         self._running = running
         self.render_btn.configure(state="disabled" if running else "normal")
-        self.progress.set_running_ui(running)            # «Dừng» chỉ hiện khi có việc đang chạy
+        self.mp3_btn.configure(state="disabled" if running else "normal")
+        self.stop_btn.configure(state="normal" if running else "disabled")
 
     def _build_progress(self) -> None:
         self.progress = ProgressPanel(self, self)
         self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
-        self.stop_btn = self.progress.stop_btn
-        self.progress.set_running_ui(getattr(self, "_running", False))
 
     def _show_result(self, items: list[VideoItem], ok: int, fail: int, elapsed: float, prep: bool) -> None:
         """Kết quả một lượt chạy trên thanh trạng thái: một câu + đúng một việc nên bấm tiếp."""
@@ -811,25 +814,6 @@ class MainWindow(_Root):
                 self._show_waiting()
         elif ren:
             self._run_queue(ren, mode="render")
-
-    def _app_menu(self) -> None:
-        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
-                    activeforeground=T.TEXT, bd=0)
-        m.add_command(label="Cài đặt (API key, GPU, giao diện)…", command=self.open_settings)
-        m.add_command(label="Hướng dẫn  (Ctrl+H)", command=lambda: self.toggle_help())
-        m.add_command(label="Phím tắt", command=self.open_shortcuts)
-        m.add_separator()
-        m.add_command(label="Mở thư mục xuất", command=self.open_output_dir)
-        m.add_command(label="Chỉ xuất âm thanh (MP3)", state="disabled" if self._running else "normal",
-                      command=lambda: self.start_render(list(self.app_state.videos), audio_only=True))
-        m.add_separator()
-        m.add_command(label="Xem log", command=self.open_log)
-        m.add_command(label="Kiểm tra máy…", command=self.open_selfcheck)
-        b = self.menu_btn
-        try:
-            m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
-        finally:
-            m.grab_release()
 
     # ── Log ───────────────────────────────────────────────────────────────
     def log(self, msg: str) -> None:
