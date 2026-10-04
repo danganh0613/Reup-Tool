@@ -15,7 +15,7 @@ from app.ui.widgets.ui import button
 from app.config.paths import SUBS_DIR
 from app.core.state import VideoItem
 from app.services.srt_utils import Cue, format_ts, load_srt, parse_srt, save_srt, to_srt
-from app.services.translate_router import Checkpoint
+from app.services.translate_router import RETRANSLATE_PRESETS, Checkpoint
 
 
 class SRTEditorDialog(ctk.CTkToplevel):
@@ -219,8 +219,16 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         self.status = ctk.CTkLabel(foot, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w")
         self.status.pack(side="left", fill="x", expand=True, padx=(10, 0))
         button(foot, "Lưu bản dịch", icon_name="save", variant="primary", command=self._save).pack(side="right")
-        button(foot, "Dịch AI đã chọn", icon_name="sparkle", command=self._ai_selected).pack(side="right", padx=8)
+        button(foot, "AI dịch / dịch lại đã chọn", icon_name="sparkle", command=self._ai_selected,
+               tip="Câu chưa dịch → dịch mới. Câu đã có bản dịch → AI dịch lại theo «Yêu cầu AI», có xem bản cũ "
+                   "và các câu xung quanh.").pack(side="right", padx=8)
         ctk.CTkButton(foot, text="Đóng", width=90, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
+        req = ctk.CTkFrame(self, fg_color="transparent")
+        req.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        ctk.CTkLabel(req, text="Yêu cầu AI khi dịch lại", font=T.font(11), text_color=T.TEXT_DIM).pack(side="left")
+        self.ai_req = ctk.CTkComboBox(req, values=RETRANSLATE_PRESETS, height=30, font=T.font(12))
+        self.ai_req.set("")
+        self.ai_req.pack(side="left", fill="x", expand=True, padx=8)
         self._show_page(0, sync=False)
 
     # ── Trang ─────────────────────────────────────────────────────────────
@@ -294,26 +302,36 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         if not idxs:
             messagebox.showinfo("Dịch AI", "Tick các cue cần dịch trước.")
             return
-        from app.services.translate_router import translate_cues
+        from app.services.translate_router import retranslate, translate_cues
 
-        subset = [self.cues[i] for i in idxs]
         cfg = self.window.app_state.subtitle
         st = self.window.app_state.settings
-        self.status.configure(text=f"Đang dịch {len(idxs)} cue…")
+        previous = list(self.translated)
+        redo = any(previous[i].strip() for i in idxs)     # đã có bản dịch → dịch LẠI (bỏ qua bộ nhớ dịch)
+        req = self.ai_req.get().strip()
+        self.status.configure(text=f"Đang {'dịch lại' if redo else 'dịch'} {len(idxs)} cue…")
 
         def work(cancel):
-            return translate_cues(subset, settings=st, target=cfg.translate_target, source_hint=cfg.translate_source,
-                                  style=cfg.translate_style, log=self.window.log_bg, cancel=cancel)
+            if redo:
+                return retranslate(self.cues, previous, idxs, settings=st, target=cfg.translate_target,
+                                   source_hint=cfg.translate_source, style=cfg.translate_style, instruction=req,
+                                   log=self.window.log_bg, cancel=cancel)
+            subset = [self.cues[i] for i in idxs]
+            res = translate_cues(subset, settings=st, target=cfg.translate_target, source_hint=cfg.translate_source,
+                                 style=cfg.translate_style, log=self.window.log_bg, cancel=cancel)
+            return {i: c.plain for i, c in zip(idxs, res)}
 
         def done(result, error):
+            if not self.winfo_exists():
+                return
             if error:
                 self.status.configure(text=f"Lỗi: {error}")
                 return
             self._sync_page()           # giữ những gì người dùng gõ trong lúc chờ dịch
-            for i, c in zip(idxs, result):
-                self.translated[i] = c.plain
+            for i, t in result.items():
+                self.translated[i] = t
             self._show_page(self.page, sync=False)
-            self.status.configure(text=f"Đã dịch AI {len(idxs)} cue — kiểm tra rồi bấm Lưu.")
+            self.status.configure(text=f"Đã {'dịch lại' if redo else 'dịch'} AI {len(result)} cue — kiểm tra rồi bấm Lưu.")
 
         self.window.run_task("Dịch AI đã chọn", work, done)
 

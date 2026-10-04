@@ -141,6 +141,7 @@ class SubtitleConfig:
     box_y: float = 0.74
     box_w: float = 0.90
     box_h: float = 0.14
+    follow_hardsub: bool = False       # đặt khung lên đúng chỗ chữ cứng đã dò & che (mỗi video một chỗ)
     text_effect: str = "Không có (Khuyên dùng)"
     bg_style: str = "Không nền"
     karaoke: bool = False

@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 from app.core.state import (BLUR_STYLES, KENBURNS, MOTIONS, SAFE_ZONES, AppState, BGMConfig, BlurConfig,
-                            BrandConfig, ColorConfig, TrimConfig, VideoItem)
+                            BrandConfig, ColorConfig, SubtitleConfig, TrimConfig, VideoItem)
 from app.services.ffmpeg import MediaInfo, ffescape_path, parse_hhmmss
 from app.services.render_pipeline import AudioExtra, Graph, RenderContext, Stage, TrimSpec
 from app.services.system_fonts import font_file
@@ -451,6 +451,38 @@ class ModuleStages:
         self.trim = trim
         self.audio_extras = audio_extras
         self.audio_orig_filters: list[str] = []
+
+
+def subtitle_for(state: AppState, item: VideoItem, info: MediaInfo) -> SubtitleConfig:
+    """Cấu hình phụ đề thực dùng cho ``item``: bật «đặt lên chữ cứng» + đã dò được vùng chữ cứng → dời khung phụ đề
+    mới đè đúng lên chỗ chữ gốc đã che (mỗi video một chỗ); không thì giữ nguyên khung chung."""
+    scfg = state.subtitle
+    if not (scfg.follow_hardsub and scfg.use_box and state.blur.auto_detect and info.width and info.height):
+        return scfg
+    deg = float(state.color.rotate) % 360 if state.color.enable else 0.0
+    if abs(deg - 90) < 0.01 or abs(deg - 270) < 0.01:
+        return scfg
+    from app.services.hardsub import cached_region
+    from app.services.render_pipeline import output_geometry, source_to_output
+    from app.services.subtitle_style import box_height_px
+
+    region = cached_region(item)
+    if not isinstance(region, dict):
+        return scfg
+    try:
+        x, y, w, h = float(region["x"]), float(region["y"]), float(region["w"]), float(region["h"])
+    except (KeyError, TypeError, ValueError):
+        return scfg
+    # vùng che có nới lề trên/dưới ≈ 27% → đáy dòng chữ gốc ở ~73% chiều cao vùng
+    cx, bottom = source_to_output(info, state.video, x + w / 2, y + h * 0.73)
+    if not (0.05 < bottom <= 1.0 and 0.0 < cx < 1.0):
+        return scfg                                    # chữ gốc nằm ngoài khung ra (bị cắt) → giữ khung chung
+    geo = output_geometry(info, state.video)
+    bh = min(0.9, box_height_px(scfg, geo.width, geo.height) / max(1, geo.height))
+    bw = min(1.0, scfg.box_w)
+    bx = max(0.0, min(1.0 - bw, cx - bw / 2))
+    bottom = max(bh, bottom)
+    return replace(scfg, box_x=round(bx, 4), box_w=round(bw, 4), box_y=round(bottom - bh, 4), box_h=round(bh, 4))
 
 
 def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: bool = True,

@@ -52,7 +52,7 @@ class LiveSpec:
         self.info = info
         self.ffmpeg = ffmpeg
         self.vcfg = state.video
-        self.scfg = state.subtitle
+        self.scfg = stages_mod.subtitle_for(state, item, info)     # khung có thể bám chỗ chữ cứng của video này
         self.effects = effects
         self.show_blur = show_blur
         self.mods = stages_mod.collect(state, item, info, include_blur=show_blur)

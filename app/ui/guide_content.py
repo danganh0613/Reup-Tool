@@ -115,7 +115,10 @@ TOPICS: list[dict] = [
         ("steps", [
             "Chưa có file chữ (.srt)? Để «Tự nhận diện»: khi bấm Render, máy tự nghe và tạo chữ. Có sẵn file .srt thì chọn «Chọn file SRT» hoặc kéo thả file .srt vào cửa sổ.",
             "Chọn kiểu hiện: «Sub gốc» (tiếng gốc) · «Sub đã dịch» (tiếng Việt) · «Song ngữ» (Việt ở trên, gốc ở dưới).",
-            "Dời chữ: bấm nút T trên màn hình giữa, rồi kéo cái ô viền xanh. Kéo góc ô để đổi to nhỏ.",
+            "Dời chữ: bấm nút T trên màn hình giữa, rồi kéo cái ô viền xanh. Ô luôn ôm vừa chữ (chữ bám đáy ô): kéo cạnh "
+            "trên/dưới = chữ to/nhỏ, kéo cạnh trái/phải = ô rộng/hẹp (ít/nhiều dòng), kéo giữa ô = dời chỗ.",
+            "Video gốc có phụ đề in sẵn? Bật «Đặt lên chỗ chữ cứng đã che»: mỗi video máy tự dò chỗ chữ cũ, che mờ rồi đặt "
+            "phụ đề mới đè đúng lên đó — áp mẫu hàng loạt không bị lệch mỗi video một kiểu. Kéo tay ô = tắt chế độ này.",
             "Chỉnh chữ: chọn Font, Cỡ chữ, Màu, Viền, Nền. Muốn nổi bật thì bật «Nền» kiểu «Hộp mờ bo góc».",
             "«Karaoke»: chữ đổi màu theo lời đọc, giống karaoke.",
         ]),
@@ -151,6 +154,15 @@ TOPICS: list[dict] = [
             "Ô «Phong cách dịch» (không bắt buộc): gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
             "Bấm «Dịch». Chờ khoảng 30 giây cho video 5 phút. Xong thấy «Dịch xong».",
             "Bấm «Xem / Sửa SRT» để đọc lại. Sửa trực tiếp, bấm «Lưu». Chỉ câu nào sửa thì lần sau mới đọc lại giọng câu đó.",
+        ]),
+        ("h", "Dịch chưa hay — bảo AI dịch lại"),
+        ("steps", [
+            "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: chọn hoặc gõ «Yêu cầu dịch lại», "
+            "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «AI dịch lại toàn bộ». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
+            "Chỉ vài câu dở: «Dịch lại vài câu…» → tick các câu đó → «AI dịch / dịch lại đã chọn».",
+            "Ở màn hình Duyệt: ô «Yêu cầu AI» + nút «AI dịch lại cả video», hoặc nút ↻ cạnh từng câu. Kết quả hiện trong ô "
+            "sửa để bạn xem trước — ưng thì bấm «Lưu sửa & tạo lại giọng».",
+            "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
         ("kv", [
             ("Dịch thủ công", "Bảng từng câu để bạn tự gõ bản dịch, không cần AI."),
@@ -292,6 +304,9 @@ TOPICS: list[dict] = [
     {"key": "faq", "title": "Gặp lỗi thì làm gì?", "group": "Khác", "blocks": [
         ("kv", [
             ("Chờ mãi không xong", "Nhìn thanh tiến trình dưới cùng và bấm «Xem log». Bấm «Dừng» nếu muốn huỷ."),
+            ("Đang chạy việc này mà bấm việc khác", "Máy hỏi có xếp vào hàng chờ không — đồng ý thì việc đó tự chạy ngay khi "
+             "việc trước xong (dòng trên cùng ghi «chờ: …»). Trong lúc chờ cứ chuyển tab, chọn video khác, chỉnh tiếp thoải "
+             "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
             ("Nghe video (STT) chậm dù có card NVIDIA", "Mục STT → bấm «Tải CUDA runtime» một lần (hoặc cài bản Setup đủ)."),
             ("Giọng đọc bị mất ở cuối video", "Câu dịch quá dài. Vào Cài đặt gõ «dịch thật ngắn gọn» vào Phong cách dịch rồi dịch lại; hoặc mục TTS tăng «Tốc độ tối đa»; hoặc mục Video bật «Lặp video cho đủ giọng»."),

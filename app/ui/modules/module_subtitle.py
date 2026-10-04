@@ -9,6 +9,8 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.core.state import SRT_MODES, SUB_BG_STYLES, TEXT_EFFECTS
 from app.services import render_pipeline as rp
+from app.services import stages as stages_mod
+from app.services import subtitle_style as sst
 from app.services.ffmpeg import MediaInfo
 from app.services.system_fonts import list_fonts
 from app.ui.modules.base_module import BaseModule
@@ -38,7 +40,7 @@ class SubtitleModule(BaseModule):
         sec.pack(fill="x", pady=4)
         self.font = ComboRow(sec.body, "Phông chữ", ["Arial"], on_change=s(cfg, "sub_font"))
         self.size = SliderRow(sec.body, "Cỡ chữ", from_=12, to=120, step=1, suffix="px",
-                              on_change=s(cfg, "sub_size", cast=int, preview=False), on_release=rel)
+                              on_change=self._size_changed, on_release=rel)
         self.opacity = SliderRow(sec.body, "Độ đục", from_=10, to=100, step=5, suffix="%",
                                  on_change=s(cfg, "sub_opacity", cast=float, preview=False), on_release=rel)
         self.color = ColorRow(sec.body, "Màu chữ", on_change=s(cfg, "sub_color"))
@@ -96,13 +98,17 @@ class SubtitleModule(BaseModule):
         ButtonRow(sec.body, [
             ("Căn ngang", lambda: self._preset_box("center_h"), T.primary_button()),
             ("Chạm 2 mép", lambda: self._preset_box("full_w"), T.primary_button()),
-            ("Vừa chữ", lambda: self._preset_box("fit"), T.primary_button()),
             ("Căn dọc", lambda: self._preset_box("center_v"), None),
         ]).pack(fill="x", pady=(6, 2))
         self.use_box = SwitchRow(sec.body, "Dùng khung (tắt = căn theo vị trí đơn giản)", on_change=s(cfg, "use_box"))
         self.use_box.pack(fill="x", pady=(4, 0))
-        hint(sec.body, "Đơn vị pixel theo khung hình xuất. Chữ tự xuống dòng theo bề rộng khung này — khung càng rộng "
-                       "thì càng ít dòng.").pack(fill="x", pady=(2, 0))
+        self.follow = SwitchRow(sec.body, "Đặt lên chỗ chữ cứng đã che (mỗi video tự theo)", on_change=self._follow_changed)
+        self.follow.pack(fill="x", pady=(2, 0))
+        self.follow_hint = hint(sec.body, "")
+        self.follow_hint.pack(fill="x")
+        hint(sec.body, "Đơn vị pixel theo khung hình xuất. Chữ bám ĐÁY khung; khung tự cao vừa chữ — kéo cạnh trên/dưới "
+                       "(hoặc sửa «Cao») là đổi cỡ chữ, kéo cạnh trái/phải đổi bề rộng: khung càng rộng thì càng ít "
+                       "dòng.").pack(fill="x", pady=(2, 0))
 
         sec = Section(self, "Hiển thị")
         sec.pack(fill="x", pady=4)
@@ -142,6 +148,8 @@ class SubtitleModule(BaseModule):
             self.bg_opacity.set(cfg.sub_bg_opacity)
             self.karaoke_color.set(cfg.karaoke_color)
             self.use_box.set(cfg.use_box)
+            self.follow.set(cfg.follow_hardsub)
+            self._follow_status()
             self.mode.set(cfg.srt_mode)
             self.delay.set(cfg.sub_delay)
             self.sec_scale.set(cfg.secondary_scale * 100)
@@ -151,6 +159,46 @@ class SubtitleModule(BaseModule):
 
     def on_active_changed(self) -> None:
         self._fill_pixels()
+        self._follow_status()
+
+    def _follow_changed(self, v: bool) -> None:
+        self.set_value(self.state.subtitle, "follow_hardsub", bool(v))
+        if v and not self.state.blur.auto_detect:
+            self.state.blur.auto_detect = True        # cần vùng chữ cứng đã dò → bật «Tự dò» ở Che mờ
+            self.state.config_changed("blur")
+            self.window.log("Đã bật Che mờ › «Tự dò & che phụ đề gốc» để biết chỗ chữ cứng của từng video.")
+            self.window.preview.ensure_hardsub()
+        self._follow_status()
+        self._fill_pixels()
+
+    def _follow_status(self) -> None:
+        cfg = self.state.subtitle
+        if not cfg.follow_hardsub:
+            text = ("Bật khi video gốc có phụ đề in sẵn: phụ đề mới nằm đè đúng chỗ chữ cũ đã che mờ — khỏi lệch mỗi "
+                    "video một kiểu khi áp mẫu hàng loạt.")
+        else:
+            from app.services.hardsub import cached_region
+
+            it = self.state.active
+            got = cached_region(it) if it is not None else False
+            if got is False:
+                text = "Đang chờ dò chữ cứng của video này… (dò xong khung tự nhảy tới chỗ chữ cũ)."
+            elif got is None:
+                text = "Video này không thấy chữ cứng → dùng vị trí khung bên trên."
+            else:
+                text = "Video này: khung đang nằm đè lên chỗ chữ cứng đã che. Kéo tay khung = tắt chế độ này."
+        self.follow_hint.configure(text=text)
+
+    def _size_changed(self, v) -> None:
+        """Đổi cỡ chữ → khung phụ đề cao theo (giữ đáy), khung cyan trên xem trước khớp chữ ngay."""
+        if self._loading:
+            return
+        cfg = self.state.subtitle
+        cfg.sub_size = int(v)
+        sst.fit_box_height(cfg, *self._frame_size())
+        self.state.config_changed("subtitle")
+        self._fill_pixels()
+        self.window.preview._redraw()
 
     def _enable_changed(self, v: bool) -> None:
         self.set_value(self.state.subtitle, "enable_subtitle", bool(v))
@@ -160,20 +208,35 @@ class SubtitleModule(BaseModule):
         self.set_value(self.state.subtitle, "sub_color", col)
 
     # ── Khung theo pixel ─────────────────────────────────────────────────
-    def _frame_size(self) -> tuple[int, int]:
+    def _media(self) -> MediaInfo | None:
         it = self.state.active
         if it is None or not it.width:
+            return None
+        return MediaInfo(duration=it.duration, width=it.width, height=it.height, fps=it.fps, has_audio=it.has_audio)
+
+    def _frame_size(self) -> tuple[int, int]:
+        info = self._media()
+        if info is None:
             return 1920, 1080
-        geo = rp.output_geometry(MediaInfo(duration=it.duration, width=it.width, height=it.height, fps=it.fps,
-                                           has_audio=it.has_audio), self.state.video)
+        geo = rp.output_geometry(info, self.state.video)
         return geo.width, geo.height
 
+    def _effective(self):
+        """Khung đang dùng thật cho video này (có thể đang bám chỗ chữ cứng)."""
+        info = self._media()
+        if info is None:
+            return self.state.subtitle
+        return stages_mod.subtitle_for(self.state, self.state.active, info)
+
     def _fill_pixels(self) -> None:
-        cfg = self.state.subtitle
+        cfg = self._effective()
         W, H = self._frame_size()
-        vals = {"x": cfg.box_x * W, "y": cfg.box_y * H, "w": cfg.box_w * W, "h": cfg.box_h * H}
-        for k, v in vals.items():
-            self.px_vars[k].set(str(int(round(v))))
+        h = sst.box_height_px(cfg, W, H)          # khung luôn cao vừa 2 dòng chữ, bám đáy
+        bottom = (cfg.box_y + cfg.box_h) * H
+        vals = {"x": cfg.box_x * W, "y": max(0.0, bottom - h), "w": cfg.box_w * W, "h": h}
+        self._shown_px = {k: int(round(v)) for k, v in vals.items()}
+        for k, v in self._shown_px.items():
+            self.px_vars[k].set(str(v))
 
     def _apply_pixels(self) -> None:
         if self._loading:
@@ -186,13 +249,32 @@ class SubtitleModule(BaseModule):
         except ValueError:
             self._fill_pixels()
             return
-        nx, ny = max(0.0, min(0.99, x / W)), max(0.0, min(0.99, y / H))
-        nw, nh = max(0.02, min(1.0 - nx, w / W)), max(0.02, min(1.0 - ny, h / H))
-        if (nx, ny, nw, nh) != (cfg.box_x, cfg.box_y, cfg.box_w, cfg.box_h):
-            cfg.box_x, cfg.box_y, cfg.box_w, cfg.box_h = round(nx, 4), round(ny, 4), round(nw, 4), round(nh, 4)
-            cfg.use_box = True
-            self.state.config_changed("subtitle")
-            self.window.preview.schedule_refresh(0)
+        shown = getattr(self, "_shown_px", {})
+        typed = {"x": x, "y": y, "w": w, "h": h}
+        changed = {k for k, v in typed.items() if int(round(v)) != shown.get(k)}
+        if not changed:                            # rời ô mà không sửa gì → khỏi «đã chỉnh» vì sai số làm tròn
+            return
+        eff = self._effective()
+        if cfg.follow_hardsub:                     # gõ số = đặt tay → thôi bám chỗ chữ cứng
+            cfg.box_x, cfg.box_y, cfg.box_w, cfg.box_h = eff.box_x, eff.box_y, eff.box_w, eff.box_h
+            cfg.follow_hardsub = False
+            self.follow.set(False)
+            self._follow_status()
+        bottom = cfg.box_y + cfg.box_h
+        if "h" in changed:                         # «Cao» = chiều cao 2 dòng chữ → đổi cỡ chữ theo
+            cfg.sub_size = sst.size_for_height(cfg, W, H, h)
+            self.size.set(cfg.sub_size)
+        nh = min(0.9, sst.box_height_px(cfg, W, H) / H)
+        if "y" in changed:
+            bottom = max(0.0, min(0.99, y / H)) + nh
+        nx = max(0.0, min(0.99, x / W))
+        nw = max(0.02, min(1.0 - nx, w / W))
+        bottom = max(nh, min(1.0, bottom))
+        cfg.box_x, cfg.box_w = round(nx, 4), round(nw, 4)
+        cfg.box_y, cfg.box_h = round(bottom - nh, 4), round(nh, 4)
+        cfg.use_box = True
+        self.state.config_changed("subtitle")
+        self.window.preview.schedule_refresh(0)
         self._fill_pixels()
 
     def _preset_box(self, kind: str) -> None:
@@ -202,15 +284,8 @@ class SubtitleModule(BaseModule):
             cfg.box_x = round((1.0 - cfg.box_w) / 2, 4)
         elif kind == "full_w":
             cfg.box_x, cfg.box_w = 0.0, 1.0
-        elif kind == "fit":
-            # cao vừa 2 dòng chữ theo cỡ hiện tại
-            scale = min(W, H) / 1080.0
-            line_px = cfg.sub_size * scale * 1.35
-            h = min(0.6, (line_px * 2 + 12 * scale) / H)
-            bottom = cfg.box_y + cfg.box_h
-            cfg.box_h = round(h, 4)
-            cfg.box_y = round(max(0.0, bottom - h), 4)
         elif kind == "center_v":
+            sst.fit_box_height(cfg, W, H)
             cfg.box_y = round((1.0 - cfg.box_h) / 2, 4)
         cfg.use_box = True
         self.state.config_changed("subtitle")

@@ -15,8 +15,9 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts, load_srt, save_srt, wrap_lines
+from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.widgets.common import StatusLabel, hint
-from app.ui.widgets.ui import button
+from app.ui.widgets.ui import Tooltip, button
 
 APP = "Edit Studio"
 _MARK = {"": ("○", "Chưa chuẩn bị", "TEXT_MUTED"), "pending": ("●", "Chờ duyệt", "WARNING"),
@@ -36,6 +37,7 @@ def _mark(it: VideoItem) -> tuple[str, str, str]:
 
 class ReviewWindow(ctk.CTkToplevel):
     PAGE = 40
+    _is_translation = False             # đang sửa bản dịch (có câu gốc tương ứng) → hiện «AI dịch lại»
 
     def __init__(self, window) -> None:
         super().__init__(window)
@@ -108,12 +110,28 @@ class ReviewWindow(ctk.CTkToplevel):
             ref = ctk.CTkLabel(self.rows_frame, text="", font=T.font(10), text_color=T.TEXT_MUTED, anchor="w",
                                justify="left", wraplength=260)
             ent = ctk.CTkEntry(self.rows_frame, height=30, font=T.font(12))
-            self._rows.append({"idx": idx, "ref": ref, "entry": ent,
+            redo = ctk.CTkButton(self.rows_frame, text="↻", width=30, height=30, command=lambda r=r: self._ai_row(r),
+                                 **{**T.secondary_button(), "font": T.font(13, "bold")})
+            Tooltip(redo, "AI dịch lại riêng câu này theo «Yêu cầu» bên dưới (xem câu trước/sau làm ngữ cảnh)")
+            self._rows.append({"idx": idx, "ref": ref, "entry": ent, "redo": redo,
                                "widgets": [(idx, dict(row=r, column=0, sticky="nw", padx=(4, 6), pady=2)),
                                            (ref, dict(row=r, column=1, sticky="nw", padx=(0, 6), pady=2)),
-                                           (ent, dict(row=r, column=2, sticky="ew", padx=(0, 4), pady=2))]})
+                                           (ent, dict(row=r, column=2, sticky="ew", padx=(0, 4), pady=2)),
+                                           (redo, dict(row=r, column=3, sticky="n", padx=(0, 4), pady=2))]})
+        # AI dịch lại: bản dịch chưa hay → ghi yêu cầu, dịch lại cả video hoặc từng câu (↻); kết quả vào ô sửa,
+        # xem rồi bấm «Lưu sửa & tạo lại giọng»
+        self.ai_bar = ctk.CTkFrame(right, fg_color="transparent")
+        self.ai_bar.grid(row=5, column=0, sticky="ew", padx=14, pady=(6, 0))
+        ctk.CTkLabel(self.ai_bar, text="Yêu cầu AI", font=T.font(11), text_color=T.TEXT_DIM).pack(side="left")
+        self.ai_req = ctk.CTkComboBox(self.ai_bar, values=RETRANSLATE_PRESETS, height=30, font=T.font(12))
+        self.ai_req.set("")
+        self.ai_req.pack(side="left", fill="x", expand=True, padx=8)
+        self.ai_all_btn = button(self.ai_bar, "AI dịch lại cả video", icon_name="sparkle", size="sm", command=self._ai_all,
+                                 tip="Dịch lại toàn bộ theo yêu cầu (AI xem bản dịch hiện tại để biết bạn chưa ưng chỗ "
+                                     "nào). Kết quả hiện trong ô sửa — xem rồi bấm Lưu.")
+        self.ai_all_btn.pack(side="right")
         nav = ctk.CTkFrame(right, fg_color="transparent")
-        nav.grid(row=5, column=0, sticky="ew", padx=14, pady=(6, 0))
+        nav.grid(row=6, column=0, sticky="ew", padx=14, pady=(6, 0))
         self.prev_btn = button(nav, "‹ Trước", size="sm", command=lambda: self._show_page(self.page - 1))
         self.prev_btn.pack(side="left")
         self.page_lbl = ctk.CTkLabel(nav, text="", font=T.font(11), width=150)
@@ -124,9 +142,9 @@ class ReviewWindow(ctk.CTkToplevel):
                                tip="Lưu các câu đã sửa; nếu video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
         self.save_btn.pack(side="right")
         self.status = StatusLabel(right, "")
-        self.status.grid(row=6, column=0, sticky="ew", padx=14, pady=(6, 0))
+        self.status.grid(row=7, column=0, sticky="ew", padx=14, pady=(6, 0))
         foot = ctk.CTkFrame(right, fg_color="transparent")
-        foot.grid(row=7, column=0, sticky="ew", padx=14, pady=12)
+        foot.grid(row=8, column=0, sticky="ew", padx=14, pady=12)
         hint(foot, "Ctrl+Enter: duyệt & sang video kế · Ctrl+↓ / Ctrl+↑: video kế / trước").pack(side="left")
         button(foot, "Duyệt", icon_name="check", variant="primary", command=self._approve,
                tip="Đánh dấu video này đạt — sẽ được xuất (Ctrl+Enter)").pack(side="right")
@@ -206,6 +224,7 @@ class ReviewWindow(ctk.CTkToplevel):
             self.info_lbl.configure(text="Nạp video vào hàng đợi rồi bấm «Chuẩn bị».")
             self.state_lbl.configure(text="")
             self.cues, self.texts = [], []
+            self._is_translation = False
             self._show_page(0)
             return
         sym, label, color = _mark(it)
@@ -227,11 +246,13 @@ class ReviewWindow(ctk.CTkToplevel):
 
     def _load_subs(self, it: VideoItem) -> None:
         self.cues, self.ref, self.texts, self.edit_path = [], [], [], None
+        self._is_translation = False
         tr = it.srt_translated_path if it.srt_translated_path and Path(it.srt_translated_path).exists() else None
         orig = it.srt_path if it.srt_path and Path(it.srt_path).exists() else None
         if tr:
             self.edit_path, self.cues = tr, load_srt(tr)
             self.ref = load_srt(orig) if orig else []
+            self._is_translation = len(self.ref) == len(self.cues)
             self.sub_head.configure(text=f"Bản dịch ({len(self.cues)} câu) — sửa câu dịch sai; chữ nhỏ là câu gốc")
         elif orig:
             self.edit_path, self.cues = orig, load_srt(orig)
@@ -266,10 +287,17 @@ class ReviewWindow(ctk.CTkToplevel):
                 row["entry"].delete(0, "end")
                 row["entry"].insert(0, self.texts[i])
                 for w, kw in row["widgets"]:
-                    w.grid(**kw)
+                    if w is not row["redo"] or self._is_translation:
+                        w.grid(**kw)
+                    else:
+                        w.grid_remove()
             else:
                 for w, _kw in row["widgets"]:
                     w.grid_remove()
+        if self._is_translation:
+            self.ai_bar.grid()
+        else:
+            self.ai_bar.grid_remove()
         self.page_lbl.configure(text=f"Trang {self.page + 1}/{pages}" if self.cues else "")
         self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
@@ -308,6 +336,59 @@ class ReviewWindow(ctk.CTkToplevel):
         else:
             self.status.ok(f"Đã lưu {changed} câu.")
         self.window.preview.schedule_refresh(0)
+
+    # ── AI dịch lại ──────────────────────────────────────────────────────
+    def _retranslate(self, idxs: list[int] | None, label: str) -> None:
+        from app.services.job_runner import Pipeline
+
+        it = self.item
+        if it is None or not self._is_translation:
+            return
+        self._sync()
+        req = self.ai_req.get().strip()
+        previous = list(self.texts)
+        st = self.app_state.state_for(it)
+        win = self.window
+        n = len(self.cues) if idxs is None else len(idxs)
+        self.status.warn(f"AI đang dịch lại {n} câu" + (f" — yêu cầu: «{req}»" if req else "") + "…")
+        self.ai_all_btn.configure(state="disabled")
+
+        def work(cancel):
+            return Pipeline(st, win.ffmpeg).retranslate(it, idxs, instruction=req, previous=previous, save=False,
+                                                         progress=win.set_busy_progress, log=win.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if not self.winfo_exists():
+                return
+            self.ai_all_btn.configure(state="normal")
+            if self.item is not it:
+                return                         # đã chuyển sang video khác trong lúc chờ
+            if error:
+                self.status.error(f"Dịch lại lỗi: {str(error).splitlines()[0][:200]}")
+                return
+            self._sync()
+            changed = 0
+            for i, t in result.items():
+                if i < len(self.texts) and t.strip() and t.strip() != self.texts[i].strip():
+                    self.texts[i] = t.strip()
+                    changed += 1
+            self._show_page(self.page, sync=False)
+            if changed:
+                self.status.ok(f"AI đã dịch lại {changed} câu (chưa lưu) — xem lại, sửa nếu cần rồi bấm "
+                               "«Lưu sửa & tạo lại giọng».")
+            else:
+                self.status.info("AI trả về giống bản cũ — thử ghi yêu cầu cụ thể hơn (vd: «xưng anh–em, bỏ từ thừa»).")
+
+        win.run_task(label, work, done)
+
+    def _ai_row(self, r: int) -> None:
+        idxs = self._range()
+        if r < len(idxs):
+            self._retranslate([idxs[r]], f"Dịch lại câu {idxs[r] + 1}")
+
+    def _ai_all(self) -> None:
+        if self.cues:
+            self._retranslate(None, "AI dịch lại phụ đề")
 
     # ── Hành động ────────────────────────────────────────────────────────
     def _prepare_one(self, it: VideoItem, label: str = "Chuẩn bị") -> None:

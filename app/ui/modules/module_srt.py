@@ -6,10 +6,13 @@ import shutil
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
+import customtkinter as ctk
+
 from app.config import theme as T
 from app.config.paths import SUBS_DIR, VOICE_DIR
 from app.core.state import TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
+from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
 from app.core.platform import open_path
@@ -45,6 +48,20 @@ class SRTModule(BaseModule):
                               on_change=s(cfg, "translate_style", preview=False))
         pack_rows(sec.body, [self.src_lang, self.target, self.style])
         ButtonRow(sec.body, [("Dịch phụ đề", self._translate_now, T.primary_button())]).pack(fill="x", pady=(6, 2))
+        # bản dịch chưa hay → dịch lại theo yêu cầu (bấm «Dịch phụ đề» lần nữa chỉ lấy lại bản cũ từ bộ nhớ dịch)
+        redo = ctk.CTkFrame(sec.body, fg_color="transparent")
+        redo.pack(fill="x", pady=(6, 2))
+        redo.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(redo, text="Yêu cầu dịch lại", font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
+            row=0, column=0, sticky="w")
+        self.redo_req = ctk.CTkComboBox(redo, values=RETRANSLATE_PRESETS, height=34, font=T.font(12))
+        self.redo_req.set("")
+        self.redo_req.grid(row=0, column=1, sticky="ew")
+        ButtonRow(sec.body, [("AI dịch lại toàn bộ", self._retranslate_all, None),
+                             ("Dịch lại vài câu…", self._manual_translate, None)]).pack(fill="x", pady=(4, 2))
+        hint(sec.body, "Dịch chưa hay? Chọn/gõ yêu cầu (vd «xưng anh–em, văn nói») rồi «AI dịch lại toàn bộ» — AI xem "
+                       "bản cũ để biết bạn chưa ưng chỗ nào. Chỉ vài câu: «Dịch lại vài câu…», tick câu đó. Giọng lồng "
+                       "tự tạo lại theo bản mới.").pack(fill="x")
         hint(sec.body, "Tự động dịch thông minh: xoay vòng API key & nhà cung cấp (Gemini → Groq → DeepSeek → OpenAI) "
                        "khi hết quota hoặc gặp lỗi, bảo toàn tiến độ liên tục.").pack(fill="x")
         ButtonRow(sec.body, [("Dự án dịch dang dở", self._pending_projects, None),
@@ -181,7 +198,7 @@ class SRTModule(BaseModule):
         if not it.srt_path or not Path(it.srt_path).exists():
             messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
             return
-        pipe = self.window.pipeline
+        pipe = self.window.pipeline_for(it)
         self.tr_status.warn("Đang dịch… (xem log)")
 
         def work(cancel):
@@ -196,6 +213,31 @@ class SRTModule(BaseModule):
                 self.window.add_notification("Dịch xong", f"{it.name} → {self.state.subtitle.translate_target}", "ok")
 
         self.window.run_task("Dịch phụ đề", work, done)
+
+    def _retranslate_all(self) -> None:
+        it = self._need_item()
+        if it is None:
+            return
+        if not it.srt_path or not Path(it.srt_path).exists():
+            messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
+            return
+        req = self.redo_req.get().strip()
+        pipe = self.window.pipeline_for(it)
+        self.tr_status.warn("Đang dịch lại… (xem log)" + (f" — «{req}»" if req else ""))
+
+        def work(cancel):
+            return pipe.retranslate(it, instruction=req, progress=self.window.set_busy_progress,
+                                    log=self.window.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if error:
+                self.tr_status.error(f"Lỗi: {str(error).splitlines()[0][:200]}")
+                return
+            self.state.mark_dirty()
+            self._after_change(it)
+            self.window.add_notification("Dịch lại xong", f"{it.name}: {len(result)} câu", "ok")
+
+        self.window.run_task("Dịch lại phụ đề", work, done)
 
     def _pending_projects(self) -> None:
         from app.ui.widgets.srt_editor import PendingTranslationsDialog

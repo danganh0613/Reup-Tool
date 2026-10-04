@@ -390,7 +390,7 @@ class TTSModule(BaseModule):
         if not onnx_available():
             self.speaker_status.error("Thiếu thư viện onnxruntime — chạy: pip install onnxruntime  (hoặc dùng «Gán từng câu…»)")
             return
-        pipe = self.window.pipeline
+        pipe = self.window.pipeline_for(item)
         self.speaker_status.warn("Đang nhận diện người nói… (xem log)")
 
         def work(cancel):
@@ -485,7 +485,7 @@ class TTSModule(BaseModule):
         if item is None:
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
-        pipe = self.window.pipeline
+        pipe = self.window.pipeline_for(item)
         self.track_status.warn("Đang tạo track giọng… (xem log)")
 
         def work(cancel):

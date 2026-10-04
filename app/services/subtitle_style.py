@@ -86,6 +86,33 @@ def _effect_params(cfg: SubtitleConfig, scale: float) -> tuple[float, float, str
     return outline, shadow, extra
 
 
+BOX_LINES = 2          # khung lưu trong cấu hình cao vừa 2 dòng chữ (câu dài hơn thì tràn lên trên, đáy giữ nguyên)
+
+
+def box_height_px(cfg: SubtitleConfig, width: int, height: int, lines: int = BOX_LINES, size: float | None = None) -> float:
+    """Chiều cao (px khung ra) của ``lines`` dòng chữ: libass cho mỗi dòng cao ≈ đúng cỡ chữ, cộng viền + bóng."""
+    scale = min(width, height) / 1080.0
+    fs = (cfg.sub_size if size is None else size) * scale
+    outline, shadow, _ = _effect_params(cfg, scale)
+    return max(1, lines) * fs + 2 * outline + shadow + 6 * scale
+
+
+def fit_box_height(cfg: SubtitleConfig, width: int, height: int) -> None:
+    """Cho khung cao vừa chữ theo cỡ hiện tại, giữ nguyên đáy (chữ bám đáy khung)."""
+    h = min(0.9, box_height_px(cfg, width, height) / max(1, height))
+    bottom = max(h, min(1.0, cfg.box_y + cfg.box_h))
+    cfg.box_h = round(h, 4)
+    cfg.box_y = round(max(0.0, bottom - h), 4)
+
+
+def size_for_height(cfg: SubtitleConfig, width: int, height: int, h_px: float, lines: int = BOX_LINES) -> int:
+    """Cỡ chữ để ``lines`` dòng cao vừa ``h_px`` (ngược của box_height_px)."""
+    scale = min(width, height) / 1080.0
+    outline, shadow, _ = _effect_params(cfg, scale)
+    fs = (h_px - 2 * outline - shadow - 6 * scale) / max(1, lines)
+    return int(round(max(12, min(120, fs / max(1e-6, scale)))))
+
+
 def layout_margins(cfg: SubtitleConfig, width: int, height: int) -> tuple[int, int, int, int, int]:
     """(align, marginL, marginR, marginV, box_top_px) từ khung hoặc chế độ vị trí cũ."""
     scale = min(width, height) / 1080.0
@@ -97,7 +124,8 @@ def layout_margins(cfg: SubtitleConfig, width: int, height: int) -> tuple[int, i
         ml = int(round(x * width))
         mr = int(round((1.0 - x - w) * width))
         mv = int(round((1.0 - y - h) * height))       # bám đáy khung
-        return 2, max(0, ml), max(0, mr), max(0, mv), int(round(y * height))
+        top = (y + h) * height - box_height_px(cfg, width, height)   # nền dải ngang: cao vừa 2 dòng chữ
+        return 2, max(0, ml), max(0, mr), max(0, mv), int(round(max(0.0, top)))
     side = int(round(width * (100 - max(20, min(100, cfg.sub_max_width))) / 200))
     margin_v = int(round(cfg.sub_margin_v * scale))
     pos_mode = cfg.sub_position

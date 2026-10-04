@@ -191,6 +191,16 @@ def source_rect_in_output(info: MediaInfo, cfg: VideoConfig) -> tuple[float, flo
     return (W - dw) / 2 / W, (H - dh) / 2 / H, dw / W, dh / H
 
 
+def source_to_output(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
+    """Điểm (x, y) theo tỉ lệ khung NGUỒN → tỉ lệ khung RA (qua lật gương, phóng to, đổi khung)."""
+    zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
+    if cfg.flip_h:
+        x = 1.0 - x
+    x, y = (x - 0.5) * zoom + 0.5, (y - 0.5) * zoom + 0.5
+    ox, oy, sx, sy = source_rect_in_output(info, cfg)
+    return ox + x * sx, oy + y * sy
+
+
 def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_name: str | None = None,
                       stages: list[Stage] | None = None, pre_stages: list[Stage] | None = None,
                       src_stages: list[Stage] | None = None,

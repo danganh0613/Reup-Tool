@@ -21,7 +21,7 @@ from app.core.state import ENCODE_PRESETS, SRT_MODES, SRT_SOURCES, TRIM_MODES, T
 from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
 from app.services.ffmpeg import FFmpeg, RenderCancelled
-from app.services.srt_utils import Cue, load_srt, merge_bilingual, save_srt, shift
+from app.services.srt_utils import Cue, load_srt, merge_bilingual, save_srt, shift, wrap_lines
 from app.services.subtitle_style import write_ass
 
 logger = logging.getLogger(__name__)
@@ -127,15 +127,52 @@ class Pipeline:
         out_cues = translate_cues(cues, settings=self.state.settings, target=cfg.translate_target,
                                   source_hint=cfg.translate_source, style=cfg.translate_style, reflow=cfg.ai_reflow,
                                   srt_path=item.srt_path, on_progress=progress, log=log, cancel=cancel)
-        from app.services.translate_router import LANG_CODE
-
-        tag = LANG_CODE.get(cfg.translate_target) or _safe_stem(cfg.translate_target.split(" ")[-1]).lower()[:8] or "dich"
-        out = SUBS_DIR / f"{_safe_stem(item.stem)}.{tag}.srt"
+        out = self.translated_path(item)
         save_srt(out_cues, out)
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")
         return out_cues
+
+    def translated_path(self, item: VideoItem) -> Path:
+        from app.services.translate_router import LANG_CODE
+
+        cfg = self.state.subtitle
+        tag = LANG_CODE.get(cfg.translate_target) or _safe_stem(cfg.translate_target.split(" ")[-1]).lower()[:8] or "dich"
+        return SUBS_DIR / f"{_safe_stem(item.stem)}.{tag}.srt"
+
+    def retranslate(self, item: VideoItem, idxs: list[int] | None = None, *, instruction: str = "",
+                    previous: list[str] | None = None, save: bool = True, progress: ProgressCb | None = None,
+                    log: LogCb | None = None, cancel: threading.Event | None = None) -> dict[int, str]:
+        """AI dịch lại (cả video hoặc các câu ``idxs``) theo ``instruction``, xem bản dịch hiện tại làm «bản bị chê».
+        ``save``: ghi luôn vào SRT đã dịch (giọng lồng tự tạo lại vì SRT đổi); False: chỉ trả kết quả để người dùng
+        xem trước rồi tự lưu."""
+        from app.services.translate_router import retranslate
+
+        cfg = self.state.subtitle
+        if not item.srt_path or not Path(item.srt_path).exists():
+            raise RuntimeError("Chưa có phụ đề gốc để dịch lại.")
+        orig = load_srt(item.srt_path)
+        tr_path = item.srt_translated_path if item.srt_translated_path and Path(item.srt_translated_path).exists() else None
+        current = load_srt(tr_path) if tr_path else []
+        if len(current) != len(orig):
+            current = []                              # bản dịch lệch số câu (đã gộp/sửa tay) → dịch lại từ gốc
+        if previous is None:
+            previous = [c.plain for c in current]
+        idxs = list(range(len(orig))) if idxs is None else idxs
+        new = retranslate(orig, previous, idxs, settings=self.state.settings, target=cfg.translate_target,
+                          source_hint=cfg.translate_source, style=cfg.translate_style, instruction=instruction,
+                          on_progress=progress, log=log, cancel=cancel)
+        if save and new:
+            base = current or orig
+            out = [Cue(c.index, c.start, c.end, wrap_lines(new[i]) if i in new else c.text, dict(c.meta))
+                   for i, c in enumerate(base)]
+            dst = Path(tr_path) if tr_path else self.translated_path(item)
+            save_srt(out, dst)
+            item.srt_translated_path = str(dst)
+            if log:
+                log(f"Dịch lại xong {len(new)} câu → {dst.name}")
+        return new
 
     # ── Người nói (lồng tiếng nhiều giọng) ────────────────────────────────
     def speakers_path(self, item: VideoItem) -> Path:
@@ -523,7 +560,8 @@ class Pipeline:
                 log("Phụ đề dùng mốc thời gian đã đồng bộ theo giọng đọc.")
             sub_cues = rp.scale_cues(sub_cues, 100.0 / max(25, vcfg.speed))
             geo = rp.output_geometry(mods.info, vcfg)
-            write_ass(sub_cues, scfg, geo.width, geo.height, job_dir / "sub.ass")
+            write_ass(sub_cues, stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,
+                      job_dir / "sub.ass")
             ass_name = "sub.ass"
 
         ext = ".mp3" if audio_only else ".mp4"

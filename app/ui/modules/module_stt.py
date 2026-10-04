@@ -169,7 +169,7 @@ class STTModule(BaseModule):
         if item is None:
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
-        pipe = self.window.pipeline
+        pipe = self.window.pipeline_for(item)
         self.status.warn("Đang nhận diện… (xem log)")
 
         def work(cancel):

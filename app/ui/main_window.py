@@ -72,6 +72,7 @@ class MainWindow(_Root):
         self.app_state = state
         self.ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
         self.pipeline = Pipeline(state, self.ffmpeg)
+        self._waiting: list[tuple[str, Callable[[], None]]] = []   # việc xếp hàng chờ tác vụ / render đang chạy
         self.runner = JobRunner(self.pipeline, self.ui_call)
         self.tasks = TaskRunner(self.ui_call)
         self.player = AudioPlayer(self.ffmpeg)
@@ -681,11 +682,8 @@ class MainWindow(_Root):
 
     def run_task(self, name: str, fn: Callable[[threading.Event], object],
                  done: Callable[[object | None, Exception | None], None]) -> None:
-        if self.runner.running:
-            messagebox.showinfo(APP_NAME, "Đang render hàng đợi — hãy đợi xong hoặc bấm Dừng.")
-            return
-        if self.tasks.running:
-            messagebox.showinfo(APP_NAME, f"Đang chạy tác vụ “{self.tasks.name}” — hãy đợi xong.")
+        if self.runner.running or self.tasks.running:
+            self._offer_wait(name, lambda: self.run_task(name, fn, done))
             return
         self.busy_label.configure(text=f"⏳ {name}…")
         self.progress.set_status(f"{name}…")
@@ -696,6 +694,7 @@ class MainWindow(_Root):
         def _done(result, error):
             self.busy_label.configure(text="")
             self.set_running(False)
+            self.after(400, self._run_waiting)
             if error:
                 self.progress.set_status(f"✖ {name}: {str(error).splitlines()[0][:120]}")
                 self.log(f"✖ {name}: {error}")
@@ -706,6 +705,41 @@ class MainWindow(_Root):
             done(result, error)
 
         self.tasks.start(name, fn, on_done=_done)
+
+    # ── Hàng chờ việc: bấm khi đang bận → hỏi xếp hàng, xong việc trước tự chạy ──
+    def _offer_wait(self, name: str, action: Callable[[], None]) -> None:
+        busy = "render hàng đợi" if self.runner.running else f"«{self.tasks.name}»"
+        if any(n == name for n, _a in self._waiting):
+            messagebox.showinfo(APP_NAME, f"«{name}» đã nằm trong hàng chờ — sẽ tự chạy sau {busy}.")
+            return
+        if not messagebox.askyesno(APP_NAME, f"Đang chạy {busy}.\n\nXếp «{name}» vào hàng chờ? Nó sẽ tự chạy ngay khi "
+                                             "việc đang làm xong (bấm Dừng để huỷ cả hàng chờ)."):
+            return
+        self._waiting.append((name, action))
+        self.log(f"Đã xếp «{name}» vào hàng chờ — {len(self._waiting)} việc đang chờ.")
+        self._show_waiting()
+
+    def _show_waiting(self) -> None:
+        text = self.busy_label.cget("text").split("  ·  ")[0]
+        if self._waiting:
+            text += f"  ·  chờ: {', '.join(n for n, _a in self._waiting)}"
+        self.busy_label.configure(text=text)
+
+    def _run_waiting(self) -> None:
+        if not self._waiting or self.runner.running or self.tasks.running:
+            return
+        name, action = self._waiting.pop(0)
+        self.log(f"▶ Chạy việc trong hàng chờ: {name}")
+        try:
+            action()
+        except Exception:
+            logger.exception("Việc trong hàng chờ lỗi: %s", name)
+        self._show_waiting()
+
+    def pipeline_for(self, item: VideoItem) -> Pipeline:
+        """Pipeline với bản chụp cấu hình của ``item`` — tác vụ nền (nhận diện, dịch, tạo giọng…) không bị đổi cấu hình
+        giữa chừng khi người dùng chọn sang video khác (có cấu hình riêng) hoặc chỉnh tiếp trong lúc chờ."""
+        return Pipeline(self.app_state.state_for(item), self.ffmpeg)
 
     def set_busy_progress(self, p: float) -> None:
         self.ui_call(lambda: self.progress.set_progress(p))
@@ -761,11 +795,10 @@ class MainWindow(_Root):
         if not self.ffmpeg.available:
             messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
             return
-        if self.tasks.running:
-            messagebox.showinfo(APP_NAME, f"Đang chạy tác vụ “{self.tasks.name}” — hãy đợi xong.")
-            return
-        if self.runner.running:   # không được đổi audio_only của pipeline khi hàng đợi đang chạy
-            messagebox.showinfo(APP_NAME, "Đang render hàng đợi — hãy đợi xong hoặc bấm Dừng.")
+        if self.tasks.running or self.runner.running:   # không đổi audio_only của pipeline khi hàng đợi đang chạy
+            label = "Chuẩn bị" if mode == "prepare" else ("Xuất MP3" if audio_only else "Render")
+            self._offer_wait(f"{label} {len(items)} video",
+                             lambda: self._run_queue(items, mode=mode, audio_only=audio_only))
             return
         self.preview.stop_play()
         Path(self.app_state.output_dir or VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
@@ -789,6 +822,7 @@ class MainWindow(_Root):
 
         def on_done(ok: int, fail: int) -> None:
             self.set_running(False)
+            self.after(400, self._run_waiting)
             self.busy_label.configure(text="")
             self.update_render_button()
             elapsed = time.time() - self._render_started
@@ -906,6 +940,9 @@ class MainWindow(_Root):
             relabel(self.render_btn, text)
 
     def stop_all(self) -> None:
+        if self._waiting:
+            self.log(f"Đã huỷ {len(self._waiting)} việc trong hàng chờ.")
+            self._waiting.clear()
         self.runner.stop()
         self.tasks.stop()
         self.log("Đã yêu cầu dừng…")

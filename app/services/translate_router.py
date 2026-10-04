@@ -392,6 +392,98 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
     return out
 
 
+# ── Dịch lại theo yêu cầu ────────────────────────────────────────────────
+
+RETRANSLATE_PRESETS = ["Tự nhiên, đời thường hơn", "Ngắn gọn hơn (vừa lồng tiếng)", "Xưng hô nhất quán theo ngữ cảnh",
+                       "Sát nghĩa bản gốc hơn", "Trẻ trung, bắt trend", "Giọng kể chuyện / thuyết minh phim"]
+CONTEXT = 3        # số câu trước/sau gửi kèm làm ngữ cảnh
+
+
+def _retranslate_prompt(items: list[tuple[str, str, int]], before: list[str], after: list[str], target: str,
+                        source_hint: str, style: str, instruction: str, glossary: str) -> str:
+    rows = []
+    for k, (src, prev, budget) in enumerate(items):
+        rows.append(f"{k + 1}. [max {budget} chars] SOURCE: {src}\n   CURRENT: {prev or '(none)'}")
+    src = f" The source language is {source_hint}." if source_hint and source_hint != "Tự nhận diện" else ""
+    req = instruction.strip() or "Make it sound more natural and fluent, like real spoken dialogue."
+    gl = _glossary_lines(glossary)
+    ctx = ""
+    if before:
+        ctx += "\nLines just BEFORE (context only, do not output):\n" + "\n".join(f"- {t}" for t in before)
+    if after:
+        ctx += "\nLines just AFTER (context only, do not output):\n" + "\n".join(f"- {t}" for t in after)
+    return (
+        f"You are a professional subtitle translator revising subtitles into {target}.{src}\n"
+        "The user is NOT satisfied with the CURRENT translations below and wants them redone.\n"
+        f"User request (highest priority): {req}\n"
+        + (f"General style notes: {style.strip()}\n" if style.strip() else "")
+        + "Rules:\n"
+        "- Translate from SOURCE again; use CURRENT only to see what the user disliked — do not just copy it.\n"
+        "- Keep the SAME number of items and the same order; one output per item, never merge or split.\n"
+        "- Spoken as voice-over in the same time slot: stay within [max N chars]; never output the bracket.\n"
+        "- Keep names and numbers unless the glossary says otherwise. No explanations, no quotes."
+        + (f"\nGlossary — always use these exact translations:\n{gl}" if gl else "")
+        + ctx
+        + "\n- Return ONLY a JSON object: {\"translations\": [\"...\", \"...\"]}\n\nItems:\n" + "\n".join(rows)
+    )
+
+
+def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settings: Settings, target: str,
+                source_hint: str = "", style: str = "", instruction: str = "",
+                on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
+                cancel: threading.Event | None = None) -> dict[int, str]:
+    """Dịch lại các cue ``idxs`` (chỉ số trong ``cues`` — bản gốc) theo yêu cầu người dùng, có xem bản dịch hiện tại
+    ``previous`` và câu xung quanh làm ngữ cảnh. Bỏ qua bộ nhớ dịch / checkpoint (đó chính là bản cũ bị chê);
+    kết quả mới ghi đè vào bộ nhớ dịch để những lần dịch sau dùng bản mới. Trả {chỉ số: bản dịch mới}."""
+    router = Router(settings, log)
+    target_en = _LANG_HINT.get(target, target)
+    memory = TranslationMemory()
+    cps = _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS)
+    idxs = sorted(set(i for i in idxs if 0 <= i < len(cues)))
+    out: dict[int, str] = {}
+    # gom theo lô các câu liền nhau để ngữ cảnh trước/sau có nghĩa
+    batches: list[list[int]] = []
+    for i in idxs:
+        if batches and i == batches[-1][-1] + 1 and len(batches[-1]) < BATCH:
+            batches[-1].append(i)
+        elif batches and len(batches[-1]) < 8 and i - batches[-1][-1] <= CONTEXT:
+            batches[-1].append(i)            # câu lẻ gần nhau → chung một lô
+        else:
+            batches.append([i])
+    for n, batch in enumerate(batches):
+        if cancel is not None and cancel.is_set():
+            memory.save()
+            raise RenderCancelled("Đã huỷ dịch lại.")
+        items = [(cues[i].plain or "…", (previous[i] if i < len(previous) else "").replace("\n", " "),
+                  max(12, int(round(cues[i].duration * cps * 1.15)))) for i in batch]
+        a, b = batch[0], batch[-1]
+        before = [cues[j].plain for j in range(max(0, a - CONTEXT), a)]
+        after = [cues[j].plain for j in range(b + 1, min(len(cues), b + 1 + CONTEXT))]
+        prompt = _retranslate_prompt(items, before, after, target_en, source_hint, style, instruction,
+                                     settings.glossary)
+        result: list[str] | None = None
+        for _attempt in range(3):
+            try:
+                result = _parse(router.call(prompt), len(batch))
+                break
+            except (ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Lô dịch lại không hợp lệ (%s), thử lại", exc)
+        if result is None:
+            raise RuntimeError("AI trả về không đúng định dạng sau 3 lần thử — thử lại hoặc đổi model ở Cài đặt.")
+        for i, t in zip(batch, result):
+            if t:
+                out[i] = t
+                if cues[i].plain:
+                    memory.put(target, cues[i].plain, t)
+        if on_progress:
+            on_progress((n + 1) / len(batches))
+        if log:
+            log(f"Đã dịch lại {sum(len(x) for x in batches[:n + 1])}/{len(idxs)} câu "
+                f"({router.current.provider}/{router.current.model})")
+    memory.save()
+    return out
+
+
 def detect_language(cues: list[Cue], settings: Settings) -> str:
     sample = " ".join(c.plain for c in cues[:15])[:800]
     if not sample:
