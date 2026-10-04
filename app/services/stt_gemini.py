@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.services.ffmpeg import FFmpeg, RenderCancelled
-from app.services.gemini_client import GeminiClient
+from app.services.gemini_client import GeminiBusy, GeminiClient, GeminiModelGone
 from app.services.srt_utils import Cue, wrap_lines
 from app.services.whisper_stt import STTResult
 
@@ -44,6 +44,9 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
                log: Callable[[str], None] | None = None,
                cancel: threading.Event | None = None) -> STTResult:
     client = GeminiClient(api_key)
+    from app.services.gemini_models import DEFAULT_TEXT
+
+    models = [model] + [m for m in DEFAULT_TEXT if m != model and "pro" not in m][:2]
     work_dir = work_dir or Path(video_path).parent
     work_dir.mkdir(parents=True, exist_ok=True)
     duration = ffmpeg.duration_of(video_path)
@@ -75,7 +78,18 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
                                                     {"inlineData": {"mimeType": "audio/mp3", "data": audio_b64}}]}],
             "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json", "maxOutputTokens": 65536},
         }
-        data = client._post(f"models/{model}:generateContent", body, timeout=600)
+        data = None
+        for m in models:                    # máy chủ quá tải / model bị gỡ → thử model dự phòng, không bỏ cả video
+            try:
+                data = client._post(f"models/{m}:generateContent", body, timeout=600)
+                break
+            except (GeminiBusy, GeminiModelGone) as exc:
+                if m == models[-1]:
+                    raise
+                nxt = models[models.index(m) + 1]
+                logger.warning("Gemini STT: %s lỗi (%s) → thử %s", m, exc, nxt)
+                if log:
+                    log(f"⚠ Gemini {m} đang quá tải / lỗi — chuyển sang {nxt}…")
         cands = data.get("candidates") or []
         text = "".join(p.get("text", "") for p in (cands[0].get("content", {}).get("parts", []) if cands else []))
         try:

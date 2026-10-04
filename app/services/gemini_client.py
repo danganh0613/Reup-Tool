@@ -25,6 +25,10 @@ class GeminiError(RuntimeError):
     pass
 
 
+class GeminiBusy(GeminiError):
+    """Máy chủ Gemini quá tải / lỗi tạm (5xx, mạng) sau nhiều lần thử — nơi gọi nên thử model khác."""
+
+
 class GeminiModelGone(GeminiError):
     """Model đã bị Google gỡ (404) — nơi gọi nên thử model khác trong ``TEXT_MODELS``."""
 
@@ -99,9 +103,10 @@ class GeminiClient:
                 if r.status_code != 200:
                     raise GeminiError(f"Gemini {r.status_code} ({model}): {self._api_message(r)}")
                 return r.json()
-            wait = 3.0 * (attempt + 1)
-            logger.warning("Gemini (%s) — thử lại sau %.0fs", model, wait)
-            time.sleep(wait)
+            if attempt + 1 < retries:
+                wait = min(30.0, 4.0 * 2 ** attempt)          # 4 → 8 → 16 s: 503 «quá tải» thường qua sau vài chục giây
+                logger.warning("Gemini (%s) — thử lại sau %.0fs", model, wait)
+                time.sleep(wait)
         n = len(self.keys)
         if last_status == 429:
             raise GeminiError(f"Hết hạn mức Gemini cho {model} (429){f' ở cả {n} key' if n > 1 else ''}: "
@@ -110,8 +115,8 @@ class GeminiClient:
         if last_status in (400, 403):
             raise GeminiError(f"Gemini từ chối API key ({last_status}){f' — đã thử {n} key' if n > 1 else ''}: {last_msg}")
         if last_status >= 500:
-            raise GeminiError(f"Máy chủ Gemini lỗi {last_status} ({model}): {last_msg} — thử lại sau.")
-        raise GeminiError(f"Gemini lỗi mạng ({model}): {last}")
+            raise GeminiBusy(f"Máy chủ Gemini lỗi {last_status} ({model}): {last_msg} — thử lại sau.")
+        raise GeminiBusy(f"Gemini lỗi mạng ({model}): {last}")
 
     def _get(self, path_or_url: str, *, timeout: float = 60) -> dict:
         self._check()

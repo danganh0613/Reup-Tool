@@ -753,6 +753,17 @@ class MainWindow(_Root):
             logger.exception("Việc trong hàng chờ lỗi: %s", name)
         self._show_waiting()
 
+    def retry_item(self, item: VideoItem) -> None:
+        """Nút ↻ của video lỗi trong hàng đợi: chuẩn bị lại (chế độ Duyệt) hoặc render lại đúng video đó."""
+        if item not in self.app_state.videos:
+            return
+        self.log(f"Thử lại: {item.name}")
+        if self.review_mode and item.review != "approved":
+            item.review = ""
+            self._run_queue([item], mode="prepare")
+        else:
+            self._run_queue([item], mode="render")
+
     def pipeline_for(self, item: VideoItem) -> Pipeline:
         """Pipeline với bản chụp cấu hình của ``item`` — tác vụ nền (nhận diện, dịch, tạo giọng…) không bị đổi cấu hình
         giữa chừng khi người dùng chọn sang video khác (có cấu hình riêng) hoặc chỉnh tiếp trong lúc chờ."""
