@@ -18,7 +18,6 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts, load_srt, save_srt, wrap_lines
-from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.widgets.common import StatusLabel, hint
 from app.ui.widgets.ui import Select, Tooltip, button
 
@@ -137,27 +136,32 @@ class ReviewPanel(ctk.CTkFrame):
             redo = ctk.CTkButton(self.rows_frame, text="↻", width=30, height=30, command=lambda r=r: self._ai_row(r),
                                  **{**T.secondary_button(), "font": T.font(13, "bold")})
             Tooltip(play, "Phát đúng câu này trên khung xem trước (có giọng lồng)")
-            Tooltip(redo, "AI dịch lại riêng câu này theo «Phong cách / yêu cầu» bên dưới (xem câu trước/sau làm ngữ cảnh)")
+            Tooltip(redo, "AI dịch lại riêng câu này (theo «Phong cách dịch» ở tab SRT, xem câu trước/sau làm ngữ cảnh)")
             self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "top": top,
                                "widgets": [(top, dict(row=2 * r, column=0, columnspan=2, sticky="ew", padx=4, pady=(4, 0))),
                                            (ent, dict(row=2 * r + 1, column=0, sticky="ew", padx=(4, 2), pady=(0, 2))),
                                            (redo, dict(row=2 * r + 1, column=1, padx=(2, 4), pady=(0, 2)))]})
 
-        # ── AI dịch lại: dùng chung ô «Phong cách dịch» của tab SRT (một chỗ cấu hình duy nhất) ──
+        # ── Nhờ AI sửa (kiểu chat): AI tự tìm câu liên quan tới yêu cầu và chỉ sửa đúng những câu đó ──
         self.ai_bar = ctk.CTkFrame(self, fg_color="transparent")
         self.ai_bar.grid(row=5, column=0, sticky="ew", padx=2, pady=(6, 0))
         self.ai_bar.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(self.ai_bar, text="Phong cách dịch (chọn gợi ý hoặc gõ yêu cầu, vd «xưng anh–em»)", font=T.font(11),
-                     text_color=T.TEXT_DIM, anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
-        self.ai_req = ctk.CTkComboBox(self.ai_bar, values=RETRANSLATE_PRESETS, height=30, font=T.font(12),
-                                      command=lambda _v: self._req_changed())
+        ctk.CTkLabel(self.ai_bar, text="Nhờ AI sửa phụ đề — AI tự tìm đúng câu cần sửa, câu khác giữ nguyên",
+                     font=T.font(11), text_color=T.TEXT_DIM, anchor="w").grid(row=0, column=0, columnspan=3,
+                                                                              sticky="ew", pady=(0, 2))
+        self.ai_req = ctk.CTkEntry(self.ai_bar, height=32, font=T.font(12),
+                                   placeholder_text="vd: câu hỏi «bắt về nuôi» thêm «Con này» ở đầu")
         self.ai_req.grid(row=1, column=0, sticky="ew")
-        self.ai_req.bind("<FocusOut>", lambda _e: self._req_changed())
-        Tooltip(self.ai_req, "Phong cách / yêu cầu dịch (chung với ô «Phong cách» ở tab SRT), vd «xưng anh–em, văn nói»")
-        self.ai_all_btn = button(self.ai_bar, "Dịch lại cả video", icon_name="sparkle", size="sm", command=self._ai_all,
-                                 tip="AI dịch lại toàn bộ theo yêu cầu (xem bản hiện tại để biết bạn chưa ưng chỗ nào). "
-                                     "Kết quả vào ô sửa — xem rồi bấm Lưu.")
-        self.ai_all_btn.grid(row=1, column=1, padx=(6, 0))
+        self.ai_req.bind("<Return>", lambda _e: (self._ai_edit(), "break")[1])
+        self.ai_send = button(self.ai_bar, "Gửi", icon_name="sparkle", size="sm", command=self._ai_edit,
+                              tip="Gửi yêu cầu (Enter). Câu AI sửa được tô vàng, chưa lưu — xem rồi bấm «Lưu & tạo lại giọng».")
+        self.ai_send.grid(row=1, column=1, padx=(6, 0))
+        self.ai_undo = button(self.ai_bar, "Hoàn tác", icon_name="undo", variant="ghost", size="sm", command=self._ai_revert,
+                              tip="Trả lại các câu như trước lần AI sửa gần nhất")
+        self.ai_undo.grid(row=1, column=2, padx=(4, 0))
+        self.ai_undo.grid_remove()
+        self._ai_marks: set[int] = set()          # câu AI vừa sửa (tô vàng tới khi lưu / đổi video)
+        self._ai_before: dict[int, str] | None = None
 
         nav = ctk.CTkFrame(self, fg_color="transparent")
         nav.grid(row=6, column=0, sticky="ew", padx=2, pady=(6, 0))
@@ -188,7 +192,6 @@ class ReviewPanel(ctk.CTkFrame):
 
     # ── Giao diện module ─────────────────────────────────────────────────
     def refresh(self) -> None:
-        self._load_req()
         self._update_counts()
 
     def on_shown(self) -> None:
@@ -280,7 +283,7 @@ class ReviewPanel(ctk.CTkFrame):
         self._cur = -1
         self._stop_at = None
         self._update_counts()
-        self._load_req()
+        self._clear_ai_marks()
         if it is None:
             self.info_lbl.configure(text="Nạp video vào hàng đợi rồi bấm «Chuẩn bị» trên cùng.")
             self.cues, self.texts, self._orig_texts = [], [], []
@@ -354,16 +357,12 @@ class ReviewPanel(ctk.CTkFrame):
             else:
                 for w, _kw in row["widgets"]:
                     w.grid_remove()
-        old = getattr(self, "_painted", -1)
-        if 0 <= old < len(self._rows):
-            self._rows[old]["play"].configure(text_color=T.TEXT_MUTED)
-            self._rows[old]["entry"].configure(border_color=T.BORDER)
+        for r in range(len(self._rows)):
+            i = self._row_index(r)
+            self._rows[r]["play"].configure(text_color=T.TEXT_MUTED)
+            self._rows[r]["entry"].configure(border_color=self._base_border(i))
         self._painted = -1
         self._paint_current()
-        if self._is_translation:
-            self.ai_bar.grid()
-        else:
-            self.ai_bar.grid_remove()
         self.page_lbl.configure(text=f"Trang {self.page + 1}/{pages}" if self.cues else "")
         self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
@@ -455,7 +454,7 @@ class ReviewPanel(ctk.CTkFrame):
         for r, on in ((old, False), (want, True)):
             if 0 <= r < len(self._rows):
                 self._rows[r]["play"].configure(text_color=T.ACCENT if on else T.TEXT_MUTED)
-                self._rows[r]["entry"].configure(border_color=T.ACCENT if on else T.BORDER)
+                self._rows[r]["entry"].configure(border_color=T.ACCENT if on else self._base_border(self._row_index(r)))
         self._painted = want
         if want >= 0 and self.window.preview.player.playing:
             try:
@@ -486,6 +485,9 @@ class ReviewPanel(ctk.CTkFrame):
             return
         save_srt(self.cues, self.edit_path)
         self._orig_texts = list(self.texts)
+        if self._ai_marks:
+            self._clear_ai_marks()
+            self._show_page(self.page, sync=False)
         self.window.log(f"{it.name}: đã sửa {changed} câu phụ đề.")
         st = self.app_state.state_for(it)
         if st.tts.enable_tts:
@@ -496,26 +498,98 @@ class ReviewPanel(ctk.CTkFrame):
         self.window.preview.schedule_refresh(0)
 
     # ── AI dịch lại ──────────────────────────────────────────────────────
-    def _load_req(self) -> None:
-        self.ai_req.set(self.app_state.subtitle.translate_style or "")
+    def _base_border(self, i: int | None) -> str:
+        return T.WARNING if i is not None and i in self._ai_marks else T.BORDER
 
-    def _req_changed(self) -> None:
-        v = self.ai_req.get().strip()
-        cfg = self.app_state.subtitle
-        if v != cfg.translate_style:
-            cfg.translate_style = v
-            self.app_state.config_changed("subtitle")
-            m = self.window.modules.get("srt")
-            if m is not None:
-                m.refresh()
+    def _clear_ai_marks(self) -> None:
+        self._ai_marks = set()
+        self._ai_before = None
+        self.ai_undo.grid_remove()
+
+    def _ai_edit(self) -> None:
+        """Gửi yêu cầu tự do cho AI; AI trả về đúng các câu cần đổi → điền vào ô sửa, tô vàng, chưa lưu."""
+        it = self.item
+        req = self.ai_req.get().strip()
+        if it is None or not self.cues:
+            return
+        if not req:
+            self.status.info("Gõ yêu cầu trước, vd «câu hỏi bắt về nuôi thêm 'Con này' ở đầu», «sửa tên Lý Tiểu Long».")
+            return
+        from app.services.translate_router import ai_edit
+
+        self._sync()
+        current = list(self.texts)
+        source = [c.plain for c in self.ref] if self._is_translation else None
+        st = self.app_state.state_for(it)
+        win = self.window
+        self.status.warn(f"AI đang đọc {len(current)} câu để sửa theo «{req}»…")
+        self.ai_send.configure(state="disabled")
+
+        def work(cancel):
+            return ai_edit(current, source, req, settings=st.settings, target=st.subtitle.translate_target,
+                           style=st.subtitle.translate_style, log=win.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if not self.winfo_exists():
+                return
+            self.ai_send.configure(state="normal")
+            if self.item is not it:
+                return
+            if error:
+                self.status.error(f"AI sửa lỗi: {str(error).splitlines()[0][:200]}")
+                return
+            edits, note = result
+            self._sync()
+            before = {i: self.texts[i] for i in edits if i < len(self.texts)}
+            for i, t in edits.items():
+                if i < len(self.texts):
+                    self.texts[i] = t
+            if not before:
+                self.status.info(f"AI không thấy câu nào cần sửa. {note}".strip())
+                return
+            self._ai_before = before
+            self._ai_marks = set(before)
+            self.ai_undo.grid()
+            first = min(before)
+            self._show_page(first // self.PAGE, sync=False)
+            self._scroll_to(first)
+            nums = ", ".join(f"#{i + 1}" for i in sorted(before)[:12]) + ("…" if len(before) > 12 else "")
+            self.status.ok(f"AI sửa {len(before)} câu ({nums}) — tô vàng, chưa lưu. {note} Xem rồi bấm «Lưu & tạo lại giọng»."
+                           .replace("  ", " "))
+            self.ai_req.delete(0, "end")
+
+        win.run_task("AI sửa phụ đề", work, done)
+
+    def _scroll_to(self, i: int) -> None:
+        """Cuộn danh sách câu tới câu ``i`` (đang ở trang hiện tại)."""
+        idxs = self._range()
+        if i not in idxs:
+            return
+        self.update_idletasks()
+        try:
+            r = i - idxs[0]
+            self.rows_frame._parent_canvas.yview_moveto(max(0.0, (r - 1) / max(1, len(idxs))))
+        except Exception:
+            pass
+
+    def _ai_revert(self) -> None:
+        if not self._ai_before:
+            return
+        self._sync()
+        for i, t in self._ai_before.items():
+            if i < len(self.texts):
+                self.texts[i] = t
+        n = len(self._ai_before)
+        self._clear_ai_marks()
+        self._show_page(self.page, sync=False)
+        self.status.info(f"Đã hoàn tác {n} câu AI vừa sửa.")
 
     def _retranslate(self, idxs: list[int] | None, label: str) -> None:
         it = self.item
         if it is None or not self._is_translation:
             return
         self._sync()
-        self._req_changed()
-        req = self.ai_req.get().strip()
+        req = ""                                   # ↻: dịch lại theo «Phong cách dịch» (tab SRT) + câu xung quanh
         previous = list(self.texts)
         pipe = self.window.pipeline_for(it)
         win = self.window
@@ -537,6 +611,7 @@ class ReviewPanel(ctk.CTkFrame):
             for i, t in result.items():
                 if i < len(self.texts) and t.strip() and t.strip() != self.texts[i].strip():
                     self.texts[i] = t.strip()
+                    self._ai_marks.add(i)
                     changed += 1
             self._show_page(self.page, sync=False)
             if changed:
@@ -551,10 +626,6 @@ class ReviewPanel(ctk.CTkFrame):
         i = self._row_index(r)
         if i is not None:
             self._retranslate([i], f"Dịch lại câu {i + 1}")
-
-    def _ai_all(self) -> None:
-        if self.cues:
-            self._retranslate(None, "AI dịch lại phụ đề")
 
     # ── Hành động ────────────────────────────────────────────────────────
     def _prepare_one(self, it: VideoItem, label: str = "Chuẩn bị") -> None:

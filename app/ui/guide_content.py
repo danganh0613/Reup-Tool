@@ -131,7 +131,10 @@ TOPICS: list[dict] = [
         ("steps", [
             "Đổi video bằng ‹ › hoặc ô chọn (dấu ● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
             "Bấm vào ô câu → khung xem trước nhảy tới cảnh câu đó. Bấm «▶ số câu» → phát đúng câu đó có giọng lồng rồi tự dừng.",
-            "Sửa câu: Enter / ↑ ↓ để sang câu kế. Dịch chưa hay: ↻ (một câu) hoặc «Dịch lại cả video» theo ô phong cách / yêu cầu.",
+            "Sửa câu: Enter / ↑ ↓ để sang câu kế. Một câu dịch dở: bấm ↻ cạnh câu đó.",
+            "Ô «Nhờ AI sửa phụ đề»: gõ yêu cầu như nhắn tin, vd «câu hỏi bắt về nuôi thì thêm Con này ở đầu», «sửa tên "
+            "Tiểu Long thành Lý Tiểu Long», «dịch lại cho tự nhiên hơn» → Enter. AI tự tìm đúng các câu liên quan, chỉ sửa "
+            "những câu đó (tô vàng, chưa lưu); không ưng bấm «Hoàn tác».",
             "«Lưu & tạo lại giọng» → nghe lại → «Duyệt» (Ctrl+Enter) hoặc «Bỏ qua». Xong hết bấm «Xuất (n)» trên cùng.",
         ]),
         ("tip", "Chỉnh khung phụ đề, che mờ, giọng… của riêng video đang duyệt: mở tab tương ứng như bình thường, xong quay lại tab Duyệt."),
@@ -172,8 +175,8 @@ TOPICS: list[dict] = [
             "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: ghi yêu cầu vào ô «Phong cách dịch», "
             "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «Dịch lại (bản mới)». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
             "Chỉ vài câu dở: «Mở bảng dịch từng câu» → tick các câu đó → «AI dịch / dịch lại đã chọn».",
-            "Ở tab Duyệt: nút ↻ cạnh từng câu hoặc «Dịch lại cả video» (cùng ô phong cách / yêu cầu). Kết quả hiện trong ô "
-            "sửa để bạn nghe / xem trước — ưng thì bấm «Lưu & tạo lại giọng».",
+            "Ở tab Duyệt: nút ↻ cạnh từng câu, hoặc ô «Nhờ AI sửa phụ đề» — gõ yêu cầu, AI chỉ sửa đúng những câu liên quan "
+            "(tô vàng, xem trước được) — ưng thì bấm «Lưu & tạo lại giọng».",
             "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
         ("kv", [

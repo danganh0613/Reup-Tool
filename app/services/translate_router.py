@@ -484,6 +484,73 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
     return out
 
 
+# ── Nhờ AI sửa phụ đề theo yêu cầu (chỉ sửa đúng câu liên quan) ──────────
+
+EDIT_CHUNK = 220          # số câu mỗi lần gửi (phụ đề rất dài → chia lô, mỗi lô thấy cùng yêu cầu)
+
+
+def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str, style: str, glossary: str) -> str:
+    lines = []
+    for n, src, cur in rows:
+        lines.append(f"{n}. CURRENT: {cur}" + (f"\n   SOURCE: {src}" if src and src != cur else ""))
+    gl = _glossary_lines(glossary)
+    return (
+        f"You are editing on-screen subtitles in {target} for a video. Each numbered line shows the CURRENT subtitle "
+        "(and the original SOURCE line when it is a translation).\n"
+        f"The user asks: «{instruction.strip()}»\n"
+        "Rules:\n"
+        "- Change ONLY the lines this request applies to. Leave every other line exactly as it is and do not list it.\n"
+        "- Decide which lines are affected from their meaning (e.g. «the question about taking it home» → every line "
+        "with that meaning), not just exact wording.\n"
+        "- Return each changed line in full (the whole new subtitle text), keep it short enough to be spoken in the "
+        "same time, never merge or split lines, no quotes or explanations inside the text.\n"
+        + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
+        + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
+        + "- Return ONLY JSON: {\"edits\": [{\"n\": <line number>, \"text\": \"<new line>\"}], "
+        "\"note\": \"<one short sentence in Vietnamese saying what you changed, or why nothing matched>\"}\n\n"
+        "Lines:\n" + "\n".join(lines)
+    )
+
+
+def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, settings: Settings, target: str,
+            style: str = "", log: Callable[[str], None] | None = None,
+            cancel: threading.Event | None = None) -> tuple[dict[int, str], str]:
+    """Sửa phụ đề theo một yêu cầu tự do: AI tự tìm câu liên quan và chỉ trả về những câu đổi.
+    Trả ({chỉ số 0-based: câu mới}, ghi chú của AI)."""
+    if not instruction.strip():
+        return {}, ""
+    router = Router(settings, log)
+    target_en = _LANG_HINT.get(target, target)
+    edits: dict[int, str] = {}
+    notes: list[str] = []
+    n = len(current)
+    for a in range(0, n, EDIT_CHUNK):
+        if cancel is not None and cancel.is_set():
+            raise RenderCancelled("Đã huỷ")
+        rows = [(i + 1, (source[i] if source and i < len(source) else "").replace("\n", " "),
+                 current[i].replace("\n", " ")) for i in range(a, min(n, a + EDIT_CHUNK))]
+        text = router.call(_edit_prompt(rows, instruction, target_en, style, settings.glossary))
+        t = text.strip().strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:]
+        try:
+            data = json.loads(t)
+        except json.JSONDecodeError:
+            s0, e0 = t.find("{"), t.rfind("}")
+            data = json.loads(t[s0:e0 + 1]) if s0 >= 0 and e0 > s0 else {}
+        for e in (data.get("edits") or []) if isinstance(data, dict) else []:
+            try:
+                k = int(e.get("n")) - 1
+                new = str(e.get("text", "")).strip()
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if a <= k < min(n, a + EDIT_CHUNK) and new and new != current[k].strip():
+                edits[k] = new
+        if isinstance(data, dict) and data.get("note"):
+            notes.append(str(data["note"]).strip())
+    return edits, " ".join(notes)[:300]
+
+
 def detect_language(cues: list[Cue], settings: Settings) -> str:
     sample = " ".join(c.plain for c in cues[:15])[:800]
     if not sample:
