@@ -38,6 +38,71 @@ def _variant(name: str) -> dict:
     return {"fg_color": T.BG_ELEVATED, "hover_color": T.BG_HOVER, "text_color": T.TEXT, "border_width": 0}
 
 
+# ── Nút nền màu khi bị khoá (state="disabled") ───────────────────────────
+# CTk giữ nguyên nền sáng nhưng đổi chữ sang xám → nút «Dừng» đỏ chữ xám, nút chính xanh chữ xám trông như lỗi.
+# Ở đây: nút nền màu (chính / xoá-dừng) khi khoá → nền dịu đi (màu «soft» cùng tông), chữ + icon vẫn rõ, cùng một
+# kiểu cho mọi nút trong app (kể cả nút tạo thẳng bằng CTkButton với T.primary_button() / T.danger_button()).
+def _disabled_look(fg) -> tuple[str, str] | None:
+    """(nền, chữ) khi khoá cho nút nền ``fg``; None = nút không nền màu (giữ kiểu mặc định của CTk)."""
+    c = (fg[-1] if isinstance(fg, (list, tuple)) else fg or "")
+    c = str(c).upper()
+    if c == str(T.ACCENT).upper():
+        return T.ACCENT_SOFT, T.ACCENT
+    if c in (str(T.DANGER).upper(), str(T.DANGER_HOVER).upper()):
+        return T.DANGER_SOFT, "#FFFFFF"
+    return None
+
+
+def _sync_state(b: ctk.CTkButton) -> None:
+    on = getattr(b, "_es_on", None)
+    if on is None:
+        fg = b.cget("fg_color")
+        look = _disabled_look(fg)
+        on = b._es_on = (fg, look) if look else False
+    disabled = str(b.cget("state")) == "disabled"
+    if on:
+        fg, (soft_fg, soft_text) = on
+        _ORIG_CONFIGURE(b, fg_color=soft_fg if disabled else fg, text_color_disabled=soft_text)
+    else:                                        # nút xám / trong suốt: icon mờ cùng chữ
+        dis = b.cget("text_color_disabled")
+        soft_text = dis[-1] if isinstance(dis, (list, tuple)) else dis
+        if not str(soft_text).startswith("#"):          # tên màu Tk (vd. «gray60») → hex cho bộ vẽ icon
+            try:
+                r, g, bl = (v >> 8 for v in b.winfo_rgb(soft_text))
+                soft_text = f"#{r:02X}{g:02X}{bl:02X}"
+            except Exception:
+                soft_text = T.TEXT_MUTED
+    ic = getattr(b, "_es_icon", None)
+    if ic and ic[0]:
+        name, isz, color = ic[0], ic[1], ic[2]
+        _ORIG_CONFIGURE(b, image=icon(name, isz, soft_text if disabled else color,
+                                      dy=ICON_DY if str(b.cget("text")).strip() else 0))
+
+
+_ORIG_INIT = ctk.CTkButton.__init__
+_ORIG_CONFIGURE = ctk.CTkButton.configure
+
+
+def _btn_init(self, *a, **kw) -> None:
+    _ORIG_INIT(self, *a, **kw)
+    self._es_on = None
+    _sync_state(self)
+
+
+def _btn_configure(self, require_redraw: bool = False, **kw) -> None:
+    if "fg_color" in kw:
+        self._es_on = None                       # đổi màu nền → tính lại kiểu khi khoá theo màu mới
+    _ORIG_CONFIGURE(self, require_redraw, **kw)
+    if ("state" in kw or "fg_color" in kw) and hasattr(self, "_es_on"):
+        _sync_state(self)
+
+
+if not getattr(ctk.CTkButton, "_es_patched", False):
+    ctk.CTkButton.__init__ = _btn_init
+    ctk.CTkButton.configure = _btn_configure
+    ctk.CTkButton._es_patched = True
+
+
 def _scale(w) -> float:
     try:
         return float(ctk.ScalingTracker.get_widget_scaling(w)) or 1.0
@@ -81,6 +146,8 @@ def button(master, text: str = "", *, icon_name: str | None = None, variant: str
     b = ctk.CTkButton(master, text=text, image=img, compound="left", height=h, width=width, corner_radius=T.RADIUS,
                       font=font, command=command, **style, **kw)
     b._es_icon = (icon_name, isz, icon_color or style["text_color"], size, font)   # để relabel() vẽ lại icon/đo chữ đúng
+    if str(b.cget("state")) == "disabled":
+        _sync_state(b)                           # icon theo màu chữ khi khoá
     if tip:
         b.tooltip = Tooltip(b, tip)
     return b
@@ -95,6 +162,8 @@ def relabel(b: ctk.CTkButton, text: str, *, width: int | None = None) -> None:
         kw["image"] = icon(name, isz, color, dy=ICON_DY if text else 0)
     kw["width"] = width if width is not None else button_width(b.master, text, size=size, icon=bool(name), font=font)
     b.configure(**kw)
+    if str(b.cget("state")) == "disabled":
+        _sync_state(b)
 
 
 def button_icon(name: str, *, size: str = "md", color: str | None = None, with_text: bool = True) -> ctk.CTkImage | None:
