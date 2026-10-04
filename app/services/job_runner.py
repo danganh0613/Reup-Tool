@@ -221,6 +221,8 @@ class Pipeline:
         return smap
 
     def voice_signature(self, item: VideoItem, srt_path: str, extra_key: str = "") -> str:
+        from app.services.tts.generator import TRIM_VERSION
+
         t = self.state.tts
         try:
             mtime = int(Path(srt_path).stat().st_mtime)
@@ -235,7 +237,7 @@ class Pipeline:
         raw = "|".join(str(x) for x in (
             t.tts_provider, t.edge_voice, t.eleven_voice_id, t.eleven_model, t.eleven_stability, t.eleven_similarity,
             t.eleven_style, t.eleven_speaker_boost, t.google_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo,
-            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key) + ((multi,) if multi else ())
+            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key, TRIM_VERSION) + ((multi,) if multi else ())
             + ((t.gemini_voice, t.gemini_tts_model, t.gemini_style, t.gemini_style_custom)
                if t.tts_provider.startswith("Gemini") or multi else ())
             + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ()))
@@ -523,7 +525,24 @@ class Pipeline:
                                              out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None)
             on_update(item)
 
+        if self.wants_voice_removal(info):
+            self.remove_voice(item, progress=stage("Khử giọng gốc", 0.65, 0.3), log=log, cancel=cancel)
+            on_update(item)
+
         return cues_orig, cues_tr, voice_path
+
+    # ── Khử giọng nói gốc (giữ nhạc nền + tiếng động) ─────────────────────
+    def wants_voice_removal(self, info) -> bool:
+        v = self.state.video
+        return bool(v.demucs_enable and v.keep_original_audio and not v.mute and getattr(info, "has_audio", False))
+
+    def remove_voice(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
+                     cancel: threading.Event | None = None) -> Path | None:
+        """Âm gốc đã khử giọng nói (AI, cache theo video) hoặc None nếu không làm được."""
+        from app.services.vocal_remove import separate_no_vocals
+
+        item.message = "Khử giọng gốc (AI)"
+        return separate_no_vocals(item.path, self.ffmpeg, log=log, progress=progress, cancel=cancel)
 
     def _render_one(self, item: VideoItem, info, trim, *, on_update, log, cancel, suffix: str = "",
                     final: bool = True, preview_out: Path | None = None) -> Path:
@@ -569,12 +588,13 @@ class Pipeline:
         out_path = preview_out or self.output_path(item, suffix, ext)
         voice_dur = self.ffmpeg.duration_of(voice_path) if voice_path else 0.0
         audio_override: Path | None = None
-        if vcfg.demucs_enable and vcfg.keep_original_audio and not vcfg.mute and info.has_audio:
-            from app.services.demucs_sep import separate_no_vocals
-
-            item.message = "Tách lời thoại (Demucs)"
+        if self.wants_voice_removal(info):
             on_update(item)
-            audio_override = separate_no_vocals(item.path, self.ffmpeg, log=log, cancel=cancel)
+            audio_override = self.remove_voice(item, log=log, cancel=cancel)       # đã làm ở bước chuẩn bị → cache
+            if audio_override is None:
+                # không khử được (thiếu model / lỗi) → vẫn đúng ý «giọng gốc rất nhỏ»: hạ âm gốc xuống tối đa 8%
+                vcfg = dataclasses.replace(vcfg, original_volume=min(vcfg.original_volume, 8.0))
+                log("⚠ Không khử được giọng gốc — hạ âm gốc xuống ≤ 8%.")
             if audio_override is not None and trim.active:
                 # cắt track thay thế theo đúng các đoạn giữ lại
                 parts = []

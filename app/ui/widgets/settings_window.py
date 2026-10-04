@@ -55,7 +55,7 @@ GUIDE = [
     ]),
     ("Bộ công cụ video (F6 – F10)", T.WARNING, [
         ("F6 · Che mờ thông minh", "Vẽ nhiều vùng che (mờ / pixel / đen), bo góc, mềm mép, theo khoảng thời gian."),
-        ("F7 · Nhạc nền & tách vocal", "Nhiều đoạn nhạc trên timeline, tự hạ nhạc khi có giọng (ducking), tách lời bằng Demucs."),
+        ("F7 · Nhạc nền & tách vocal", "Nhiều đoạn nhạc trên timeline, tự hạ nhạc khi có giọng (ducking), khử giọng gốc bằng AI."),
         ("F8 · Logo, khung viền & watermark", "Logo/chữ/watermark có chuyển động, vùng an toàn TikTok, khung viền trang trí."),
         ("F9 · Cắt gọt & tỉ lệ khung hình", "Cắt đầu/cuối, nhiều đoạn (ghép liền hoặc xuất từng file); đổi 16:9 ↔ 9:16 ↔ 1:1 với nền mờ."),
         ("F10 · Hiệu ứng hình ảnh", "Lật gương, preset màu, sáng/tương phản/bão hoà, khử rung, hạt phim, vignette, Ken Burns, texture."),
@@ -397,7 +397,7 @@ class SettingsWindow(ctk.CTkToplevel):
                                         f"Tổng: {tts + pv + jobs:.1f} MB")
 
     def _clean_cache(self) -> None:
-        for d in (PREVIEW_CACHE_DIR, CACHE_DIR / "demucs"):
+        for d in (PREVIEW_CACHE_DIR, CACHE_DIR / "demucs", CACHE_DIR / "novocal"):
             shutil.rmtree(d, ignore_errors=True)
             d.mkdir(parents=True, exist_ok=True)
         self._cache_sizes()

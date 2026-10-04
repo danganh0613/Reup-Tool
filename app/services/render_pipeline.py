@@ -383,7 +383,7 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
             # sidechaincompress kết thúc khi nhánh sidechain (giọng) hết → đệm giọng vô hạn để âm gốc không bị cụt
             g.add(f"{voice}asplit=2[voice_a][voice_b0]")
             g.add("[voice_b0]apad[voice_b]")
-            g.add(f"{orig}[voice_b]sidechaincompress=threshold=0.035:ratio=7:attack=12:release=420:makeup=1[ducked]")
+            g.add(f"{orig}[voice_b]sidechaincompress=threshold=0.035:ratio=6:attack=25:release=900:makeup=1[ducked]")
             g.add("[ducked][voice_a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]")
         else:
             g.add(f"{orig}{voice}amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]")
@@ -502,7 +502,7 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
                 audio_override: Path | None = None, voice_duration: float = 0.0,
                 audio_only: bool = False, audio_orig_filters: list[str] | None = None,
                 log: Callable[[str], None] | None = None) -> RenderPlan:
-    """``audio_override``: file audio thay cho tiếng gốc (vd đã tách giọng bằng Demucs).
+    """``audio_override``: file audio thay cho tiếng gốc (vd âm gốc đã khử giọng nói bằng AI).
     ``voice_duration`` + ``vcfg.loop_to_voice``: lặp video cho đủ thời lượng giọng đọc."""
     job_dir.mkdir(parents=True, exist_ok=True)
     loop_video = bool(vcfg.loop_to_voice and voice_path is not None and voice_duration > 0

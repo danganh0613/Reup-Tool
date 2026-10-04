@@ -122,27 +122,20 @@ class VideoModule(BaseModule):
         sec = Section(self, "Âm thanh")
         sec.pack(fill="x", pady=4)
         self.keep = SwitchRow(sec.body, "Phát âm thanh gốc của video", on_change=s(cfg, "keep_original_audio", preview=False))
-        self.orig_vol = SliderRow(sec.body, "Âm gốc", from_=0, to=200, step=5, suffix="%",
+        self.novocal = SwitchRow(sec.body, "Khử giọng nói gốc (AI) — giữ nhạc nền & tiếng động", on_change=self._novocal_toggled)
+        self.novocal_hint = hint(sec.body, "")
+        self.orig_vol = SliderRow(sec.body, "Âm gốc / nền", from_=0, to=200, step=5, suffix="%",
                                   on_change=s(cfg, "original_volume", cast=float, preview=False))
         self.tts_vol = SliderRow(sec.body, "Lồng tiếng", from_=0, to=300, step=5, suffix="%",
                                  on_change=s(cfg, "tts_volume", cast=float, preview=False))
         self.duck = SwitchRow(sec.body, "Tự hạ âm nền khi có lời đọc", on_change=s(cfg, "adaptive_ducking", preview=False))
         self.norm = SwitchRow(sec.body, "Chuẩn hóa âm lượng đầu ra", on_change=s(cfg, "normalize_audio", preview=False))
-        self.vocal = SwitchRow(sec.body, "Lọc giọng nói gốc (khử ồn/vocal)", on_change=s(cfg, "vocal_filter", preview=False))
         self.mute = SwitchRow(sec.body, "Tắt toàn bộ âm thanh", on_change=s(cfg, "mute", preview=False))
         self.loop = SwitchRow(sec.body, "Lặp video cho đủ thời lượng giọng đọc", on_change=s(cfg, "loop_to_voice", preview=False))
-        pack_rows(sec.body, [self.keep, self.orig_vol, self.tts_vol, self.duck, self.norm, self.vocal, self.mute, self.loop])
-        hint(sec.body, "Gợi ý: âm gốc 20–40% làm nền · lồng tiếng 120–160%. Khi bật tự hạ nền, âm gốc sẽ giảm mượt "
-                       "lúc TTS phát rồi tăng lại sau lời nói.").pack(fill="x", pady=(2, 0))
-
-        sec = Section(self, "Tách lời nâng cao (AI)")
-        sec.pack(fill="x", pady=4)
-        self.demucs = SwitchRow(sec.body, "Dùng Demucs để giảm lời thoại gốc", on_change=self._demucs_toggled)
-        self.demucs.pack(fill="x", pady=3)
-        self.demucs_hint = hint(sec.body, "Chỉ áp dụng khi Render MP4 và đang giữ âm gốc. Dùng AI tách riêng lời thoại "
-                                          "gốc khỏi nhạc nền để video lồng tiếng trong trẻo nhất.")
-        self.demucs_hint.pack(fill="x")
-        ButtonRow(sec.body, [("⬇ Cài Demucs (cần ~2GB, có torch)", self._install_demucs, None)]).pack(fill="x", pady=(4, 0))
+        pack_rows(sec.body, [self.keep, self.novocal, self.novocal_hint, self.orig_vol, self.tts_vol, self.duck,
+                             self.norm, self.mute, self.loop])
+        hint(sec.body, "Lồng tiếng: bật «Khử giọng nói gốc» rồi để âm nền 60–90% (chỉ còn nhạc & tiếng động) · lồng tiếng "
+                       "120–160%. Tự hạ nền: nhạc nền giảm mượt khi có lời đọc rồi lên lại.").pack(fill="x", pady=(2, 0))
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:
@@ -170,10 +163,10 @@ class VideoModule(BaseModule):
             self.tts_vol.set(cfg.tts_volume)
             self.duck.set(cfg.adaptive_ducking)
             self.norm.set(cfg.normalize_audio)
-            self.vocal.set(cfg.vocal_filter)
             self.mute.set(cfg.mute)
             self.loop.set(cfg.loop_to_voice)
-            self.demucs.set(cfg.demucs_enable)
+            self.novocal.set(cfg.demucs_enable)
+            self._novocal_status()
             self.review.set(bool(self.state.ui.get("review_mode")))
         finally:
             self._loading = False
@@ -188,6 +181,7 @@ class VideoModule(BaseModule):
         self.update_fit_hint()
         self.update_own()
         self._name_example()
+        self._novocal_status()
 
     def _name_example(self) -> None:
         """Ví dụ tên file xuất theo mẫu tên đang nhập."""
@@ -388,24 +382,30 @@ class VideoModule(BaseModule):
         val = next((k for k, v in SPEED_LABELS.items() if v == label), 100)
         self.set_value(self.state.video, "speed", int(val), preview=False)
 
-    def _demucs_toggled(self, v: bool) -> None:
-        from app.services.demucs_sep import is_installed
-
-        if v and not is_installed():
-            self.demucs_hint.configure(text="⚠ Chưa cài Demucs — bấm “Cài Demucs” (tải torch + model, ~2GB). "
-                                            "Khi chưa cài, render sẽ dùng bộ lọc khử vocal thường.")
+    def _novocal_toggled(self, v: bool) -> None:
         self.set_value(self.state.video, "demucs_enable", bool(v), preview=False)
+        if v and self.state.video.original_volume < 40:
+            # trước đây âm gốc để nhỏ cho đỡ lẫn giọng; giờ chỉ còn nhạc & tiếng động → nâng lên mức nền dễ nghe
+            self.set_value(self.state.video, "original_volume", 70.0, preview=False)
+            self.orig_vol.set(70.0)
+        self._novocal_status()
+        self.window.preview.ensure_no_vocals()
 
-    def _install_demucs(self) -> None:
-        from app.services.demucs_sep import install_demucs, is_installed
+    def _novocal_status(self) -> None:
+        from app.services.vocal_remove import cached_no_vocals, model_ready
 
-        if is_installed():
-            self.demucs_hint.configure(text="Demucs đã được cài — bật công tắc ở trên để dùng.")
-            return
-        self.demucs_hint.configure(text="Đang cài Demucs… xem Nhật ký (vài phút).")
-        self.window.run_bg(lambda: install_demucs(self.window.log_bg),
-                           lambda r, e: self.demucs_hint.configure(
-                               text="Đã cài Demucs." if r and not e else f"Cài Demucs thất bại: {e or 'xem Nhật ký'}"))
+        if not self.state.video.demucs_enable:
+            text = ("Tắt: giữ nguyên âm gốc (cả giọng nói). Bật khi lồng tiếng: AI bỏ giọng Trung / Anh… của video gốc, "
+                    "giữ nhạc nền & tiếng động. Chạy trên máy, ~1 phút cho mỗi phút video, làm một lần ở bước Chuẩn bị.")
+        else:
+            it = self.state.active
+            if it is not None and cached_no_vocals(it.path) is not None:
+                text = "✓ Video này đã khử giọng gốc."
+            elif not model_ready():
+                text = "Lần đầu sẽ tải model AI (~64 MB). Chưa khử xong thì xem trước tạm vặn âm gốc rất nhỏ."
+            else:
+                text = "Video này sẽ được khử giọng khi Chuẩn bị / Render (xem trước tự khử nền nếu đang mở)."
+        self.novocal_hint.configure(text=text)
 
     # ── Hàng đợi ─────────────────────────────────────────────────────────
     def _add_files(self) -> None:

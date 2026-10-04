@@ -289,9 +289,9 @@ class FFmpeg:
             raise RuntimeError(res.stderr.decode("utf-8", "replace")[-300:])
         return res.stdout
 
-    def extract_audio_wav(self, src: str | Path, dst: str | Path, *, sample_rate: int = 16000) -> Path:
-        """Tách audio ra WAV mono (dùng cho Whisper)."""
-        res = self.run_simple(["-i", str(src), "-vn", "-ac", "1", "-ar", str(sample_rate),
+    def extract_audio_wav(self, src: str | Path, dst: str | Path, *, sample_rate: int = 16000, channels: int = 1) -> Path:
+        """Tách audio ra WAV (mặc định mono — dùng cho Whisper)."""
+        res = self.run_simple(["-i", str(src), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
                                "-acodec", "pcm_s16le", str(dst)])
         if res.returncode != 0:
             raise RuntimeError(res.stderr.decode("utf-8", "replace")[-300:])

@@ -14,7 +14,7 @@ Chạy trong thread của Player (không gọi Tk).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config.paths import PREVIEW_CACHE_DIR
@@ -64,9 +64,11 @@ class LiveSpec:
         self.voice_trimmed = voice_trimmed      # track giọng tính theo thời gian sau cắt
         self.no_vocals: Path | None = None
         if self.vcfg.demucs_enable and self.vcfg.keep_original_audio and not self.vcfg.mute and info.has_audio:
-            from app.services.demucs_sep import cached_no_vocals
+            from app.services.vocal_remove import cached_no_vocals
 
             self.no_vocals = cached_no_vocals(item.path)
+            if self.no_vocals is None:            # chưa khử xong → nghe như bản render dự phòng: giọng gốc rất nhỏ
+                self.vcfg = replace(self.vcfg, original_volume=min(self.vcfg.original_volume, 8.0))
         self.work = PREVIEW_CACHE_DIR / "live"
         self.work.mkdir(parents=True, exist_ok=True)
 
@@ -133,7 +135,7 @@ class LiveSpec:
             vt = self.kept_before(src_t) if self.voice_trimmed else src_t
             voice_label = f"[{g.add_input(['-ss', f'{vt:.3f}', '-i', str(self.voice)])}:a]"
         audio_src = "[0:a]" if info.has_audio else None
-        if self.no_vocals is not None:           # đã tách lời bằng Demucs (bản render cũng dùng file này)
+        if self.no_vocals is not None:           # âm gốc đã khử giọng nói (bản render cũng dùng file này)
             audio_src = f"[{g.add_input(['-ss', f'{src_t:.3f}', '-i', str(self.no_vocals)])}:a]"
         extras = self.mods.audio_extras(g, ctx) if self.mods.audio_extras else []
         aout = rp.build_audio_graph(g, info, vcfg, audio_src=audio_src,

@@ -28,6 +28,33 @@ logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 24000
 _BYTES_PER_SEC = SAMPLE_RATE * 2   # s16 mono
+TRIM_VERSION = "trim1"
+PULL_EARLY = 0.2                   # chế độ mềm: câu được vào sớm tối đa 0,2 s khi câu trước đã đọc xong             # đổi khi đổi cách cắt khoảng lặng → track giọng cũ được tạo lại
+
+
+def trim_silence(pcm: bytes, lead: float = 0.03, tail: float = 0.06) -> bytes:
+    """Cắt khoảng lặng đầu/cuối của một câu TTS (Edge, Gemini… thường kèm 0,2–0,8 s im lặng) — câu sau nối
+    liền câu trước thay vì «khựng» một nhịp; chừa ``lead`` / ``tail`` giây cho tự nhiên."""
+    try:
+        import numpy as np
+    except ImportError:
+        return pcm
+    a = np.frombuffer(pcm, dtype=np.int16)
+    win = SAMPLE_RATE // 100                                     # khung 10 ms
+    n = len(a) // win
+    if n < 20:
+        return pcm
+    rms = np.sqrt(np.mean(a[:n * win].reshape(n, win).astype(np.float32) ** 2, axis=1))
+    peak = float(rms.max())
+    if peak <= 0:
+        return pcm
+    thr = max(peak * 10 ** (-40 / 20), 32768.0 * 10 ** (-55 / 20))   # dưới đỉnh 40 dB, sàn −55 dBFS
+    on = np.where(rms > thr)[0]
+    if len(on) == 0:
+        return pcm
+    s = max(0, int(on[0]) * win - int(lead * SAMPLE_RATE))
+    e = min(len(a), (int(on[-1]) + 1) * win + int(tail * SAMPLE_RATE))
+    return a[s:e].tobytes()
 
 
 @dataclass
@@ -263,7 +290,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
 
     def natural(pos: int) -> tuple[int, bytes]:
         _check()
-        return pos, ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE, tempo=residual_of(order[pos]))
+        return pos, trim_silence(ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE,
+                                                   tempo=residual_of(order[pos])))
 
     base: dict[int, bytes] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -284,15 +312,24 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             return t if t > 1.02 else 1.0
         return 1.0
 
+    flexible = cfg.natural_sync or cfg.soft_timing
+
+    def start_of(pos: int, cue: Cue, cursor: float) -> float:
+        """Mốc bắt đầu đọc câu: đúng mốc phụ đề; chế độ mềm cho vào sớm ≤ 0,2 s nếu câu trước đã xong
+        (bớt khoảng «khựng» giữa hai câu), luôn cách câu trước tối thiểu ``min_gap``."""
+        earliest = max(0.0, cue.start - (PULL_EARLY if flexible else 0.0))
+        start = max(earliest, cursor)
+        if flexible and pos > 0:
+            start = max(start, cursor + cfg.min_gap)
+        return start
+
     def simulate(cap: float) -> float:
         """Độ dài track nếu áp mức tăng tốc tối đa ``cap`` (không cần giải mã lại)."""
         cursor = 0.0
         for pos in range(len(order)):
             cue = by_index[order[pos]]
             d = nat_dur[pos] / tempo_for(pos, cap)
-            start = max(cue.start, cursor)
-            if (cfg.natural_sync or cfg.soft_timing) and pos > 0:
-                start = max(start, cursor + cfg.min_gap)
+            start = start_of(pos, cue, cursor)
             cursor = start + d
         return cursor
 
@@ -316,7 +353,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         pcm = base[pos]
         sped = False
         if tempo > 1.0:
-            pcm = ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo)
+            pcm = trim_silence(ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo))
             sped = True
         dur = len(pcm) / _BYTES_PER_SEC
         overflow = (not cfg.natural_sync) and dur > slot_for(pos) + 0.05
@@ -348,9 +385,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             pcm, sped, overflow = decoded[pos]
             sped_up += int(sped)
             overflow_n += int(overflow)
-            start = max(cue.start, cursor)
-            if (cfg.natural_sync or cfg.soft_timing) and pos > 0:
-                start = max(start, cursor + cfg.min_gap)
+            start = start_of(pos, cue, cursor)
             gap = start - cursor
             if gap > 0:
                 wf.writeframes(b"\x00" * (int(gap * SAMPLE_RATE) * 2))

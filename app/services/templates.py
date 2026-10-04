@@ -57,13 +57,13 @@ BUILTIN: list[Template] = [
     Template(
         name="🔥 Review phim dọc 9:16 (TikTok · Shorts · Reels)",
         description="Video ngang → dọc 9:16 nền mờ, phụ đề Việt chữ vàng viền đen to rõ, lồng tiếng Việt đọc nhanh "
-                    "(khớp mềm), tự dò & che phụ đề gốc in sẵn, âm gốc nhỏ, tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
+                    "(khớp mềm), tự dò & che phụ đề gốc in sẵn, khử giọng nói gốc bằng AI (giữ nhạc nền & tiếng động), tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
         badge="9:16", builtin=True, patch=True,
         parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
             "video": {"ratio": "9:16 (Dọc)", "fit_mode": FIT_MODES[2], "resolution": "1080p", "fps": "30", "zoom": 100,
                       "speed": 105, "flip_h": False, "mute": False, "keep_original_audio": True, "vocal_filter": False,
-                      "original_volume": 20.0, "tts_volume": 160.0, "adaptive_ducking": True, "normalize_audio": True,
+                      "demucs_enable": True, "original_volume": 70.0, "tts_volume": 160.0, "adaptive_ducking": True, "normalize_audio": True,
                       "output_suffix": "_review", "loop_to_voice": False},
             "subtitle": {"enable_subtitle": True, "srt_source": SRT_SOURCES[0], "translate_enable": True,
                          "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1], "sub_size": 50, "sub_bold": True,
@@ -82,13 +82,13 @@ BUILTIN: list[Template] = [
     Template(
         name="🎙 Thuyết minh phim ngang 16:9 (YouTube)",
         description="Giữ khung ngang 16:9 (thêm viền đen nếu lệch tỉ lệ), phụ đề Việt trắng trên hộp mờ, lồng tiếng "
-                    "thuyết minh — mỗi nhân vật một giọng (tự nhận diện người nói), lọc bớt giọng gốc, giữ nhạc nền phim, tự dò & che phụ đề gốc in sẵn.",
+                    "thuyết minh — mỗi nhân vật một giọng (tự nhận diện người nói), khử giọng nói gốc bằng AI, giữ nhạc nền & tiếng động của phim, tự dò & che phụ đề gốc in sẵn.",
         badge="16:9", builtin=True, patch=True,
         parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
             "video": {"ratio": "16:9 (Ngang)", "fit_mode": FIT_MODES[1], "resolution": "1080p", "fps": "Giữ nguyên",
                       "zoom": 100, "speed": 100, "flip_h": False, "mute": False, "keep_original_audio": True,
-                      "vocal_filter": True, "original_volume": 35.0, "tts_volume": 150.0, "adaptive_ducking": True,
+                      "vocal_filter": False, "demucs_enable": True, "original_volume": 75.0, "tts_volume": 150.0, "adaptive_ducking": True,
                       "normalize_audio": True, "output_suffix": "_thuyetminh", "loop_to_voice": False},
             "subtitle": {"enable_subtitle": True, "srt_source": SRT_SOURCES[0], "translate_enable": True,
                          "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1], "sub_size": 40, "sub_bold": True,
@@ -114,6 +114,7 @@ BUILTIN: list[Template] = [
         sections={
             "video": {"ratio": "9:16 (Dọc)", "fit_mode": FIT_MODES[0], "resolution": "1080p", "fps": "30", "zoom": 110,
                       "speed": 110, "flip_h": True, "mute": False, "keep_original_audio": True, "vocal_filter": False,
+                      "demucs_enable": False,
                       "original_volume": 100.0, "adaptive_ducking": True, "normalize_audio": True,
                       "output_suffix": "_reup", "loop_to_voice": False},
             "subtitle": {"enable_subtitle": False, "translate_enable": False},

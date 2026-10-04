@@ -162,16 +162,18 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     except Exception:
         out.append(Check("Internet", "warn", "Không kết nối được lúc này", "Không có mạng vẫn render/STT (đã có model)/VieNeu được."))
 
-    # 9. Demucs (tuỳ chọn)
+    # 9. Khử giọng nói gốc (AI, ONNX)
     try:
-        from app.services.demucs_sep import is_installed as demucs_ok
+        from app.services.vocal_remove import MODEL_SIZE_MB as NV_MB, model_ready
+        from app.services.vocal_remove import onnx_available as nv_onnx
 
-        if demucs_ok():
-            out.append(Check("Demucs (tách giọng/nhạc)", "ok", "Sẵn sàng"))
+        if not nv_onnx():
+            out.append(Check("Khử giọng gốc (AI)", "warn", "Thiếu onnxruntime / numpy — không khử được giọng gốc",
+                             "pip install onnxruntime numpy"))
+        elif model_ready():
+            out.append(Check("Khử giọng gốc (AI)", "ok", "Sẵn sàng"))
         else:
-            out.append(Check("Demucs (tách giọng/nhạc)", "warn", "Chưa có — tính năng tách nhạc nền tắt, còn lại bình thường",
-                             "Chỉ bản mã nguồn cài được (cần torch ~2 GB): mục Video → «Cài Demucs»." if not _frozen()
-                             else "Bản đóng gói không hỗ trợ (cần torch ~2 GB)."))
+            out.append(Check("Khử giọng gốc (AI)", "ok", f"Model (~{NV_MB} MB) tự tải lần đầu dùng"))
     except Exception:
         pass
 

@@ -974,6 +974,13 @@ class MainWindow(_Root):
         self.tasks.stop()
         self.log("Đã yêu cầu dừng…")
 
+    def destroy(self) -> None:
+        # khử giọng AI đang chạy nền (onnxruntime) phải dừng gọn trước khi thoát, không thì tiến trình bị abort
+        from app.services import vocal_remove
+
+        vocal_remove.shutdown()
+        super().destroy()
+
     def _on_close(self) -> None:
         if self.runner.running or self.tasks.running:
             if not messagebox.askyesno(APP_NAME, "Đang xử lý. Thoát và huỷ?"):

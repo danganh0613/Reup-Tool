@@ -74,7 +74,8 @@ TOPICS: list[dict] = [
             "Mục Phụ đề: chọn «Sub đã dịch». Chữ Việt hiện trên video. Muốn dời chữ thì bấm T rồi kéo ô chữ.",
             "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không. Để «Khớp mềm» bật.",
             "Mục Che mờ (nếu video có chữ tiếng nước ngoài dính sẵn trên hình): bấm B rồi vẽ một ô đè lên dòng chữ đó.",
-            "Mục Video: kéo «Âm gốc» xuống khoảng 20–30 (để tiếng gốc nhỏ), «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
+            "Mục Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung/Anh, giữ nhạc nền & tiếng động), «Âm gốc / nền» "
+            "khoảng 70, «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
         ]),
         ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh. "
                  "Nếu cuối video bị mất tiếng: tab SRT, ô «Phong cách dịch» chọn «Ngắn gọn hơn», bấm «Dịch lại»."),
@@ -99,7 +100,8 @@ TOPICS: list[dict] = [
             "Bấm «＋ Nạp video» rồi chọn file (mp4, mkv, mov…). Đưa nhiều file cũng được — máy làm lần lượt từng cái.",
             "Trong ô Hàng đợi, bấm vào tên video để chọn video đang chỉnh. Bấm ✕ để bỏ video khỏi danh sách.",
             "Phần «Khung hình & tốc độ»: chọn Tỉ lệ (ngang 16:9, dọc 9:16…), Độ phân giải (1080p là đẹp), FPS để «Giữ nguyên».",
-            "Phần «Âm thanh»: «Âm gốc» là tiếng có sẵn trong video, «Lồng tiếng» là giọng máy đọc. Có lồng tiếng thì để âm gốc 20–30.",
+            "Phần «Âm thanh»: «Âm gốc / nền» là tiếng có sẵn trong video, «Lồng tiếng» là giọng máy đọc. Có lồng tiếng thì bật "
+            "«Khử giọng nói gốc (AI)» — chỉ còn nhạc nền & tiếng động, để âm nền 60–90. Không bật thì để âm gốc 10–20.",
         ]),
         ("kv", [
             ("Tăng tốc GPU", "Để bật. Máy tự chọn card màn hình để làm nhanh; không có card thì tự dùng CPU, chỉ chậm hơn thôi."),
@@ -324,7 +326,7 @@ TOPICS: list[dict] = [
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
             ("Gemini báo 429 / hết hạn mức", "Đợi 1 phút rồi thử lại, hoặc dán thêm key khác. Tạo ảnh/video AI cần tài khoản trả tiền."),
             ("Video bị xoay sai", "Mục Hiệu ứng → Xoay."),
-            ("Bản đóng gói không có Demucs", "Demucs rất nặng (cần torch), chỉ có ở bản chạy bằng Python (run.bat / run.command)."),
+            ("Giọng gốc (Trung, Anh…) vẫn nghe thấy", "Tab Video › Âm thanh: bật «Khử giọng nói gốc (AI)». AI bỏ giọng nói, giữ nhạc nền & tiếng động (lần đầu tải model ~64 MB, mỗi video khử một lần ~1 phút/phút video)."),
         ]),
     ]},
 ]

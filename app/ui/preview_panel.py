@@ -378,6 +378,7 @@ class PreviewPanel(ctk.CTkFrame):
         if self.state.settings.show_waveform:
             self.load_waveform()
         self.ensure_hardsub()
+        self.ensure_no_vocals()
 
     def ensure_hardsub(self) -> None:
         """«Tự dò chữ cứng» bật mà video đang xem chưa dò → dò nền rồi vẽ lại (vùng che hiện ngay trên khung xem trước)."""
@@ -404,6 +405,33 @@ class PreviewPanel(ctk.CTkFrame):
                     m.on_active_changed()
 
         self.window.run_bg(lambda: ensure_region(it, ff, info.duration, log=self.window.log_bg), done)
+
+    def ensure_no_vocals(self) -> None:
+        """«Khử giọng gốc» bật mà video đang xem chưa khử → khử nền (AI) rồi phát lại với âm đã khử.
+        Trong lúc chờ, xem trước dùng âm gốc vặn rất nhỏ (giống bản render dự phòng)."""
+        from app.services.vocal_remove import cached_no_vocals
+
+        it, info = self.item, self.info
+        v = self.state.video
+        if it is None or info is None or not info.has_audio or not v.demucs_enable or not v.keep_original_audio \
+                or v.mute or cached_no_vocals(it.path) is not None:
+            return
+        pending = self.__dict__.setdefault("_nv_pending", set())
+        if it.path in pending:
+            return
+        pending.add(it.path)
+        pipe = self.window.pipeline_for(it)
+        self.window.log(f"{it.name}: đang khử giọng gốc nền (AI, ~1 phút cho mỗi phút video) — xong sẽ tự dùng.")
+
+        def done(_r, _e):
+            pending.discard(it.path)
+            m = self.window.modules.get("video")
+            if m is not None:
+                m._novocal_status()
+            if self.item is it and self.player.playing:
+                self._restart_live()
+
+        self.window.run_bg(lambda: pipe.remove_voice(it, log=self.window.log_bg), done)
 
     def schedule_refresh(self, delay_ms: int = 350) -> None:
         if self._after_id is not None:

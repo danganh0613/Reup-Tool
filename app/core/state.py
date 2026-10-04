@@ -98,7 +98,12 @@ class VideoConfig:
     output_subdir: str = ""            # thư mục con trong thư mục xuất (nhận cùng các mã trên)
     loop_to_voice: bool = False        # lặp video cho đủ thời lượng giọng đọc
     gop_size: int = 0                  # khoảng keyframe (0 = mặc định encoder)
-    demucs_enable: bool = False        # tách giọng gốc bằng Demucs (cần cài thêm)
+    demucs_enable: bool = False        # khử giọng nói gốc bằng AI (MDX-Net ONNX), giữ nhạc nền + tiếng động
+
+    def __post_init__(self) -> None:
+        if self.vocal_filter:              # cấu hình cũ: «lọc vocal» (L−R, kém) → chuyển sang khử giọng AI
+            self.vocal_filter = False
+            self.demucs_enable = True
 
 
 @dataclass
