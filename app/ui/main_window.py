@@ -35,7 +35,7 @@ from app.ui.modules.module_trim import TrimModule
 from app.ui.modules.module_tts import TTSModule
 from app.ui.modules.module_video import VideoModule
 from app.ui.preview_panel import PreviewPanel
-from app.ui.progress_panel import ProgressPanel, stage_index_for
+from app.ui.progress_panel import ProgressPanel, friendly_error
 from app.ui.widgets.dialogs import LogWindow, NotificationCenter, ShortcutsWindow, now_str
 from app.ui.widgets.ui import button, button_width, relabel
 from app.core.platform import IS_MAC, IS_WIN, exe_name, open_path
@@ -105,13 +105,12 @@ class MainWindow(_Root):
         self.grid_rowconfigure(1, weight=1)
         self._build_header()
         self._build_body()
-        self.progress = ProgressPanel(self, self)
-        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+        self._build_progress()
 
         add_ui_sink(self._log_sink)
         self.app_state.on("active_changed", self._active_changed)
         self.app_state.on("config_loaded", self.refresh_modules)
-        self.app_state.on("videos_changed", lambda: self.update_render_button())
+        self.app_state.on("videos_changed", lambda: (self.update_render_button(), self.progress.refresh_idle()))
         from app.services.watch_folder import FolderWatcher
 
         self._watcher = FolderWatcher()
@@ -174,8 +173,6 @@ class MainWindow(_Root):
         self.version_label = ctk.CTkLabel(left, text=f"v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED)
         self.version_label.pack(side="left", padx=(8, 0))
         self.header_btns: list[list] = []   # [nút, nhãn đầy đủ, bề rộng đầy đủ] — cửa sổ hẹp thì chỉ còn icon
-        self.busy_label = ctk.CTkLabel(left, text="", font=T.font(12), text_color=T.WARNING)
-        self.busy_label.pack(side="left", padx=12)
 
         from app.ui.widgets.template_dialogs import TemplateBar
 
@@ -183,7 +180,7 @@ class MainWindow(_Root):
         self.template_bar.grid(row=0, column=1, pady=8)
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
-        # một nút chính duy nhất (Render / Chuẩn bị / Xuất); việc phụ gom vào menu ☰; «Dừng» chỉ hiện khi đang chạy
+        # một nút chính duy nhất (Render / Chuẩn bị / Xuất); việc phụ gom vào menu ☰; «Dừng» nằm ở thanh trạng thái dưới
         self.notif_btn = self._hbtn(right, "", "bell", self.open_notifications, variant="ghost",
                                     tip="Thông báo (kết quả render, lỗi)")
         self.notif_btn.pack(side="left", padx=2)
@@ -193,7 +190,6 @@ class MainWindow(_Root):
         self.render_btn = button(right, "Render MP4", icon_name="play", variant="primary", size="lg",
                                  command=lambda: self.start_render(list(self.app_state.videos)), tip="Dựng toàn bộ hàng đợi thành MP4 (Ctrl+R)")
         self.render_btn.pack(side="left", padx=(4, 4))
-        self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", tip="Dừng mọi việc đang chạy (Esc)")
         self._running = False
         self.after(300, self.update_render_button)
 
@@ -503,8 +499,7 @@ class MainWindow(_Root):
         self.configure(fg_color=T.BG)
         self._build_header()
         self._build_body()
-        self.progress = ProgressPanel(self, self)
-        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+        self._build_progress()
         self.show_module(current)
         self._active_changed()
         try:
@@ -706,23 +701,21 @@ class MainWindow(_Root):
         if self.runner.running or self.tasks.running:
             self._offer_wait(name, lambda: self.run_task(name, fn, done))
             return
-        self.busy_label.configure(text=f"⏳ {name}…")
-        self.progress.set_status(f"{name}…")
-        self.progress.set_progress(0.0)
-        self.progress.set_stage(0)
+        self.progress.start_task(name)
         self.set_running(True)
 
         def _done(result, error):
-            self.busy_label.configure(text="")
             self.set_running(False)
             self.after(400, self._run_waiting)
             if error:
-                self.progress.set_status(f"✖ {name}: {str(error).splitlines()[0][:120]}")
+                stopped = "huỷ" in str(error).lower()
+                self.progress.result("stopped" if stopped else "error", f"{name}: đã dừng" if stopped else f"{name} lỗi",
+                                     "" if stopped else friendly_error(str(error)))
                 self.log(f"✖ {name}: {error}")
-                self.add_notification(f"{name} lỗi", str(error)[:300], "error")
+                if not stopped:
+                    self.add_notification(f"{name} lỗi", str(error)[:300], "error")
             else:
-                self.progress.set_status(f"✔ {name} xong.")
-                self.progress.set_progress(1.0)
+                self.progress.result("ok", f"{name} xong")
             done(result, error)
 
         self.tasks.start(name, fn, on_done=_done)
@@ -741,10 +734,7 @@ class MainWindow(_Root):
         self._show_waiting()
 
     def _show_waiting(self) -> None:
-        text = self.busy_label.cget("text").split("  ·  ")[0]
-        if self._waiting:
-            text += f"  ·  chờ: {', '.join(n for n, _a in self._waiting)}"
-        self.busy_label.configure(text=text)
+        self.progress.set_waiting([n for n, _a in self._waiting])
 
     def _run_waiting(self) -> None:
         if not self._waiting or self.runner.running or self.tasks.running:
@@ -779,10 +769,48 @@ class MainWindow(_Root):
     def set_running(self, running: bool) -> None:
         self._running = running
         self.render_btn.configure(state="disabled" if running else "normal")
-        if running:
-            self.stop_btn.pack(side="left", padx=4)       # «Dừng» chỉ hiện khi có việc đang chạy
+        self.progress.set_running_ui(running)            # «Dừng» chỉ hiện khi có việc đang chạy
+
+    def _build_progress(self) -> None:
+        self.progress = ProgressPanel(self, self)
+        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+        self.stop_btn = self.progress.stop_btn
+        self.progress.set_running_ui(getattr(self, "_running", False))
+
+    def _show_result(self, items: list[VideoItem], ok: int, fail: int, elapsed: float, prep: bool) -> None:
+        """Kết quả một lượt chạy trên thanh trạng thái: một câu + đúng một việc nên bấm tiếp."""
+        from app.ui.progress_panel import _clock, short_path
+
+        took = f"mất {_clock(elapsed)}"
+        if fail:
+            first = next(it for it in items if it.status == "Lỗi")
+            self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
+                                 f"{first.name}: {friendly_error(first.message, first)}",
+                                 ("Thử lại", self.retry_failed, "refresh", True))
+        elif any(it.status == "Đã huỷ" for it in items):
+            self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
+        elif prep:
+            self.progress.result("ok", f"Chuẩn bị xong {ok} video",
+                                 f"{took} · xem từng video ở tab «Duyệt», ưng thì bấm «Duyệt», xong bấm «Xuất» trên cùng")
         else:
-            self.stop_btn.pack_forget()
+            out = self.app_state.output_dir or str(VIDEOS_DIR)
+            self.progress.result("ok", f"Đã xuất {ok} video", f"{took} · lưu ở {short_path(out)}",
+                                 ("Mở thư mục", self.open_output_dir, "openfolder", False))
+
+    def retry_failed(self) -> None:
+        """Nút «Thử lại» ở thanh trạng thái: chạy lại mọi video lỗi (chưa duyệt → chuẩn bị lại, đã duyệt → xuất lại)."""
+        failed = [it for it in self.app_state.videos if it.status == "Lỗi"]
+        prep = [it for it in failed if self.review_mode and it.review != "approved"]
+        ren = [it for it in failed if it not in prep]
+        for it in prep:
+            it.review = ""
+        if prep:
+            self._run_queue(prep, mode="prepare")
+            if ren:
+                self._waiting.append((f"Render {len(ren)} video", lambda: self._run_queue(ren, mode="render")))
+                self._show_waiting()
+        elif ren:
+            self._run_queue(ren, mode="render")
 
     def _app_menu(self) -> None:
         m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
@@ -868,23 +896,18 @@ class MainWindow(_Root):
         def on_update(it: VideoItem) -> None:
             self.queue_update(it)
             if it.status in ("Đang xử lý", "Đang chuẩn bị"):
-                self.progress.set_stage(stage_index_for(it.message))
-                self.progress.set_status(f"[{done_count[0] + 1}/{total}] {it.name} — {it.message}")
-                self.progress.set_progress((done_count[0] + it.progress) / total)
+                self.progress.update_item(it, done_count[0] + 1, total, (done_count[0] + it.progress) / total)
             elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt"):
                 done_count[0] = min(total, done_count[0] + 1)
 
         def on_done(ok: int, fail: int) -> None:
             self.set_running(False)
             self.after(400, self._run_waiting)
-            self.busy_label.configure(text="")
             self.update_render_button()
             elapsed = time.time() - self._render_started
+            self._show_result(items, ok, fail, elapsed, prep)
             if prep:
                 msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
-                self.progress.set_stage(-1 if fail else 2)
-                self.progress.set_progress(1.0 if not fail else 0.0)
-                self.progress.set_status(msg + " — xem & duyệt ở tab «Duyệt» bên trái.")
                 self.log(msg)
                 self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
                 notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
@@ -893,9 +916,6 @@ class MainWindow(_Root):
                     self.open_review()
                 return
             msg = f"Hoàn tất: {ok} xong, {fail} lỗi · {elapsed / 60:.1f} phút"
-            self.progress.set_stage(4 if fail == 0 else -1)
-            self.progress.set_progress(1.0 if fail == 0 else 0.0)
-            self.progress.set_status(msg)
             self.log(msg)
             self.add_notification("Render xong" if fail == 0 else "Render có lỗi", msg, "ok" if fail == 0 else "error")
             notify("Edit Studio — Render xong", msg, enabled=self.app_state.settings.windows_toast)
@@ -904,12 +924,10 @@ class MainWindow(_Root):
 
         if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
             self.set_running(True)
-            self.progress.set_stage(0)
+            self.progress.start_queue(items, mode)
             if prep:
-                self.busy_label.configure(text="⏳ Đang chuẩn bị…")
                 self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
             else:
-                self.busy_label.configure(text="⏳ Đang render…")
                 self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
 
     # ── Thư mục theo dõi ─────────────────────────────────────────────────
@@ -1091,6 +1109,8 @@ class MainWindow(_Root):
         if getattr(self, "_render_label", None) != text:
             self._render_label = text
             relabel(self.render_btn, text)
+            if hasattr(self, "progress"):
+                self.progress.refresh_idle()
 
     def stop_all(self) -> None:
         if self._waiting:

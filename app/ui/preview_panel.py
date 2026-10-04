@@ -1192,16 +1192,13 @@ class PreviewPanel(ctk.CTkFrame):
         if not announce:
             return
         tts, vcfg = self.state.tts, self.state.video
-        note = ""
         if tts.enable_tts and not vcfg.mute:
             if voice is None:
-                note = ("Chưa có giọng lồng cho video này — bấm «Render thử» (tự tạo giọng cho đoạn đang xem) "
-                        "hoặc «Tạo giọng» ở tab TTS để nghe kèm khi phát.")
+                self.window.progress.notice("Chưa có giọng lồng cho video này",
+                                            "bấm «Render thử» để tạo giọng cho đoạn đang xem, hoặc «Tạo giọng» ở tab TTS")
             elif not fresh:
-                note = ("Đang nghe giọng lồng tạo lần trước; cài đặt đã đổi nên khi render sẽ tạo giọng mới — "
-                        "bấm «Render thử» để nghe đúng bản mới.")
-        if note:
-            self.window.progress.set_status(f"🔈 {note}")
+                self.window.progress.notice("Đang nghe giọng lồng cũ",
+                                            "cài đặt đã đổi — bấm «Render thử» để nghe đúng bản mới")
 
     def _config_changed(self, _section: str = "") -> None:
         """Đổi cài đặt lúc đang phát → phát lại từ chỗ đang xem với cài đặt mới (gom các thay đổi liên tiếp)."""
@@ -1251,7 +1248,7 @@ class PreviewPanel(ctk.CTkFrame):
             self._live = None
             self._play_from(0.0)
             self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
-            self.window.progress.set_status("▶ Đang phát bản render thử — giống hệt file sẽ xuất. Bấm Dừng để quay lại.")
+            self.window.progress.notice("Đang phát bản render thử", "giống hệt file sẽ xuất · bấm Dừng ở thanh phát để quay lại")
 
         self.window.run_task("Xem thử bản render", work, done)
 

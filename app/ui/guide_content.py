@@ -17,7 +17,7 @@ TOPICS: list[dict] = [
         ("steps", [
             "Đưa video vào: kéo file video thả vào ô đen to ở giữa màn hình. Hoặc bấm nút xanh «＋ Nạp video» ở góc trên bên trái.",
             "Chọn thứ bạn muốn làm ở cột bên trái (Phụ đề, Lồng tiếng, Che mờ, Nhạc…). Bật cái nào thì màn hình giữa hiện ngay cái đó.",
-            "Bấm nút xanh «Render MP4» ở góc trên bên phải. Chờ thanh tiến trình ở dưới chạy hết 5 ô. Xong thì bấm «Thư mục xuất» để lấy video.",
+            "Bấm nút xanh «Render MP4» ở góc trên bên phải. Thanh trạng thái dưới cùng cho biết đang làm bước nào, bao nhiêu % và còn bao lâu. Xong thì bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
         ]),
         ("h", "Mấy nút trên màn hình giữa"),
         ("kv", [
@@ -320,7 +320,7 @@ TOPICS: list[dict] = [
     {"key": "shortcuts", "title": "Phím tắt", "group": "Khác", "blocks": [("shortcuts", None)]},
     {"key": "faq", "title": "Gặp lỗi thì làm gì?", "group": "Khác", "blocks": [
         ("kv", [
-            ("Chờ mãi không xong", "Nhìn thanh tiến trình dưới cùng và bấm «Xem log». Bấm «Dừng» nếu muốn huỷ."),
+            ("Chờ mãi không xong", "Nhìn thanh trạng thái dưới cùng (bước đang làm, thời gian còn lại) và bấm biểu tượng log ở góc phải. Bấm «Dừng» trên thanh đó nếu muốn huỷ."),
             ("Đang chạy việc này mà bấm việc khác", "Máy hỏi có xếp vào hàng chờ không — đồng ý thì việc đó tự chạy ngay khi "
              "việc trước xong (dòng trên cùng ghi «chờ: …»). Trong lúc chờ cứ chuyển tab, chọn video khác, chỉnh tiếp thoải "
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),

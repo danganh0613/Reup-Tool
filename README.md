@@ -44,7 +44,7 @@ Rail **Tính Năng** (F1–F11): Video · Phụ đề · STT · SRT · TTS · Ch
 Xem trước: chip **Tỉ lệ · Độ phân giải · FPS · Vừa khung** ngay trên khung (21:9 · 16:9 · 4:3 · 1:1 · 3:4 · 4:5 · 9:16,
 đồng bộ với module Video) · công cụ V (kéo) · T (khung phụ đề) · B (vẽ vùng che) · ẩn Sub/Blur · zoom · phát/tua · sóng âm ·
 toàn màn hình. Chưa có video: kéo thả vào khung hoặc bấm vào khung để chọn file.
-Thanh tiến trình 5 bước: Chuẩn bị → Tạo TTS → Ghép timeline → Bake hình ảnh → Ghép MP4.
+Thanh trạng thái 1 dòng dưới cùng: video đang chạy, bước thật của video đó (vd. «Khử giọng gốc · bước 4/5»), %, thời gian còn lại, nút Dừng / Thử lại / Mở thư mục.
 Space phát/dừng · J/K/L · ←/→ · , . từng khung · I/O và [ ] điểm cắt · M tắt tiếng · Ctrl+Z/Y hoàn tác khung/vùng ·
 Ctrl+S lưu · Ctrl+R render · Ctrl+E sửa SRT · Esc dừng.
 

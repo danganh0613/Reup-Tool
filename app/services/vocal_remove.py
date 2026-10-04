@@ -180,6 +180,7 @@ class _MDX:
 
 _RUN = threading.Lock()            # mỗi lúc chỉ khử một video (model nặng CPU/RAM; xem trước + render dùng chung)
 SHUTDOWN = threading.Event()       # app đang đóng → dừng ở đoạn kế tiếp (đừng để onnxruntime chạy khi thoát)
+_PROG: dict[str, float] = {}       # tiến độ lượt khử đang chạy (theo video) — luồng đang chờ cùng video đọc để báo tiếp
 
 
 def shutdown(timeout: float = 8.0) -> None:
@@ -197,10 +198,19 @@ def separate_no_vocals(video_path: str | Path, ffmpeg: FFmpeg, *, log: Callable[
     got = cached_no_vocals(video_path)
     if got is not None:
         return got
-    with _RUN:
+    key = _key(video_path)
+    while not _RUN.acquire(timeout=0.5):
+        # luồng khác đang khử (vd. xem trước) → không đứng im: báo tiến độ của lượt đó nếu cùng video
+        if cancel is not None and cancel.is_set():
+            raise RenderCancelled("Đã huỷ")
+        if progress and key in _PROG:
+            progress(_PROG[key])
+    try:
         if SHUTDOWN.is_set():
             return None
         return _separate(video_path, ffmpeg, log=log, progress=progress, cancel=cancel)
+    finally:
+        _RUN.release()
 
 
 def _separate(video_path, ffmpeg: FFmpeg, *, log, progress, cancel) -> Path | None:
@@ -228,7 +238,14 @@ def _separate(video_path, ffmpeg: FFmpeg, *, log, progress, cancel) -> Path | No
         if log:
             with wave.open(str(src_wav), "rb") as rf:
                 log(f"Khử giọng gốc bằng AI ({rf.getnframes() / SR:.0f}s âm thanh)…")
-        _MDX(model).separate_file(src_wav, result, on_progress=progress, cancel=cancel)
+        key = _key(video_path)
+
+        def prog(x: float) -> None:
+            _PROG[key] = x
+            if progress:
+                progress(x)
+
+        _MDX(model).separate_file(src_wav, result, on_progress=prog, cancel=cancel)
         if log:
             log("Đã khử giọng gốc — giữ nhạc nền & tiếng động.")
         return result
@@ -240,5 +257,6 @@ def _separate(video_path, ffmpeg: FFmpeg, *, log, progress, cancel) -> Path | No
             log(f"⚠ Khử giọng gốc lỗi ({exc}) — dùng âm gốc vặn rất nhỏ.")
         return None
     finally:
+        _PROG.pop(_key(video_path), None)
         src_wav.unlink(missing_ok=True)
         result.with_suffix(".part.wav").unlink(missing_ok=True)
