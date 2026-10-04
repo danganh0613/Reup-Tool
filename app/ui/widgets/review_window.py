@@ -147,15 +147,17 @@ class ReviewPanel(ctk.CTkFrame):
         self.ai_bar = ctk.CTkFrame(self, fg_color="transparent")
         self.ai_bar.grid(row=5, column=0, sticky="ew", padx=2, pady=(6, 0))
         self.ai_bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self.ai_bar, text="Phong cách dịch (chọn gợi ý hoặc gõ yêu cầu, vd «xưng anh–em»)", font=T.font(11),
+                     text_color=T.TEXT_DIM, anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
         self.ai_req = ctk.CTkComboBox(self.ai_bar, values=RETRANSLATE_PRESETS, height=30, font=T.font(12),
                                       command=lambda _v: self._req_changed())
-        self.ai_req.grid(row=0, column=0, sticky="ew")
+        self.ai_req.grid(row=1, column=0, sticky="ew")
         self.ai_req.bind("<FocusOut>", lambda _e: self._req_changed())
         Tooltip(self.ai_req, "Phong cách / yêu cầu dịch (chung với ô «Phong cách» ở tab SRT), vd «xưng anh–em, văn nói»")
         self.ai_all_btn = button(self.ai_bar, "Dịch lại cả video", icon_name="sparkle", size="sm", command=self._ai_all,
                                  tip="AI dịch lại toàn bộ theo yêu cầu (xem bản hiện tại để biết bạn chưa ưng chỗ nào). "
                                      "Kết quả vào ô sửa — xem rồi bấm Lưu.")
-        self.ai_all_btn.grid(row=0, column=1, padx=(6, 0))
+        self.ai_all_btn.grid(row=1, column=1, padx=(6, 0))
 
         nav = ctk.CTkFrame(self, fg_color="transparent")
         nav.grid(row=6, column=0, sticky="ew", padx=2, pady=(6, 0))
