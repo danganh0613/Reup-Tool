@@ -43,6 +43,22 @@ class VideoModule(BaseModule):
         self.review_hint = hint(self, "Bấm nút Chuẩn bị (thay cho Render) → máy làm phụ đề, dịch, giọng cho cả hàng đợi → "
                                       "bạn xem / sửa / duyệt từng video → Xuất. Tắt = render một mạch như cũ.")
 
+        from app.services.watch_folder import SHARED, WATCH_ACTIONS
+
+        sec = Section(self, "Thư mục theo dõi (tự nạp video mới)")
+        sec.pack(fill="x", pady=4)
+        self.watch = SwitchRow(sec.body, "Theo dõi thư mục", on_change=self._watch_toggled)
+        self.watch_dir = EntryRow(sec.body, "Thư mục", browse="dir", placeholder="chép video vào đây là tự vào hàng đợi",
+                                  on_change=lambda v: self._watch_set("watch_dir", v.strip()))
+        self.watch_tpl = OptionRow(sec.body, "Áp mẫu", [SHARED], on_change=lambda v: self._watch_set("watch_template", v))
+        self.watch_action = OptionRow(sec.body, "Sau khi nạp", WATCH_ACTIONS,
+                                      on_change=lambda v: self._watch_set("watch_action", v))
+        pack_rows(sec.body, [self.watch, self.watch_dir, self.watch_tpl, self.watch_action])
+        self.watch_status = StatusLabel(sec.body, "")
+        self.watch_status.pack(fill="x")
+        hint(sec.body, "Máy kiểm tra thư mục vài giây một lần, chỉ nhận file đã chép xong. «Tự chuẩn bị» hợp với chế độ "
+                       "Duyệt trước khi xuất; «Tự xuất» render luôn theo mẫu.").pack(fill="x")
+
         sec = Section(self, "Cấu hình của video đang chọn")
         sec.pack(fill="x", pady=4)
         self.own_status = StatusLabel(sec.body, "")
@@ -85,12 +101,21 @@ class VideoModule(BaseModule):
                                  on_change=s(cfg, "quality", cast=int, preview=False))
         self.preset = OptionRow(sec.body, "Tốc độ encode", ENCODE_PRESETS, on_change=s(cfg, "encode_preset", preview=False))
         self.suffix = EntryRow(sec.body, "Hậu tố tên file", placeholder="_edit", on_change=s(cfg, "output_suffix", preview=False))
+        self.out_name = EntryRow(sec.body, "Tên file xuất", placeholder="{ten}{hauto}",
+                                 on_change=lambda v: (self.set_value(self.state.video, "output_name", v.strip(), preview=False),
+                                                      self._name_example()))
+        self.out_sub = EntryRow(sec.body, "Thư mục con", placeholder="vd: {mau}/{ngay}",
+                                on_change=lambda v: (self.set_value(self.state.video, "output_subdir", v.strip(), preview=False),
+                                                     self._name_example()))
+        self.name_hint = hint(sec.body, "")
         self.gop = SliderRow(sec.body, "Khoảng keyframe (GOP)", from_=0, to=300, step=1,
                              on_change=s(cfg, "gop_size", cast=int, preview=False))
         self.flip.pack(fill="x", pady=3)
         self.gpu.pack(fill="x", pady=3)
         self.gpu_hint.pack(fill="x")
-        pack_rows(sec.body, [self.backend, self.codec, self.quality, self.preset, self.gop, self.suffix])
+        pack_rows(sec.body, [self.backend, self.codec, self.quality, self.preset, self.gop, self.suffix, self.out_name,
+                             self.out_sub])
+        self.name_hint.pack(fill="x")
         hint(sec.body, "H.264: tương thích mọi thiết bị · HEVC: nhỏ hơn ~40% · AV1: chuẩn mới, nén tốt nhất "
                        "(cần GPU đời mới hoặc encode CPU chậm). CRF 18–23 hợp lý cho YouTube.").pack(fill="x", pady=(2, 0))
 
@@ -137,6 +162,8 @@ class VideoModule(BaseModule):
             self.quality.set(cfg.quality)
             self.preset.set(cfg.encode_preset)
             self.suffix.set(cfg.output_suffix)
+            self.out_name.set(cfg.output_name)
+            self.out_sub.set(cfg.output_subdir)
             self.gop.set(cfg.gop_size)
             self.keep.set(cfg.keep_original_audio)
             self.orig_vol.set(cfg.original_volume)
@@ -154,10 +181,74 @@ class VideoModule(BaseModule):
         self.update_own()
         self._layout_review()
         self._update_gpu_hint()
+        self._name_example()
+        self._refresh_watch()
 
     def on_active_changed(self) -> None:
         self.update_fit_hint()
         self.update_own()
+        self._name_example()
+
+    def _name_example(self) -> None:
+        """Ví dụ tên file xuất theo mẫu tên đang nhập."""
+        it = self.state.active
+        try:
+            p = self.window.pipeline.output_path(it, ext=".mp4", create=False) if it is not None else None
+        except Exception:
+            p = None
+        ex = ""
+        if p is not None:
+            try:
+                ex = str(p.relative_to(self.state.output_dir))
+            except ValueError:
+                ex = p.name
+        self.name_hint.configure(text="Mã dùng được: {ten} tên gốc · {hauto} hậu tố · {mau} tên mẫu · {ngay} · {gio} · "
+                                      "{stt} số thứ tự" + (f"\nVí dụ: {ex}" if ex else ""))
+
+    # ── Thư mục theo dõi ─────────────────────────────────────────────────
+    def _refresh_watch(self) -> None:
+        from app.services.templates import list_templates
+        from app.services.watch_folder import SHARED, WATCH_ACTIONS
+
+        ui = self.state.ui
+        self._loading = True
+        try:
+            self.watch.set(bool(ui.get("watch_enable")))
+            self.watch_dir.set(str(ui.get("watch_dir") or ""))
+            self.watch_tpl.set_values([SHARED] + [t.name for t in list_templates()], keep=False)
+            self.watch_tpl.set(ui.get("watch_template") or SHARED)
+            self.watch_action.set(ui.get("watch_action") or WATCH_ACTIONS[0])
+        finally:
+            self._loading = False
+        self.update_watch_status()
+
+    def update_watch_status(self, added: int | None = None) -> None:
+        ui = self.state.ui
+        if not ui.get("watch_enable"):
+            self.watch_status.info("")
+        elif not ui.get("watch_dir"):
+            self.watch_status.warn("Chọn thư mục để theo dõi.")
+        else:
+            n = ui.get("watch_added", 0)
+            self.watch_status.ok(f"Đang theo dõi «{ui['watch_dir']}» · đã tự nạp {n} video.")
+
+    def _watch_set(self, key: str, value) -> None:
+        if self._loading:
+            return
+        self.state.ui[key] = value
+        self.state.mark_dirty()
+        if key == "watch_dir" and self.state.ui.get("watch_enable"):
+            self.window.watch_started()
+        self.update_watch_status()
+
+    def _watch_toggled(self, on: bool) -> None:
+        if self._loading:
+            return
+        self.state.ui["watch_enable"] = bool(on)
+        self.state.mark_dirty()
+        if on:
+            self.window.watch_started()
+        self.update_watch_status()
 
     def _review_toggled(self, on: bool) -> None:
         if self._loading:

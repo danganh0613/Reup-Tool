@@ -371,6 +371,25 @@ class PreviewPanel(ctk.CTkFrame):
         self.schedule_refresh(0)
         if self.state.settings.show_waveform:
             self.load_waveform()
+        self.ensure_hardsub()
+
+    def ensure_hardsub(self) -> None:
+        """«Tự dò chữ cứng» bật mà video đang xem chưa dò → dò nền rồi vẽ lại (vùng che hiện ngay trên khung xem trước)."""
+        from app.services.hardsub import cached_region, ensure_region
+
+        it, info = self.item, self.info
+        if it is None or info is None or not self.state.blur.auto_detect or cached_region(it) is not False:
+            return
+        ff = self.window.ffmpeg
+
+        def done(_r, _e):
+            if self.item is it:
+                self.schedule_refresh(0)
+                m = self.window.modules.get("blur")
+                if m is not None:
+                    m._update_auto_status()
+
+        self.window.run_bg(lambda: ensure_region(it, ff, info.duration, log=self.window.log_bg), done)
 
     def schedule_refresh(self, delay_ms: int = 350) -> None:
         if self._after_id is not None:

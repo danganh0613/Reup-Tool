@@ -109,6 +109,11 @@ class MainWindow(_Root):
         self.app_state.on("active_changed", self._active_changed)
         self.app_state.on("config_loaded", self.refresh_modules)
         self.app_state.on("videos_changed", lambda: self.update_render_button())
+        from app.services.watch_folder import FolderWatcher
+
+        self._watcher = FolderWatcher()
+        self._watch_pending: list[VideoItem] = []
+        self.after(4000, self._watch_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
@@ -818,6 +823,62 @@ class MainWindow(_Root):
             else:
                 self.busy_label.configure(text="⏳ Đang render…")
                 self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+
+    # ── Thư mục theo dõi ─────────────────────────────────────────────────
+    def watch_started(self) -> None:
+        """Vừa bật / đổi thư mục theo dõi: hỏi có lấy luôn các video đang có sẵn trong thư mục không."""
+        ui = self.app_state.ui
+        folder = ui.get("watch_dir")
+        if not folder or not Path(folder).is_dir():
+            return
+        known = {v.path.lower() for v in self.app_state.videos} | {p.lower() for p in ui.get("watch_seen", [])}
+        old = [p for p in self._watcher.existing(folder) if p.lower() not in known]
+        if old and not messagebox.askyesno(APP_NAME, f"Thư mục đang có sẵn {len(old)} video.\n\nNạp luôn các video này? "
+                                                     "(Không = chỉ nạp video chép vào từ giờ.)"):
+            ui["watch_seen"] = (list(ui.get("watch_seen", [])) + old)[-3000:]
+            self.app_state.mark_dirty()
+
+    def _watch_tick(self) -> None:
+        try:
+            self._watch_scan()
+        except Exception:
+            logger.warning("Thư mục theo dõi lỗi", exc_info=True)
+        self.after(4000, self._watch_tick)
+
+    def _watch_scan(self) -> None:
+        from app.services import templates as TP
+        from app.services.watch_folder import SHARED, WATCH_ACTIONS
+
+        ui = self.app_state.ui
+        folder = ui.get("watch_dir")
+        if ui.get("watch_enable") and folder and Path(folder).is_dir():
+            skip = {v.path.lower() for v in self.app_state.videos} | {p.lower() for p in ui.get("watch_seen", [])}
+            new = self._watcher.scan(folder, skip)
+            if new:
+                added = self.app_state.add_videos(new)
+                ui["watch_seen"] = (list(ui.get("watch_seen", [])) + new)[-3000:]
+                ui["watch_added"] = int(ui.get("watch_added", 0)) + len(added)
+                t = TP.get_template(ui.get("watch_template") or "") if ui.get("watch_template") not in (None, "", SHARED) else None
+                for it in added:
+                    if t is not None:
+                        TP.apply_to_item(self.app_state, it, t)
+                    self.queue_update(it)
+                self.log(f"Thư mục theo dõi: nạp {len(added)} video mới" + (f" (mẫu «{t.name}»)" if t else "") + ".")
+                if (ui.get("watch_action") or WATCH_ACTIONS[0]) != WATCH_ACTIONS[0]:
+                    self._watch_pending += added
+                m = self.modules.get("video")
+                if m is not None:
+                    m.update_watch_status()
+                self.app_state.mark_dirty()
+        if self._watch_pending and not self.runner.running and not self.tasks.running:
+            items = [it for it in self._watch_pending if it in self.app_state.videos]
+            self._watch_pending = []
+            if not items:
+                return
+            if (ui.get("watch_action") or "") == WATCH_ACTIONS[1]:
+                self._run_queue(items, mode="prepare")
+            else:
+                self._run_queue(items, mode="render")
 
     # ── Duyệt ─────────────────────────────────────────────────────────────
     def open_review(self) -> None:

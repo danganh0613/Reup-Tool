@@ -291,6 +291,7 @@ class Pipeline:
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình.")
+        self.ensure_hardsub(item, info, log)
         trim = stages_mod.collect(self.state, item, info).trim
         segs = trim.segments if trim.active else [(0.0, info.duration)]
         speed = max(0.25, self.state.video.speed / 100.0)
@@ -324,6 +325,42 @@ class Pipeline:
             pass
         return out, window
 
+    def ensure_hardsub(self, item: VideoItem, info, log: LogCb | None = None) -> None:
+        """«Tự dò chữ cứng» bật → dò vùng phụ đề in sẵn của video (một lần, có cache) trước khi dựng filter."""
+        if self.state.blur.auto_detect:
+            from app.services.hardsub import ensure_region
+
+            ensure_region(item, self.ffmpeg, info.duration, log=log)
+
+    def output_path(self, item: VideoItem, suffix: str = "", ext: str = ".mp4", create: bool = True) -> Path:
+        """Đường dẫn file xuất theo «Tên file xuất» / «Thư mục con» của cấu hình (mã {ten} {hauto} {mau} {ngay} {gio} {stt})."""
+        st, vcfg = self.state, self.state.video
+        tpl = item.template or st.template_name or ""
+        tpl = "".join(c for c in tpl if c.isalnum() or c in " -_.()").strip() or "mau"
+        try:
+            stt = st.videos.index(item) + 1
+        except ValueError:
+            stt = 1
+        now = time.localtime()
+        tokens = {"ten": item.stem, "hauto": vcfg.output_suffix, "mau": tpl, "ngay": time.strftime("%Y-%m-%d", now),
+                  "gio": time.strftime("%H%M", now), "stt": f"{stt:02d}"}
+
+        def fill(pattern: str) -> str:
+            out = pattern
+            for k, v in tokens.items():
+                out = out.replace("{" + k + "}", v)
+            return out
+
+        name = fill(vcfg.output_name.strip()) if vcfg.output_name.strip() else f"{item.stem}{vcfg.output_suffix}"
+        name = "".join(c if c not in '\\/:*?"<>|' else "_" for c in name).strip() or item.stem
+        out_dir = Path(st.output_dir) if st.output_dir else VOICE_DIR.parent / "videos"
+        sub = fill(vcfg.output_subdir.strip()).replace("\\", "/")
+        for part in [p for p in sub.split("/") if p.strip() and p.strip() not in (".", "..")]:
+            out_dir = out_dir / "".join(c if c not in ':*?"<>|' else "_" for c in part).strip()
+        if create:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"{name}{suffix}{ext}"
+
     @staticmethod
     def _stager(item: VideoItem, on_update):
         """``stage(tên, gốc, độ dài)`` → callback tiến độ ghi vào ``item`` (gộp cập nhật ~7 lần/giây)."""
@@ -350,6 +387,7 @@ class Pipeline:
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
+        self.ensure_hardsub(item, info, log)
         trim = stages_mod.collect(self.state, item, info).trim
         # «Xuất mỗi đoạn thành 1 file»: giọng tạo theo từng đoạn — giống hệt lúc render để dùng lại được
         trims = [rp.TrimSpec(segments=[seg]) for seg in trim.segments] \
@@ -372,6 +410,7 @@ class Pipeline:
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
+        self.ensure_hardsub(item, info, log)
         mods = stages_mod.collect(st, item, info)
         trim = mods.trim
         # "Xuất mỗi đoạn thành 1 file": render lần lượt từng đoạn thành file riêng
@@ -487,10 +526,8 @@ class Pipeline:
             write_ass(sub_cues, scfg, geo.width, geo.height, job_dir / "sub.ass")
             ass_name = "sub.ass"
 
-        out_dir = Path(st.output_dir) if st.output_dir else VOICE_DIR.parent / "videos"
-        out_dir.mkdir(parents=True, exist_ok=True)
         ext = ".mp3" if audio_only else ".mp4"
-        out_path = preview_out or out_dir / f"{item.stem}{vcfg.output_suffix}{suffix}{ext}"
+        out_path = preview_out or self.output_path(item, suffix, ext)
         voice_dur = self.ffmpeg.duration_of(voice_path) if voice_path else 0.0
         audio_override: Path | None = None
         if vcfg.demucs_enable and vcfg.keep_original_audio and not vcfg.mute and info.has_audio:

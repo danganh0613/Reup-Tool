@@ -52,6 +52,15 @@ TOPICS: list[dict] = [
             "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video kế), không dùng thì «Bỏ qua».",
             "Bấm «Xuất N video đã duyệt» (hoặc nút «Xuất (n)» trên cùng): chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
         ]),
+        ("h", "Tự động hoá thêm"),
+        ("kv", [
+            ("Tự dò chữ cứng", "Mục Che mờ → «Tự dò & che chữ cứng cho từng video»: máy tự tìm dải phụ đề in sẵn của mỗi video và "
+                               "che mờ (bỏ qua logo / watermark đứng yên). Mẫu Review phim / Thuyết minh bật sẵn."),
+            ("Thư mục theo dõi", "Mục Video → «Thư mục theo dõi»: chép video vào thư mục là tự vào hàng đợi, áp mẫu đã chọn, "
+                                 "rồi tuỳ chọn tự chuẩn bị (chờ duyệt) hoặc tự xuất luôn."),
+            ("Tên file xuất", "Mục Video → «Tên file xuất» / «Thư mục con» với mã {ten} {hauto} {mau} {ngay} {gio} {stt}, "
+                              "vd. {stt}_{ten} trong thư mục {mau}/{ngay}. Lưu vào mẫu được."),
+        ]),
     ]},
     {"key": "flow_dub", "title": "Video tiếng nước ngoài → tiếng Việt", "group": "Bắt đầu", "blocks": [
         ("p", "Bạn có video tiếng Trung, tiếng Anh… muốn có chữ Việt và giọng đọc tiếng Việt. Làm theo thứ tự này, "

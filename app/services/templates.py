@@ -57,9 +57,9 @@ BUILTIN: list[Template] = [
     Template(
         name="🔥 Review phim dọc 9:16 (TikTok · Shorts · Reels)",
         description="Video ngang → dọc 9:16 nền mờ, phụ đề Việt chữ vàng viền đen to rõ, lồng tiếng Việt đọc nhanh "
-                    "(khớp mềm), âm gốc nhỏ, tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
+                    "(khớp mềm), tự dò & che phụ đề gốc in sẵn, âm gốc nhỏ, tăng tốc 105% + chống trùng nhẹ (dịch khung, lệch màu, lệch tiếng, GOP).",
         badge="9:16", builtin=True, patch=True,
-        parts=["video", "subtitle", "tts", "trim", "color"],
+        parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
             "video": {"ratio": "9:16 (Dọc)", "fit_mode": FIT_MODES[2], "resolution": "1080p", "fps": "30", "zoom": 100,
                       "speed": 105, "flip_h": False, "mute": False, "keep_original_audio": True, "vocal_filter": False,
@@ -73,6 +73,7 @@ BUILTIN: list[Template] = [
                          "box_h": 0.14, "text_effect": TEXT_EFFECTS[1], "bg_style": "Không nền", "karaoke": False},
             "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "soft_timing": True, "natural_sync": False,
                     "tts_speed": 1.1, "max_tempo": 1.4, "multi_voice": False},
+            "blur": {"auto_detect": True},             # tự che phụ đề tiếng Trung in sẵn
             "trim": {"enable": False, "head": "0", "tail": "0", "segments": []},
             "color": {**_COLOR_OFF, "enable": True, "contrast": 1.05, "saturation": 1.1, "sharpen": 0.3,
                       "brightness": 0.0, "gamma": 1.0, "temperature": 0.0, "grain": 0.0, "vignette": 0.0,
@@ -81,9 +82,9 @@ BUILTIN: list[Template] = [
     Template(
         name="🎙 Thuyết minh phim ngang 16:9 (YouTube)",
         description="Giữ khung ngang 16:9 (thêm viền đen nếu lệch tỉ lệ), phụ đề Việt trắng trên hộp mờ, lồng tiếng "
-                    "thuyết minh — mỗi nhân vật một giọng (tự nhận diện người nói), lọc bớt giọng gốc, giữ nhạc nền phim.",
+                    "thuyết minh — mỗi nhân vật một giọng (tự nhận diện người nói), lọc bớt giọng gốc, giữ nhạc nền phim, tự dò & che phụ đề gốc in sẵn.",
         badge="16:9", builtin=True, patch=True,
-        parts=["video", "subtitle", "tts", "trim", "color"],
+        parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
             "video": {"ratio": "16:9 (Ngang)", "fit_mode": FIT_MODES[1], "resolution": "1080p", "fps": "Giữ nguyên",
                       "zoom": 100, "speed": 100, "flip_h": False, "mute": False, "keep_original_audio": True,
@@ -98,6 +99,7 @@ BUILTIN: list[Template] = [
                          "bg_style": "Hộp mờ bo góc", "karaoke": False},
             "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "soft_timing": True, "natural_sync": False,
                     "tts_speed": 1.0, "max_tempo": 1.35, "multi_voice": True, "speaker_count": "Tự động"},
+            "blur": {"auto_detect": True},
             "trim": {"enable": False, "head": "0", "tail": "0", "segments": []},
             "color": dict(_COLOR_OFF),
         }),
@@ -107,7 +109,7 @@ BUILTIN: list[Template] = [
                     "lật gương, phóng 110%, tăng tốc 110%, chỉnh màu + hạt phim + vignette, bật đủ chống trùng. "
                     "Không phụ đề, không lồng tiếng.",
         badge="FAST", builtin=True, patch=True,
-        parts=["video", "subtitle", "tts", "trim", "color"],
+        parts=["video", "subtitle", "tts", "blur", "trim", "color"],
         sections={
             "video": {"ratio": "9:16 (Dọc)", "fit_mode": FIT_MODES[0], "resolution": "1080p", "fps": "30", "zoom": 110,
                       "speed": 110, "flip_h": True, "mute": False, "keep_original_audio": True, "vocal_filter": False,
@@ -115,6 +117,7 @@ BUILTIN: list[Template] = [
                       "output_suffix": "_reup", "loop_to_voice": False},
             "subtitle": {"enable_subtitle": False, "translate_enable": False},
             "tts": {"enable_tts": False, "multi_voice": False},
+            "blur": {"auto_detect": False},
             "trim": {"enable": True, "head": "1", "tail": "1", "segments": []},
             "color": {**_COLOR_OFF, "enable": True, "brightness": 0.02, "contrast": 1.06, "saturation": 1.15,
                       "gamma": 1.0, "temperature": 6.0, "sharpen": 0.4, "grain": 8.0, "vignette": 18.0,

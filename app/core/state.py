@@ -94,6 +94,8 @@ class VideoConfig:
     adaptive_ducking: bool = True
     normalize_audio: bool = True
     output_suffix: str = "_edit"
+    output_name: str = ""              # mẫu tên file: {ten} {hauto} {mau} {ngay} {gio} {stt} — trống = {ten}{hauto}
+    output_subdir: str = ""            # thư mục con trong thư mục xuất (nhận cùng các mã trên)
     loop_to_voice: bool = False        # lặp video cho đủ thời lượng giọng đọc
     gop_size: int = 0                  # khoảng keyframe (0 = mặc định encoder)
     demucs_enable: bool = False        # tách giọng gốc bằng Demucs (cần cài thêm)
@@ -194,6 +196,7 @@ class BlurConfig:
     #: mỗi vùng: {x, y, w, h (0..1 theo khung ra), strength, feather, opacity, style, start, end}
     regions: list = field(default_factory=list)
     active_index: int = 0
+    auto_detect: bool = False          # tự dò vùng chữ cứng của từng video và che thêm vùng đó
 
 
 @dataclass
@@ -524,9 +527,12 @@ class AppState:
             existing.add(p.lower())
             added.append(item)
         if added:
-            if self.active_index < 0:
-                self.active_index = 0
+            first = self.active_index < 0
+            if first:
+                self._activate(0, None)
             self.emit("videos_changed")
+            if first:                       # hàng đợi đang trống → video đầu tiên thành video đang xem
+                self.emit("active_changed")
             self.mark_dirty()
         return added
 

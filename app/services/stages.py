@@ -462,7 +462,14 @@ def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: 
     stages = [kenburns_stage(state.color), texture_stage(state.color)]
     src_stages: list[Stage] = []
     if include_blur:
-        src_stages.append(blur_stage(state.blur))
+        blur = state.blur
+        if blur.auto_detect:
+            from app.services.hardsub import cached_region
+
+            region = cached_region(item)                 # vùng chữ cứng đã dò của video này (dò ở bước chuẩn bị)
+            if isinstance(region, dict):
+                blur = replace(blur, enable=True, regions=[r for r in blur.regions if blur.enable] + [region])
+        src_stages.append(blur_stage(blur))
     stages.append(brand_stage(state.brand))
     ms = ModuleStages(
         info=eff,
