@@ -30,6 +30,7 @@ class VoicePicker(ctk.CTkFrame):
         self._by_label: dict[str, Voice] = {}
         self._engine = None
         self._loading = False
+        self.auto = False          # True khi set_sel được gọi do máy tự chọn giọng (không phải người dùng bấm)
 
         self.provider = OptionRow(self, "Engine", TTS_PROVIDERS, on_change=self._provider_changed)
         self.language = OptionRow(self, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
@@ -102,7 +103,11 @@ class VoicePicker(ctk.CTkFrame):
             cur = next((v.label for v in subset if v.id == vid), None)
             if cur is None and subset:
                 cur = subset[0].label
-                self.set_sel(provider, subset[0].locale, subset[0].id, subset[0].name)
+                self.auto = True
+                try:
+                    self.set_sel(provider, subset[0].locale, subset[0].id, subset[0].name)
+                finally:
+                    self.auto = False
             self.voice.set(cur or labels[0])
         finally:
             self._loading = False

@@ -1021,7 +1021,7 @@ class MainWindow(_Root):
         self.queue_update(item)
 
     def _scope_changed(self, _section: str = "") -> None:
-        if self.review_mode and not self.preview.player.playing:
+        if self.review_mode and not self.preview.player.playing and not self.app_state.last_change_auto:
             self._scope_note = "✓ Đã chỉnh — ▶ Phát để xem lại"
         self._update_scope_strip()
 

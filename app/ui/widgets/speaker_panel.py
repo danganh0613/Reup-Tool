@@ -127,7 +127,7 @@ class SpeakerPanel(ctk.CTkFrame):
                     [smap.speakers[n] for n in smap.names()], result, provider=cfg.tts_provider,
                     locale=main_locale(cfg), main_voice=voice_id_for(cfg),
                     existing=[sv for sv in cfg.speaker_voices if sv.get("voice_id")])
-                self.state.config_changed("tts")
+                self.state.config_changed("tts", auto=True)      # gợi ý tự động, không phải người dùng sửa
             self._build(smap)
 
         self.window.run_bg(engine.list_voices, done)
@@ -163,13 +163,14 @@ class SpeakerPanel(ctk.CTkFrame):
 
         def set_sel(provider: str, locale: str, vid: str, vname: str) -> None:
             e.update(provider=provider, locale=locale, voice_id=vid, voice_name=vname)
-            self.state.config_changed("tts")
+            self.state.config_changed("tts", auto=picker.auto)
             pitch.slider.configure(state="normal" if provider == "Edge TTS" else "disabled")
 
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="x", padx=10, pady=(0, 8))
-        VoicePicker(body, self.window, get=get_sel, set_=set_sel, speed=lambda: float(e.get("speed") or cfg.tts_speed)
-                    ).pack(fill="x")
+        picker = VoicePicker(body, self.window, get=get_sel, set_=set_sel,
+                             speed=lambda: float(e.get("speed") or cfg.tts_speed))
+        picker.pack(fill="x")
 
         def set_pitch(v: float) -> None:
             e["pitch"] = int(v)

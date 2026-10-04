@@ -494,6 +494,7 @@ class AppState:
         # Đang duyệt: chỉnh gì cũng chỉ cho video đang chọn → giữ bản cấu hình chung trước lần chỉnh đầu tiên
         self.review_scope = False
         self._pristine: dict[str, Any] | None = None
+        self.last_change_auto = False       # lần config_changed gần nhất do máy tự điền?
 
         self._listeners: dict[str, list[Callable[..., None]]] = {}
         self._dirty_timer: threading.Timer | None = None
@@ -698,9 +699,15 @@ class AppState:
         self.mark_dirty()
 
     # ── Cấu hình ──────────────────────────────────────────────────────────
-    def config_changed(self, section: str = "") -> None:
-        """Module UI gọi sau khi ghi một giá trị vào cấu hình."""
-        self._scope_edit()
+    def config_changed(self, section: str = "", auto: bool = False) -> None:
+        """Module UI gọi sau khi ghi một giá trị vào cấu hình. ``auto``: máy tự điền (vd. gợi ý giọng cho người nói)
+        chứ không phải người dùng sửa → không tách video thành «chỉnh riêng», mốc «chưa chỉnh» nhận luôn giá trị mới."""
+        self.last_change_auto = auto
+        if auto:
+            if self._pristine is not None:
+                self._snap_pristine()
+        else:
+            self._scope_edit()
         self.emit("config_changed", section)
         self.mark_dirty()
 
