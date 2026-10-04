@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
 _UNSET = object()
-_STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING}
+_STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
+                 "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED}
 
 
 class QueueRow(ctk.CTkFrame):

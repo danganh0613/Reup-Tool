@@ -108,6 +108,7 @@ class MainWindow(_Root):
         add_ui_sink(self._log_sink)
         self.app_state.on("active_changed", self._active_changed)
         self.app_state.on("config_loaded", self.refresh_modules)
+        self.app_state.on("videos_changed", lambda: self.update_render_button())
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
@@ -188,6 +189,7 @@ class MainWindow(_Root):
         self.render_btn.pack(side="left", padx=(8, 4))
         self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", state="disabled", tip="Dừng mọi việc đang chạy (Esc)")
         self.stop_btn.pack(side="left", padx=4)
+        self.after(300, self.update_render_button)
 
     def _hbtn(self, parent, text: str, icon_name: str, command, *, variant: str = "secondary", **kw) -> ctk.CTkButton:
         """Nút header (md, có icon); ghi nhớ nhãn + bề rộng để thu gọn/khôi phục khi cửa sổ đổi cỡ."""
@@ -374,6 +376,7 @@ class MainWindow(_Root):
         m = self.modules.get("video")
         if m is not None:
             m.queue.update_row(item)
+        self.update_render_button()
 
     # ── Trạng thái / sự kiện ──────────────────────────────────────────────
     def _active_changed(self) -> None:
@@ -472,6 +475,7 @@ class MainWindow(_Root):
         self._panel_help_w = self._layout_sig = None     # khung mới dựng lại → phải đặt lại kích thước / vẽ lại
         self._help_open = False
         self._compact_header = False
+        self._render_label = None
         self.configure(fg_color=T.BG)
         self._build_header()
         self._build_body()
@@ -726,10 +730,29 @@ class MainWindow(_Root):
             self._log_win.append(line)
 
     # ── Render ────────────────────────────────────────────────────────────
-    def start_render(self, items: list[VideoItem], audio_only: bool = False) -> None:
+    @property
+    def review_mode(self) -> bool:
+        return bool(self.app_state.ui.get("review_mode"))
+
+    def start_render(self, items: list[VideoItem], audio_only: bool = False, *, force: bool = False) -> None:
+        """Nút Render. Bật «Duyệt trước khi xuất»: video chưa chuẩn bị → Chuẩn bị; đã duyệt → xuất; còn lại → mở màn hình duyệt.
+        ``force``: xuất đúng các video được đưa vào (từ màn hình duyệt)."""
         if not items:
             messagebox.showinfo(APP_NAME, "Hàng đợi trống — bấm Nạp video trước.")
             return
+        if self.review_mode and not force:
+            todo = [it for it in items if not it.review]
+            if todo:
+                self._run_queue(todo, mode="prepare")
+                return
+            ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
+            if not ready:
+                self.open_review()
+                return
+            items = ready
+        self._run_queue(items, mode="render", audio_only=audio_only)
+
+    def _run_queue(self, items: list[VideoItem], *, mode: str = "render", audio_only: bool = False) -> None:
         if not self.ffmpeg.available:
             messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
             return
@@ -748,20 +771,34 @@ class MainWindow(_Root):
         total = len(items)
         done_count = [0]
         self.pipeline.audio_only = audio_only
+        prep = mode == "prepare"
 
         def on_update(it: VideoItem) -> None:
             self.queue_update(it)
-            if it.status == "Đang xử lý":
+            if it.status in ("Đang xử lý", "Đang chuẩn bị"):
                 self.progress.set_stage(stage_index_for(it.message))
                 self.progress.set_status(f"[{done_count[0] + 1}/{total}] {it.name} — {it.message}")
                 self.progress.set_progress((done_count[0] + it.progress) / total)
-            elif it.status in ("Xong", "Lỗi", "Đã huỷ"):
+            elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt"):
                 done_count[0] = min(total, done_count[0] + 1)
 
         def on_done(ok: int, fail: int) -> None:
             self.set_running(False)
             self.busy_label.configure(text="")
+            self.update_render_button()
             elapsed = time.time() - self._render_started
+            if prep:
+                msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
+                self.progress.set_stage(-1 if fail else 2)
+                self.progress.set_progress(1.0 if not fail else 0.0)
+                self.progress.set_status(msg + " — mở màn hình duyệt.")
+                self.log(msg)
+                self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
+                notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
+                self.app_state.save_config()
+                if ok:
+                    self.open_review()
+                return
             msg = f"Hoàn tất: {ok} xong, {fail} lỗi · {elapsed / 60:.1f} phút"
             self.progress.set_stage(4 if fail == 0 else -1)
             self.progress.set_progress(1.0 if fail == 0 else 0.0)
@@ -772,11 +809,40 @@ class MainWindow(_Root):
             self.app_state.save_config()
             self.pipeline.audio_only = False
 
-        if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done):
+        if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
             self.set_running(True)
-            self.busy_label.configure(text="⏳ Đang render…")
             self.progress.set_stage(0)
-            self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+            if prep:
+                self.busy_label.configure(text="⏳ Đang chuẩn bị…")
+                self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở màn hình duyệt.")
+            else:
+                self.busy_label.configure(text="⏳ Đang render…")
+                self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+
+    # ── Duyệt ─────────────────────────────────────────────────────────────
+    def open_review(self) -> None:
+        from app.ui.widgets.review_window import ReviewWindow
+
+        w = getattr(self, "_review_win", None)
+        if w is not None and w.winfo_exists():
+            w.reload()
+            w.deiconify()
+            w.lift()
+            return
+        self._review_win = ReviewWindow(self)
+
+    def update_render_button(self) -> None:
+        """Nhãn nút Render theo bước duyệt: Chuẩn bị (n) → Duyệt → Xuất (n)."""
+        vids = self.app_state.videos
+        if not self.review_mode:
+            text = "Render MP4"
+        else:
+            todo = sum(1 for it in vids if not it.review)
+            ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
+            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else "Duyệt")
+        if getattr(self, "_render_label", None) != text:
+            self._render_label = text
+            relabel(self.render_btn, text)
 
     def stop_all(self) -> None:
         self.runner.stop()

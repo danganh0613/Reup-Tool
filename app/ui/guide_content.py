@@ -42,6 +42,16 @@ TOPICS: list[dict] = [
             "Bấm «Render MP4»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó.",
             "Nút ☰ cạnh «Lưu mẫu»: xem tất cả mẫu, áp cho tất cả / chỉ video đang chọn, xuất file mẫu gửi máy khác, nhập mẫu.",
         ]),
+        ("h", "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)"),
+        ("steps", [
+            "Mục Video bật «Duyệt trước khi xuất». Nút Render trên cùng đổi thành «Chuẩn bị (n)».",
+            "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa render). "
+            "Xong tự mở màn hình duyệt.",
+            "Màn hình duyệt: chọn từng video (khung xem trước chính hiện đúng video đó). Sửa câu phụ đề / dịch sai → "
+            "«Lưu sửa & tạo lại giọng» (câu không đổi dùng lại, rất nhanh). «Phát trên khung chính» hoặc «Render thử 15 giây» để nghe.",
+            "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video kế), không dùng thì «Bỏ qua».",
+            "Bấm «Xuất N video đã duyệt» (hoặc nút «Xuất (n)» trên cùng): chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
+        ]),
     ]},
     {"key": "flow_dub", "title": "Video tiếng nước ngoài → tiếng Việt", "group": "Bắt đầu", "blocks": [
         ("p", "Bạn có video tiếng Trung, tiếng Anh… muốn có chữ Việt và giọng đọc tiếng Việt. Làm theo thứ tự này, "

@@ -347,9 +347,11 @@ class PreviewPanel(ctk.CTkFrame):
             self._redraw()
             return
         self._draw_message("Đang tải…")
-        self.window.run_bg(lambda: self.window.ffmpeg.probe(item.path), self._probed)
+        self.window.run_bg(lambda: self.window.ffmpeg.probe(item.path), lambda i, e, it=item: self._probed(i, e, it))
 
-    def _probed(self, info: MediaInfo | None, error: Exception | None) -> None:
+    def _probed(self, info: MediaInfo | None, error: Exception | None, item: VideoItem | None = None) -> None:
+        if item is not None and item is not self.item:
+            return                      # đã chuyển sang video khác trong lúc đọc thông tin → bỏ kết quả cũ
         if error or info is None or self.item is None:
             self._draw_message(f"Không đọc được video: {error}")
             return

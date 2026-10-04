@@ -324,6 +324,44 @@ class Pipeline:
             pass
         return out, window
 
+    @staticmethod
+    def _stager(item: VideoItem, on_update):
+        """``stage(tên, gốc, độ dài)`` → callback tiến độ ghi vào ``item`` (gộp cập nhật ~7 lần/giây)."""
+        def stage(name: str, base: float, span: float) -> ProgressCb:
+            last = [0.0]
+
+            def cb(p: float) -> None:
+                now = time.time()
+                if now - last[0] < 0.15 and p < 1.0:
+                    return
+                last[0] = now
+                item.progress = base + span * max(0.0, min(1.0, p))
+                item.message = name
+                on_update(item)
+            return cb
+        return stage
+
+    def prepare(self, item: VideoItem, *, on_update: Callable[[VideoItem], None], log: LogCb,
+                cancel: threading.Event) -> None:
+        """Bước «Chuẩn bị» (chưa render): nhận diện giọng, dịch, người nói, tạo giọng lồng → «Chờ duyệt»."""
+        item.status, item.progress, item.message = "Đang chuẩn bị", 0.0, "Đọc thông tin"
+        on_update(item)
+        self.probe(item)
+        info = self.ffmpeg.probe(item.path)
+        if info.width <= 0 or info.height <= 0:
+            raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
+        trim = stages_mod.collect(self.state, item, info).trim
+        # «Xuất mỗi đoạn thành 1 file»: giọng tạo theo từng đoạn — giống hệt lúc render để dùng lại được
+        trims = [rp.TrimSpec(segments=[seg]) for seg in trim.segments] \
+            if trim.active and self.state.trim.mode == TRIM_MODES[1] and len(trim.segments) > 1 else [trim]
+        stage = self._stager(item, on_update)
+        for t in trims:
+            self._prepare_assets(item, info, t, vcfg=self.state.video, stage=stage, log=log, cancel=cancel,
+                                 on_update=on_update)
+        item.status, item.progress, item.message = "Chờ duyệt", 1.0, ""
+        item.review = "pending"
+        on_update(item)
+
     # ── Chuỗi đầy đủ cho một video ────────────────────────────────────────
     def process(self, item: VideoItem, *, on_update: Callable[[VideoItem], None],
                 log: LogCb, cancel: threading.Event) -> Path:
@@ -350,36 +388,14 @@ class Pipeline:
             return outs[-1]
         return self._render_one(item, info, trim, on_update=on_update, log=log, cancel=cancel)
 
-    def _render_one(self, item: VideoItem, info, trim, *, on_update, log, cancel, suffix: str = "",
-                    final: bool = True, preview_out: Path | None = None) -> Path:
-        """``final=False``: một đoạn trong chế độ xuất nhiều file — không đánh dấu "Xong" để bộ đếm tiến độ
-        của hàng đợi không nhảy trước. ``preview_out``: bản render thử (mã hoá nhanh, giọng/kết quả để trong cache)."""
+    def _prepare_assets(self, item: VideoItem, info, trim, *, vcfg, stage, log, cancel, on_update,
+                        preview_out: Path | None = None) -> tuple[list[Cue], list[Cue] | None, Path | None]:
+        """Phần «chuẩn bị» của một video: phụ đề (nhận diện / file SRT), bản dịch, người nói, track giọng lồng.
+
+        Kết quả lưu ra file (SRT, WAV theo chữ ký cấu hình) → bước render sau dùng lại, không làm lại."""
         st = self.state
-        vcfg, scfg, tcfg = st.video, st.subtitle, st.tts
-        audio_only = self.audio_only and preview_out is None
-        if preview_out is not None:
-            vcfg = dataclasses.replace(vcfg, encode_preset=ENCODE_PRESETS[0], loop_to_voice=False)
-        mods = stages_mod.collect(st, item, info, trim_override=trim)
-
-        def stage(name: str, base: float, span: float) -> ProgressCb:
-            last = [0.0]
-
-            def cb(p: float) -> None:
-                now = time.time()
-                if now - last[0] < 0.15 and p < 1.0:
-                    return
-                last[0] = now
-                item.progress = base + span * max(0.0, min(1.0, p))
-                item.message = name
-                on_update(item)
-            return cb
-
+        scfg, tcfg = st.subtitle, st.tts
         trim_key = repr([(round(a, 3), round(b, 3)) for a, b in trim.segments]) if trim.active else ""
-        if trim.active:
-            log(f"Cắt: giữ {len(trim.segments)} đoạn · {trim.kept_duration:.1f}s")
-        elif st.trim.enable:
-            log("⚠ Cắt đang bật nhưng mốc không hợp lệ (vượt thời lượng, đầu ≥ cuối…) — giữ nguyên video.")
-
         sub_on = scfg.enable_subtitle
         tts_on = tcfg.enable_tts
         need_cues = sub_on or tts_on
@@ -429,6 +445,30 @@ class Pipeline:
                                              fit_duration=fit if not (vcfg.loop_to_voice or preview_out) else None,
                                              out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None)
             on_update(item)
+
+        return cues_orig, cues_tr, voice_path
+
+    def _render_one(self, item: VideoItem, info, trim, *, on_update, log, cancel, suffix: str = "",
+                    final: bool = True, preview_out: Path | None = None) -> Path:
+        """``final=False``: một đoạn trong chế độ xuất nhiều file — không đánh dấu "Xong" để bộ đếm tiến độ
+        của hàng đợi không nhảy trước. ``preview_out``: bản render thử (mã hoá nhanh, giọng/kết quả để trong cache)."""
+        st = self.state
+        vcfg, scfg, tcfg = st.video, st.subtitle, st.tts
+        audio_only = self.audio_only and preview_out is None
+        if preview_out is not None:
+            vcfg = dataclasses.replace(vcfg, encode_preset=ENCODE_PRESETS[0], loop_to_voice=False)
+        mods = stages_mod.collect(st, item, info, trim_override=trim)
+        stage = self._stager(item, on_update)
+
+        if trim.active:
+            log(f"Cắt: giữ {len(trim.segments)} đoạn · {trim.kept_duration:.1f}s")
+        elif st.trim.enable:
+            log("⚠ Cắt đang bật nhưng mốc không hợp lệ (vượt thời lượng, đầu ≥ cuối…) — giữ nguyên video.")
+
+        sub_on = scfg.enable_subtitle
+        tts_on = tcfg.enable_tts
+        cues_orig, cues_tr, voice_path = self._prepare_assets(item, info, trim, vcfg=vcfg, stage=stage, log=log,
+                                                              cancel=cancel, on_update=on_update, preview_out=preview_out)
 
         job_dir = self.job_dir(item)
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -502,7 +542,8 @@ class JobRunner:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self, items: list[VideoItem], *, on_update: Callable[[VideoItem], None],
-              on_log: LogCb, on_done: Callable[[int, int], None]) -> bool:
+              on_log: LogCb, on_done: Callable[[int, int], None], mode: str = "render") -> bool:
+        """``mode``: "render" (xuất video) · "prepare" (chỉ chuẩn bị phụ đề / dịch / giọng → «Chờ duyệt»)."""
         if self.running or not items:
             return False
         self.cancel.clear()
@@ -529,7 +570,10 @@ class JobRunner:
                     pipe.audio_only = base.audio_only
                     if it.config is not None or it.template:
                         _ui_log(f"{it.name}: dùng cấu hình riêng" + (f" (mẫu «{it.template}»)" if it.template else ""))
-                    pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
+                    if mode == "prepare":
+                        pipe.prepare(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
+                    else:
+                        pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
                     ok += 1
                 except RenderCancelled:
                     it.status, it.message = "Đã huỷ", ""

@@ -37,6 +37,11 @@ class VideoModule(BaseModule):
         self.queue = QueuePanel(self, self.window, compact=True, height=200)
         self.queue.pack(fill="x", pady=(0, 6))
         ButtonRow(self, [("＋ Thêm từ thư mục…", self._add_folder, None)]).pack(fill="x", pady=(0, 4))
+        self.review = SwitchRow(self, "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)", on_change=self._review_toggled)
+        self.review.pack(fill="x", pady=(2, 0))
+        self.review_row = ButtonRow(self, [("✔ Mở màn hình duyệt", lambda: self.window.open_review(), None)])
+        self.review_hint = hint(self, "Bấm nút Chuẩn bị (thay cho Render) → máy làm phụ đề, dịch, giọng cho cả hàng đợi → "
+                                      "bạn xem / sửa / duyệt từng video → Xuất. Tắt = render một mạch như cũ.")
 
         sec = Section(self, "Cấu hình của video đang chọn")
         sec.pack(fill="x", pady=4)
@@ -142,15 +147,34 @@ class VideoModule(BaseModule):
             self.mute.set(cfg.mute)
             self.loop.set(cfg.loop_to_voice)
             self.demucs.set(cfg.demucs_enable)
+            self.review.set(bool(self.state.ui.get("review_mode")))
         finally:
             self._loading = False
         self.update_fit_hint()
         self.update_own()
+        self._layout_review()
         self._update_gpu_hint()
 
     def on_active_changed(self) -> None:
         self.update_fit_hint()
         self.update_own()
+
+    def _review_toggled(self, on: bool) -> None:
+        if self._loading:
+            return
+        self.state.ui["review_mode"] = bool(on)
+        self.state.mark_dirty()
+        self._layout_review()
+        self.window.update_render_button()
+
+    def _layout_review(self) -> None:
+        if self.state.ui.get("review_mode"):
+            if not self.review_row.winfo_ismapped():
+                self.review_row.pack(fill="x", pady=(2, 0), after=self.review)
+                self.review_hint.pack(fill="x", pady=(0, 4), after=self.review_row)
+        else:
+            self.review_row.pack_forget()
+            self.review_hint.pack_forget()
 
     def update_own(self) -> None:
         from app.services.templates import list_templates

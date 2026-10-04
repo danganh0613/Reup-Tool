@@ -385,6 +385,8 @@ class VideoItem:
     has_audio: bool = True
     output_path: str | None = None
     template: str = ""                     # mẫu đã áp riêng cho video này (chỉ để hiển thị)
+    #: quy trình duyệt: "" (chưa chuẩn bị) · "pending" (chờ duyệt) · "approved" (đã duyệt) · "skipped" (bỏ qua)
+    review: str = ""
     #: cấu hình riêng (các phần của mẫu) — None = dùng cấu hình chung đang mở
     config: dict | None = None
 
@@ -401,6 +403,8 @@ class VideoItem:
              "srt_translated_path": self.srt_translated_path, "voice_path": self.voice_path}
         if self.config is not None:
             d["config"], d["template"] = self.config, self.template
+        if self.review:
+            d["review"] = self.review
         return d
 
 
@@ -711,7 +715,10 @@ class AppState:
                     voice_path=row.get("voice_path") if row.get("voice_path") and Path(row["voice_path"]).exists() else None,
                     config=row.get("config") if isinstance(row.get("config"), dict) else None,
                     template=str(row.get("template") or ""),
+                    review=str(row.get("review") or ""),
                 ))
+            for it in self.videos:                      # trạng thái hiển thị theo bước duyệt đã lưu
+                it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review, it.status)
             idx = data.get("active_index", 0)
             idx = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
             self.active_index = -1
