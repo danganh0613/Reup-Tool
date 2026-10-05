@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -116,6 +117,7 @@ class MainWindow(_Root):
         self._watcher = FolderWatcher()
         self._watch_pending: list[VideoItem] = []
         self.after(4000, self._watch_tick)
+        self.after(60000, self._release_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
@@ -927,6 +929,23 @@ class MainWindow(_Root):
                                                      "(Không = chỉ nạp video chép vào từ giờ.)"):
             ui["watch_seen"] = (list(ui.get("watch_seen", [])) + old)[-3000:]
             self.app_state.mark_dirty()
+
+    MODEL_IDLE_S = 180                  # model AI không dùng quá 3 phút → trả RAM/VRAM cho máy
+
+    def _release_tick(self) -> None:
+        """Whisper / VieNeu nặng 0,5–2 GB; xong việc mà lâu không dùng thì giải phóng (lần sau tự nạp lại)."""
+        if not (self.runner.running or self.tasks.running):
+            freed = []
+            for mod, name in (("app.services.whisper_stt", "Whisper"), ("app.services.tts.vieneu", "VieNeu")):
+                m = sys.modules.get(mod)              # chưa từng dùng thì module chưa nạp → không có gì để bỏ
+                try:
+                    if m is not None and m.release_idle(self.MODEL_IDLE_S):
+                        freed.append(name)
+                except Exception:
+                    logger.warning("Giải phóng model %s lỗi", name, exc_info=True)
+            if freed:
+                self.log(f"Đã giải phóng model {', '.join(freed)} khỏi bộ nhớ (lâu không dùng) — lần sau tự nạp lại.")
+        self.after(60000, self._release_tick)
 
     def _watch_tick(self) -> None:
         try:

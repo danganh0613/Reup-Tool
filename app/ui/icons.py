@@ -115,8 +115,11 @@ def glyph_image(name: str, size: int, color: str = "#F7F7F8") -> Image.Image | N
     return _render(name, size, color)
 
 
+@lru_cache(maxsize=512)
 def icon(name: str, size: int = 16, color: str = "#F7F7F8", dy: int = 0) -> ctk.CTkImage | None:
-    """``dy``: hạ icon xuống ``dy`` px logic — dùng cho icon đứng trước chữ (nút, ô chọn, tiêu đề)."""
+    """``dy``: hạ icon xuống ``dy`` px logic — dùng cho icon đứng trước chữ (nút, ô chọn, tiêu đề).
+
+    Dùng chung một CTkImage cho mọi nơi gọi cùng tham số (ctk_patches gỡ callback khi widget bị huỷ)."""
     img = _render(name, size, color, dy)
     if img is None:
         return None

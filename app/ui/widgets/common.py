@@ -82,6 +82,8 @@ class SliderRow(ctk.CTkFrame):
             self.on_release(v)
 
     def set(self, v: float) -> None:
+        if v == self._value and self.var.get() == self._text(v) and abs(self.slider.get() - v) < 1e-9:
+            return                                # CTkSlider.set vẽ lại cả thanh dù giá trị không đổi
         self._value = v
         self.slider.set(v)
         self.var.set(self._text(v))
@@ -104,7 +106,7 @@ class OptionRow(ctk.CTkFrame):
         self.menu.grid(row=0, column=1, sticky="ew")
 
     def set(self, v: str) -> None:
-        self.var.set(v)
+        self.menu.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -137,7 +139,7 @@ class ComboRow(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        self.combo.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -163,7 +165,8 @@ class SwitchRow(ctk.CTkFrame):
             self.on_change(bool(self.var.get()))
 
     def set(self, v: bool) -> None:
-        self.var.set(bool(v))
+        if bool(v) != bool(self.var.get()):       # CTkSwitch vẽ lại cả công tắc mỗi lần gán, kể cả gán trùng
+            self.var.set(bool(v))
 
     def get(self) -> bool:
         return bool(self.var.get())
@@ -214,7 +217,8 @@ class EntryRow(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        if self.var.get() != v:
+            self.var.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -268,6 +272,8 @@ class ColorRow(ctk.CTkFrame):
         self._picker = ColorPicker(self.swatch, self._last, on_change=self._apply)
 
     def set(self, v: str) -> None:
+        if v.upper() == self._last and self.var.get() == self._last:
+            return
         self._last = v.upper()
         self.var.set(self._last)
         self.swatch.configure(fg_color=self._last, hover_color=self._last)
@@ -359,7 +365,8 @@ class TimeEntry(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        if self.var.get() != v:
+            self.var.set(v)
 
     def get(self) -> str:
         return self.var.get().strip()

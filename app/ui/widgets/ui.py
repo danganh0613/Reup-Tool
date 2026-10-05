@@ -60,9 +60,14 @@ def _sync_state(b: ctk.CTkButton) -> None:
         look = _disabled_look(fg)
         on = b._es_on = (fg, look) if look else False
     disabled = str(b.cget("state")) == "disabled"
+    kw: dict = {}                                # gom thay đổi → một lần configure (mỗi lần CTk vẽ lại cả nút)
     if on:
         fg, (soft_fg, soft_text) = on
-        _ORIG_CONFIGURE(b, fg_color=soft_fg if disabled else fg, text_color_disabled=soft_text)
+        want = soft_fg if disabled else fg
+        if b.cget("fg_color") != want:
+            kw["fg_color"] = want
+        if b.cget("text_color_disabled") != soft_text:
+            kw["text_color_disabled"] = soft_text
     else:                                        # nút xám / trong suốt: icon mờ cùng chữ
         dis = b.cget("text_color_disabled")
         soft_text = dis[-1] if isinstance(dis, (list, tuple)) else dis
@@ -75,8 +80,11 @@ def _sync_state(b: ctk.CTkButton) -> None:
     ic = getattr(b, "_es_icon", None)
     if ic and ic[0]:
         name, isz, color = ic[0], ic[1], ic[2]
-        _ORIG_CONFIGURE(b, image=icon(name, isz, soft_text if disabled else color,
-                                      dy=ICON_DY if str(b.cget("text")).strip() else 0))
+        img = icon(name, isz, soft_text if disabled else color, dy=ICON_DY if str(b.cget("text")).strip() else 0)
+        if img is not b.__dict__.get("_image"):        # icon() dùng chung ảnh → cùng tham số là cùng đối tượng
+            kw["image"] = img
+    if kw:
+        _ORIG_CONFIGURE(b, **kw)
 
 
 _ORIG_INIT = ctk.CTkButton.__init__
@@ -84,6 +92,9 @@ _ORIG_CONFIGURE = ctk.CTkButton.configure
 
 
 def _btn_init(self, *a, **kw) -> None:
+    look = _disabled_look(kw.get("fg_color"))
+    if look and "text_color_disabled" not in kw:
+        kw["text_color_disabled"] = look[1]
     _ORIG_INIT(self, *a, **kw)
     self._es_on = None
     _sync_state(self)
@@ -500,7 +511,8 @@ class Select(ctk.CTkFrame):
         return self.var.get()
 
     def set(self, v: str) -> None:
-        self.var.set(v)
+        if v != self.var.get():                 # gán trùng vẫn kích trace → vẽ lại nhãn vô ích
+            self.var.set(v)
 
     def set_values(self, values: list[str], keep: bool = True) -> None:
         self._values = list(values) if values else []
@@ -520,6 +532,7 @@ class Select(ctk.CTkFrame):
         if "state" in kw:
             self._state = kw.pop("state")
             self.label.configure(text_color=T.TEXT_MUTED if self._state == "disabled" else T.TEXT)
+            self._shown = None
         if "command" in kw:
             self._command = kw.pop("command")
         if kw:
@@ -529,7 +542,11 @@ class Select(ctk.CTkFrame):
     def _render(self) -> None:
         v = self.var.get()
         text = self._short(v) if v else self._placeholder
-        self.label.configure(text=text, text_color=T.TEXT if (v and self._state != "disabled") else T.TEXT_MUTED)
+        color = T.TEXT if (v and self._state != "disabled") else T.TEXT_MUTED
+        if self.__dict__.get("_shown") == (text, color):      # không đổi → khỏi vẽ lại (CTkLabel vẽ lại cả khung)
+            return
+        self._shown = (text, color)
+        self.label.configure(text=text, text_color=color)
         if self._chip:      # chip vừa khít: đệm 10 · [icon 15 · 8] · chữ · 4 · chevron 11 · 10 (+6 dự phòng làm tròn DPI)
             w = text_width(text, self._fs, self) + (10 + 15 + 8 if self._has_icon else 12) + 4 + 11 + 10 + 6
             super().configure(width=max(56, min(260, w)))

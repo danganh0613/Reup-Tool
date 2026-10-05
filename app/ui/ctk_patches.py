@@ -12,8 +12,14 @@ import math
 import tkinter
 
 from customtkinter.windows.widgets.core_rendering import DrawEngine
+from customtkinter.windows.widgets.ctk_button import CTkButton
+from customtkinter.windows.widgets.ctk_frame import CTkFrame
+from customtkinter.windows.widgets.ctk_label import CTkLabel
 from customtkinter.windows.widgets.ctk_scrollable_frame import CTkScrollableFrame
+from customtkinter.windows.widgets.ctk_scrollbar import CTkScrollbar
 from customtkinter.windows.widgets.ctk_slider import CTkSlider
+from customtkinter.windows.widgets.ctk_textbox import CTkTextbox
+from customtkinter.windows.widgets.image import CTkImage
 from customtkinter.windows.widgets.scaling import CTkScalingBaseClass
 
 
@@ -37,7 +43,93 @@ def _draw_rounded_rect_with_border(self, width, height, corner_radius, border_wi
     else:
         width = math.floor(width / 2) * 2
         height = math.floor(height / 2) * 2
+    # Vẽ lại một nút/khung tốn ~30 lệnh Tcl (dời từng hình bo góc). CTk vẽ lại ở mọi lần configure, kể cả khi
+    # kích thước y hệt lần trước → bỏ qua, chỉ kiểm tra hình còn trên canvas (1 lệnh). Màu vẫn do widget tự đặt sau.
+    key = (width, height, round(corner_radius), round(border_width), overwrite_preferred_drawing_method)
+    if self.__dict__.get("_es_rect") == key and self._canvas.find_withtag("inner_parts"):
+        return False
+    self.__dict__["_es_rect"] = key
     return _orig_draw(self, width, height, corner_radius, border_width, overwrite_preferred_drawing_method)
+
+
+# Khung / nhãn «trong suốt» không viền (≈ 800 cái khi mở hết các tab): CTk vẫn vẽ một hình bo góc tô đúng màu nền
+# — vô hình nhưng mỗi cái ~10 hình trên canvas và dời lại mỗi lần đổi cỡ. Chỉ đặt màu nền canvas là đủ. Widget nào
+# từng có màu nền / viền (đã có hình) thì giữ cách vẽ gốc để hình cũ được tô lại đúng.
+_orig_frame_draw = CTkFrame._draw
+_orig_label_draw = CTkLabel._draw
+
+
+def _plain(self) -> bool:
+    return (self._fg_color == "transparent" and not round(getattr(self, "_border_width", 0) or 0)
+            and not self.__dict__.get("_es_shape"))
+
+
+def _frame_draw(self, no_color_updates=False):
+    if _plain(self) and getattr(self, "_background_corner_colors", None) is None:
+        if no_color_updates is False and self._canvas.winfo_exists():
+            self._canvas.configure(bg=self._apply_appearance_mode(self._bg_color))
+        return
+    self.__dict__["_es_shape"] = True
+    _orig_frame_draw(self, no_color_updates)
+
+
+def _label_draw(self, no_color_updates=False):
+    if _plain(self):
+        if no_color_updates is False:
+            bg = self._apply_appearance_mode(self._bg_color)
+            self._canvas.configure(bg=bg)
+            self._label.configure(fg=self._apply_appearance_mode(self._text_color),
+                                  disabledforeground=self._apply_appearance_mode(self._text_color_disabled), bg=bg)
+        return
+    self.__dict__["_es_shape"] = True
+    _orig_label_draw(self, no_color_updates)
+
+
+# Mỗi CTkTextbox tự dò «có cần thanh cuộn» 5 lần/giây suốt đời, kể cả khi đang ẩn (tab khác) → ẩn thì bỏ qua và
+# hỏi lại thưa (1 giây). Ô đang hiện vẫn dò như cũ.
+_orig_tb_check = getattr(CTkTextbox, "_check_if_scrollbars_needed", None)
+
+
+def _tb_check(self, event=None, continue_loop=False):
+    if continue_loop and event is None:
+        try:
+            if not self._textbox.winfo_exists():
+                return
+            if not self.winfo_viewable():
+                self.after(1000, lambda: self._check_if_scrollbars_needed(continue_loop=True))
+                return
+        except tkinter.TclError:
+            return
+    _orig_tb_check(self, event, continue_loop)
+
+
+# Thanh cuộn: CTk vẽ lại mỗi lần set() dù vị trí không đổi (mỗi lần cuộn/đổi bố cục gọi vài lần) → bỏ lần trùng.
+_orig_sb_set = CTkScrollbar.set
+
+
+def _sb_set(self, start_value, end_value):
+    key = (round(float(start_value), 4), round(float(end_value), 4), round(self._current_width), round(self._current_height))
+    if self.__dict__.get("_es_set") == key:
+        return
+    self.__dict__["_es_set"] = key
+    _orig_sb_set(self, start_value, end_value)
+
+
+# CTk gắn callback của CTkImage vào widget nhưng destroy() không gỡ → widget đã huỷ vẫn bị ảnh giữ lại.
+# Gỡ khi huỷ để icons.icon() dùng chung được một CTkImage cho mọi nút (khỏi tạo lại ảnh mỗi lần vẽ).
+def _make_destroy(cls):
+    orig = cls.destroy
+
+    def destroy(self):
+        img = self.__dict__.get("_image")
+        if isinstance(img, CTkImage):
+            try:
+                img.remove_configure_callback(self._update_image)
+            except (ValueError, AttributeError):
+                pass
+        orig(self)
+
+    return destroy
 
 
 # CTkScrollableFrame đăng ký 5 handler toàn cục (bind_all: lăn chuột, Shift) mà destroy() không gỡ → mỗi popup /
@@ -92,10 +184,27 @@ def _valid_scroll_through_slider(self, widget):
 def apply() -> None:
     if getattr(CTkScalingBaseClass, "_es_patched", False):
         return
+    # CTk dò chế độ sáng/tối của hệ điều hành 33 lần/giây dù app luôn đặt sẵn «dark» (không theo hệ thống) → 1 lần/giây;
+    # dò DPI màn hình 10 lần/giây cho mỗi cửa sổ → 2 lần/giây (kéo cửa sổ sang màn hình khác vẫn kịp đổi cỡ).
+    try:
+        from customtkinter.windows.widgets.appearance_mode import AppearanceModeTracker
+        from customtkinter.windows.widgets.scaling import ScalingTracker
+
+        AppearanceModeTracker.update_loop_interval = 1000
+        ScalingTracker.update_loop_interval = 500
+    except (ImportError, AttributeError):
+        pass
     CTkScalingBaseClass._reverse_widget_scaling = _reverse_widget_scaling
     DrawEngine._round_width_to_even_numbers = False
     DrawEngine._round_height_to_even_numbers = False
     DrawEngine.draw_rounded_rect_with_border = _draw_rounded_rect_with_border
+    CTkScrollbar.set = _sb_set
+    CTkFrame._draw = _frame_draw
+    if _orig_tb_check is not None:
+        CTkTextbox._check_if_scrollbars_needed = _tb_check
+    CTkLabel._draw = _label_draw
+    CTkButton.destroy = _make_destroy(CTkButton)
+    CTkLabel.destroy = _make_destroy(CTkLabel)
     CTkScrollableFrame.bind_all = _sf_bind_all
     CTkScrollableFrame.destroy = _sf_destroy
     if hasattr(CTkSlider, "_mouse_scroll_event"):         # chỉ có từ CustomTkinter 6.x

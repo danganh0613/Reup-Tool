@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +26,7 @@ _RUNTIME_DEPS = ["sea-g2p>=0.9.1", "onnxruntime>=1.20.0", "numpy", "soundfile", 
 
 _model = None
 _model_lock = threading.Lock()
+_last_used = 0.0
 
 
 def is_installed() -> bool:
@@ -58,9 +60,24 @@ def install_vieneu(log: Callable[[str], None] | None = None) -> bool:
     return is_installed()
 
 
-def load_model(precision: str = "int8", log: Callable[[str], None] | None = None):
+def release_idle(max_idle: float) -> bool:
+    """Bỏ model VieNeu đã nạp (vài trăm MB RAM) nếu ``max_idle`` giây chưa dùng. Lần đọc sau nạp lại (~7 s)."""
     global _model
     with _model_lock:
+        if _model is None or time.monotonic() - _last_used < max_idle:
+            return False
+        _model = None
+    import gc
+
+    gc.collect()
+    logger.info("Đã giải phóng model VieNeu (lâu không dùng)")
+    return True
+
+
+def load_model(precision: str = "int8", log: Callable[[str], None] | None = None):
+    global _model, _last_used
+    with _model_lock:
+        _last_used = time.monotonic()
         if _model is not None:
             return _model
         if not is_installed():
@@ -128,12 +145,14 @@ class VieNeuTTS(TTSEngine):
         return list(self._voices)
 
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
+        global _last_used
         import soundfile as sf
 
         model = load_model(self.precision, self.log)
         out_path = out_path.with_suffix(".wav")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with _model_lock:
+            _last_used = time.monotonic()          # đang đọc cũng tính là đang dùng
             if voice_id.startswith("ref:"):
                 audio = model.infer(text, ref_audio=voice_id[4:], denoise=True)
             else:

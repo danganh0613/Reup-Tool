@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,7 @@ _PUNCT_PROMPTS = {
 
 _model_cache: dict[tuple[str, str, str], object] = {}
 _model_lock = threading.Lock()
+_last_used = 0.0                    # lần cuối lấy model (monotonic) — để giải phóng khi lâu không dùng
 
 
 @dataclass
@@ -214,11 +216,26 @@ def _download(size: str, log: Callable[[str], None] | None) -> str:
     raise RuntimeError(f"Không tải được model Whisper '{size}': {last_err}")
 
 
+def release_idle(max_idle: float) -> bool:
+    """Bỏ model Whisper đã nạp (0,5–2 GB RAM/VRAM) nếu ``max_idle`` giây chưa dùng. Lần nhận diện sau nạp lại."""
+    with _model_lock:
+        if not _model_cache or time.monotonic() - _last_used < max_idle:
+            return False
+        _model_cache.clear()
+    import gc
+
+    gc.collect()
+    logger.info("Đã giải phóng model Whisper (lâu không dùng)")
+    return True
+
+
 def load_model(size: str, device: str = "auto", compute: str = "auto", log: Callable[[str], None] | None = None):
     from faster_whisper import WhisperModel
 
+    global _last_used
     key = (size, device, compute)
     with _model_lock:
+        _last_used = time.monotonic()
         if key in _model_cache:
             return _model_cache[key]
         path = _download(size, log)
