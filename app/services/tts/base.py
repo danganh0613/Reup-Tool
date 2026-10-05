@@ -30,9 +30,16 @@ class TTSEngine:
     native_speed_range: tuple[float, float] = (0.5, 2.0)
     #: số luồng gọi song song hợp lý
     workers: int = 4
+    #: số lần tối đa được đọc lại một câu không đạt kiểm tra chất lượng (0 = không đọc lại: engine trả phí…)
+    qc_retries: int = 0
+    #: câu dài hơn thì tách đoạn đọc riêng rồi ghép (0 = engine tự chia câu dài)
+    max_chars: int = 0
 
     def list_voices(self, locale: str | None = None) -> list[Voice]:
         raise NotImplementedError
+
+    def repair_cached(self, path: Path) -> None:
+        """Sửa file cache do bản cũ ghi sai định dạng (mặc định: không làm gì)."""
 
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
         raise NotImplementedError

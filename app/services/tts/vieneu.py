@@ -99,6 +99,9 @@ class VieNeuTTS(TTSEngine):
     ext = ".wav"
     native_speed_range = (1.0, 1.0)      # không chỉnh tốc độ gốc → dùng atempo
     workers = 1                          # CPU-bound
+    # v3 Turbo (int8 lẫn fp32) hay đọc lặp / nói thêm / nuốt chữ đầu ở câu ngắn (~1/3 số lần đọc) — mỗi lần đọc
+    # một kết quả khác → câu không đạt kiểm tra thì đọc lại (local, không tốn tiền)
+    qc_retries = 3
 
     def __init__(self, precision: str = "int8", log: Callable[[str], None] | None = None) -> None:
         self.precision = precision

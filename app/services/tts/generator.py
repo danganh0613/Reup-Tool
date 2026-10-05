@@ -1,9 +1,11 @@
 """Từ danh sách cue → một track WAV lồng tiếng khớp thời gian.
 
 Quy trình:
-1. Tổng hợp từng cue (có cache theo nội dung + giọng + tham số).
-2. Giải mã về PCM; cue nào dài hơn khe thời gian thì tăng tốc (atempo) tới mức
-   ``max_tempo``; vẫn tràn thì cue sau bị đẩy lùi một chút thay vì chồng tiếng.
+1. Chuẩn hoá chữ, tổng hợp từng cue (có cache theo nội dung + giọng + tham số); câu không đạt kiểm tra chất lượng
+   thì đọc lại (``quality``); câu lỗi hẳn thì đọc bằng engine dự phòng.
+2. Giải mã về PCM, hậu kỳ từng câu (``postprocess``: cắt «rẹt» cuối câu, cắt lặng, fade, cân độ to); cue nào dài
+   hơn khe thời gian thì tăng tốc (atempo) tới mức ``max_tempo``; vẫn tràn thì cue sau bị đẩy lùi một chút thay
+   vì chồng tiếng.
 3. Ghi tuần tự vào WAV 24 kHz mono — không giữ cả track trong RAM.
 """
 
@@ -11,50 +13,69 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import wave
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from app.config.paths import TTS_CACHE_DIR
+from app.config.paths import PRON_FILE, TTS_CACHE_DIR
 from app.core.state import Settings, TTSConfig
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue
+from app.services.tts import postprocess, quality
 from app.services.tts.base import TTSEngine
+from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 24000
 _BYTES_PER_SEC = SAMPLE_RATE * 2   # s16 mono
-TRIM_VERSION = "trim1"
-PULL_EARLY = 0.2                   # chế độ mềm: câu được vào sớm tối đa 0,2 s khi câu trước đã đọc xong             # đổi khi đổi cách cắt khoảng lặng → track giọng cũ được tạo lại
+TRIM_VERSION = "trim2"             # đổi khi đổi cách xử lý từng câu → track giọng cũ được tạo lại
+PULL_EARLY = 0.2                   # chế độ mềm: câu được vào sớm tối đa 0,2 s khi câu trước đã đọc xong
+JOIN_GAP = 0.15                    # khớp chặt: câu bị đẩy lùi vẫn cách câu trước ≥ 150 ms (không dính liền)
+PART_GAP = 0.25                    # nghỉ giữa các đoạn của một câu quá dài được tách ra đọc riêng
 
 
-def trim_silence(pcm: bytes, lead: float = 0.03, tail: float = 0.06) -> bytes:
-    """Cắt khoảng lặng đầu/cuối của một câu TTS (Edge, Gemini… thường kèm 0,2–0,8 s im lặng) — câu sau nối
-    liền câu trước thay vì «khựng» một nhịp; chừa ``lead`` / ``tail`` giây cho tự nhiên."""
+@dataclass
+class QCOptions:
+    """Kiểm chất lượng khi đọc: số lần đọc lại tối đa, có cho Whisper nghe lại không."""
+    retries: int = 3
+    asr: bool = False
+    compute: str = "auto"
+    reread: list[str] = field(default_factory=list)     # câu đã phải đọc lại trong lượt này (để báo log)
+
+
+def qc_options(settings: Settings) -> QCOptions | None:
+    """Cấu hình kiểm chất lượng theo Cài đặt (None = tắt)."""
+    if not settings.tts_qc:
+        return None
+    mode = settings.tts_qc_asr
+    asr = (mode == "on" and quality.asr_available(require_gpu=False)) or (mode == "auto" and quality.asr_available())
+    return QCOptions(max(0, int(settings.tts_qc_retries)), asr, settings.whisper_compute)
+
+
+def post_signature(settings: Settings) -> str:
+    """Tham số hậu kỳ có ảnh hưởng tới track giọng — đổi thì track được tạo lại."""
     try:
-        import numpy as np
-    except ImportError:
-        return pcm
-    a = np.frombuffer(pcm, dtype=np.int16)
-    win = SAMPLE_RATE // 100                                     # khung 10 ms
-    n = len(a) // win
-    if n < 20:
-        return pcm
-    rms = np.sqrt(np.mean(a[:n * win].reshape(n, win).astype(np.float32) ** 2, axis=1))
-    peak = float(rms.max())
-    if peak <= 0:
-        return pcm
-    thr = max(peak * 10 ** (-40 / 20), 32768.0 * 10 ** (-55 / 20))   # dưới đỉnh 40 dB, sàn −55 dBFS
-    on = np.where(rms > thr)[0]
-    if len(on) == 0:
-        return pcm
-    s = max(0, int(on[0]) * win - int(lead * SAMPLE_RATE))
-    e = min(len(a), (int(on[-1]) + 1) * win + int(tail * SAMPLE_RATE))
-    return a[s:e].tobytes()
+        pron = int(PRON_FILE.stat().st_mtime)
+    except OSError:
+        pron = 0
+    return (f"{TRIM_VERSION}|{settings.tts_fade_in_ms}|{settings.tts_fade_out_ms}|{settings.tts_level_db}|"
+            f"{settings.tts_qc}|{settings.tts_qc_asr}|{pron}")
+
+
+def polisher(settings: Settings | None) -> Callable[[bytes], bytes]:
+    """Hậu kỳ một câu PCM 24 kHz theo Cài đặt: cắt «rẹt» cuối câu, cắt lặng, fade vào/ra, cân độ to."""
+    s = settings or Settings()
+    level = s.tts_level_db if s.tts_level_db < 0 else None
+
+    def run(pcm: bytes) -> bytes:
+        return postprocess.polish(pcm, SAMPLE_RATE, fade_in=max(0, s.tts_fade_in_ms) / 1000,
+                                  fade_out=max(0, s.tts_fade_out_ms) / 1000, level_db=level)
+    return run
 
 
 @dataclass
@@ -86,8 +107,9 @@ def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
     if cfg.tts_provider.startswith("Gemini"):
         from app.services.tts.gemini_tts import GeminiTTS
 
+        temp = settings.gemini_tts_temperature
         return GeminiTTS(settings.gemini_keys(), model=cfg.gemini_tts_model, style=cfg.gemini_style,
-                         custom_style=cfg.gemini_style_custom)
+                         custom_style=cfg.gemini_style_custom, temperature=temp if temp > 0 else None)
     if cfg.tts_provider.startswith("FPT"):
         from app.services.tts.fpt import FptTTS
 
@@ -192,13 +214,114 @@ def cache_path(engine: TTSEngine, voice_id: str, text: str, speed: float, pitch:
     return TTS_CACHE_DIR / engine.name / f"{key}{getattr(engine, 'ext', '.mp3')}"
 
 
-def synthesize_cached(engine: TTSEngine, voice_id: str, text: str, *, speed: float, pitch: int) -> Path:
+def _try_path(p: Path, k: int) -> Path:
+    """File tạm cho lần đọc thứ ``k`` — riêng từng luồng (hai cue cùng chữ chạy song song không đè nhau)."""
+    return p.with_name(f"{p.stem}.t{k}.{os.getpid()}-{threading.get_ident()}{p.suffix}")
+
+
+def _rank(c: tuple[Path, quality.Verdict | None]) -> tuple[int, float]:
+    v = c[1]
+    return (v.score, abs(v.speech - v.expected)) if v else (0, 0.0)
+
+
+def synthesize_cached(engine: TTSEngine, voice_id: str, text: str, *, speed: float, pitch: int,
+                      qc: QCOptions | None = None) -> Path:
+    """Đọc một câu (có cache). Chữ được chuẩn hoá trước. File WAV trong cache đã làm sạch (cắt «rẹt» cuối câu, fade).
+    ``qc`` bật → kiểm chất lượng; câu hỏng thì đọc lại (tối đa ``engine.qc_retries`` lần), giữ bản tốt nhất —
+    kể cả file cache có từ trước (lần đầu chạy bản này: kiểm lại một lượt)."""
+    text = normalize_vi_text(text)
+    if engine.max_chars and len(text) > engine.max_chars:
+        parts = split_long(text, engine.max_chars)
+        if len(parts) > 1:
+            return _synthesize_parts(engine, voice_id, text, parts, speed=speed, pitch=pitch, qc=qc)
+    p = cache_path(engine, voice_id, text, speed, pitch)
+    wav = getattr(engine, "ext", ".mp3") == ".wav"
+    check = qc is not None and wav
+    asr = bool(check and qc.asr)
+    budget = min(qc.retries, engine.qc_retries) if check else 0
+
+    def verdict(path: Path) -> quality.Verdict | None:
+        return quality.check_file(path, text, speed=engine.clamp_speed(speed), asr=asr,
+                                  compute=qc.compute) if check else None
+
+    cands: list[tuple[Path, quality.Verdict | None]] = []
+    if p.exists() and p.stat().st_size > 0:
+        if not wav:
+            return p
+        m = quality.read_mark(p)
+        if m and (m.get("qc") or not check) and (m.get("asr") or not asr):
+            return p
+        engine.repair_cached(p)
+        v = verdict(p)
+        if v is None or v.ok or budget == 0:
+            postprocess.clean_file(p)
+            quality.mark(p, v, qc=check, asr=asr, tries=int((m or {}).get("tries", 1)))
+            return p
+        old = _try_path(p, 0)                          # bản cũ chưa đạt → vẫn được so cùng các lần đọc mới
+        os.replace(p, old)
+        cands.append((old, v))
+        logger.info("TTS: câu «%s» trong cache chưa đạt (%s) → đọc lại", text[:50], "; ".join(v.problems))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    for k in range(1, budget + (1 if not cands else 0) + 1):
+        try:
+            out = engine.synthesize(text, voice_id, _try_path(p, k), speed=speed, pitch=pitch)
+        except Exception:
+            if not cands:
+                raise
+            logger.warning("TTS: đọc lại câu «%s» lỗi — giữ bản tốt nhất đã có", text[:50], exc_info=True)
+            break
+        out = Path(out) if out else _try_path(p, k)
+        v = verdict(out)
+        cands.append((out, v))
+        if v is None or v.ok:
+            break
+        logger.info("TTS: câu «%s» lần %d chưa đạt: %s", text[:50], len(cands), "; ".join(v.problems))
+    if check and len(cands) > 1 and qc is not None:
+        qc.reread.append(text)
+    best, bv = min(cands, key=_rank)
+    for path, _v in cands:
+        if path != best:
+            path.unlink(missing_ok=True)
+    if wav:
+        postprocess.clean_file(best)
+    os.replace(best, p)
+    if wav:
+        quality.mark(p, bv, qc=check, asr=asr, tries=len(cands))
+    return p
+
+
+def _synthesize_parts(engine: TTSEngine, voice_id: str, text: str, parts: list[str], *, speed: float, pitch: int,
+                      qc: QCOptions | None) -> Path:
+    """Câu quá dài với engine kiểu LLM (Gemini): đọc từng đoạn — mỗi đoạn có cache + kiểm riêng — rồi ghép."""
     p = cache_path(engine, voice_id, text, speed, pitch)
     if p.exists() and p.stat().st_size > 0:
         return p
+    pcms: list[bytes] = []
+    rate = 0
+    for part in parts:
+        r = postprocess.read_wav_mono16(synthesize_cached(engine, voice_id, part, speed=speed, pitch=pitch, qc=qc))
+        if r is None or (rate and r[1] != rate):
+            raise RuntimeError("Không ghép được các đoạn của câu dài (định dạng âm thanh khác nhau).")
+        rate = r[1]
+        pcms.append(postprocess.polish(r[0], rate))
     p.parent.mkdir(parents=True, exist_ok=True)
-    out = engine.synthesize(text, voice_id, p, speed=speed, pitch=pitch)
-    return Path(out) if out else p
+    postprocess.write_wav(p, (b"\x00\x00" * int(PART_GAP * rate)).join(pcms), rate)
+    quality.mark(p, None, qc=qc is not None, asr=bool(qc and qc.asr))
+    return p
+
+
+def _fallback_config(cfg: TTSConfig, provider: str, text: str) -> TTSConfig:
+    """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu."""
+    if provider.startswith("VieNeu"):
+        return config_with_voice(cfg, provider, cfg.vieneu_voice)
+    voice = cfg.edge_voice or "vi-VN-HoaiMyNeural"
+    if is_vietnamese(text) and not voice.lower().startswith("vi-"):
+        voice = "vi-VN-HoaiMyNeural"
+    return config_with_voice(cfg, "Edge TTS", voice)
+
+
+def _mmss(t: float) -> str:
+    return f"{int(t // 60)}:{t % 60:04.1f}"
 
 
 def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ffmpeg: FFmpeg, out_wav: Path, *,
@@ -230,10 +353,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         key = f"{vid}{f' {pitch_i:+d}Hz' if pitch_i else ''}"
         used[key] = used.get(key, 0) + 1
     _check_script_matches_voice(items, cfg, voice_id)
+    qc = qc_options(settings)
+    polish = polisher(settings)
 
     def synth(i: int, text: str) -> Path:
         eng, vid, sp, pt = plan[i]
-        return synthesize_cached(eng, vid, text, speed=sp, pitch=pt)
+        return synthesize_cached(eng, vid, text, speed=sp, pitch=pt, qc=qc)
 
     def residual_of(i: int) -> float:
         eng, _vid, sp, _pt = plan[i]
@@ -247,7 +372,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     paths: dict[int, Path] = {}
     workers = max(1, min(engine.workers, settings.tts_workers or engine.workers))
     if log:
-        log(f"Tổng hợp {len(items)} cue bằng {cfg.tts_provider} ({workers} luồng)…")
+        log(f"Tổng hợp {len(items)} cue bằng {cfg.tts_provider} ({workers} luồng)…"
+            + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
     done = 0
@@ -259,7 +385,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             i = futs[fut]
             try:
                 paths[i] = fut.result()
-            except Exception as exc:          # 1 câu lỗi (mạng/dịch vụ) → để trống câu đó, không hỏng cả job
+            except Exception as exc:          # 1 câu lỗi (mạng/dịch vụ) → thử lại / engine dự phòng bên dưới, không hỏng cả job
                 failed.append(i)
                 logger.warning("TTS cue %d lỗi: %s", i + 1, exc)
             done += 1
@@ -277,6 +403,27 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 logger.warning("TTS cue %d lỗi lần 2: %s", i + 1, exc)
                 still.append(i)
         failed = still
+    fb = (settings.tts_fallback or "").strip()
+    if failed and fb and fb != cfg.tts_provider:
+        # vẫn lỗi (hết lượt, mất mạng…) → đọc tạm bằng engine dự phòng thay vì để câu đó im lặng
+        fb_engines: dict[str, TTSEngine] = {}
+        rescued: list[int] = []
+        for i in failed:
+            _check()
+            text = next(t for j, _c, t in items if j == i)
+            try:
+                fcfg = _fallback_config(cfg, fb, text)
+                eng = fb_engines.get(fcfg.tts_provider) or fb_engines.setdefault(fcfg.tts_provider, make_engine(fcfg, settings))
+                vid = voice_id_for(fcfg)
+                paths[i] = synthesize_cached(eng, vid, text, speed=plan[i][2], pitch=0, qc=qc)
+                plan[i] = (eng, vid, plan[i][2], 0)
+                rescued.append(i)
+            except Exception as exc:
+                logger.warning("TTS cue %d: engine dự phòng %s cũng lỗi: %s", i + 1, fb, exc)
+        if rescued and log:
+            log(f"⚠ {len(rescued)} câu lỗi với {cfg.tts_provider} → đọc tạm bằng {fb}: câu "
+                + ", ".join(str(i + 1) for i in rescued[:10]) + ("…" if len(rescued) > 10 else ""))
+        failed = [i for i in failed if i not in rescued]
     if failed:
         if len(failed) == len(items):
             raise RuntimeError("Không tổng hợp được câu nào — kiểm tra mạng / dịch vụ TTS.")
@@ -284,6 +431,13 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             log(f"⚠ {len(failed)} câu không tổng hợp được (bỏ trống): {', '.join(str(i + 1) for i in failed[:8])}"
                 + ("…" if len(failed) > 8 else ""))
         items = [it for it in items if it[0] not in failed]
+    if qc is not None and log:
+        bad = [i for i, _c, _t in items
+               if (m := quality.read_mark(paths[i])) and int(m.get("score", 0)) >= quality.HARD]
+        if qc.reread or bad:
+            log(f"Kiểm chất lượng giọng: đã đọc lại {len(qc.reread)} câu"
+                + (f" · {len(bad)} câu vẫn chưa đạt sau khi đọc lại — nên nghe lại: câu "
+                   + ", ".join(str(i + 1) for i in bad[:10]) + ("…" if len(bad) > 10 else "") if bad else ""))
 
     # ── 2. Giải mã + khớp thời gian ───────────────────────────────────────
     order = [i for i, _, _ in items]
@@ -301,8 +455,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
 
     def natural(pos: int) -> tuple[int, bytes]:
         _check()
-        return pos, trim_silence(ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE,
-                                                   tempo=residual_of(order[pos])))
+        return pos, polish(ffmpeg.decode_pcm(paths[order[pos]], sample_rate=SAMPLE_RATE, tempo=residual_of(order[pos])))
 
     base: dict[int, bytes] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -330,8 +483,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         (bớt khoảng «khựng» giữa hai câu), luôn cách câu trước tối thiểu ``min_gap``."""
         earliest = max(0.0, cue.start - (PULL_EARLY if flexible else 0.0))
         start = max(earliest, cursor)
-        if flexible and pos > 0:
-            start = max(start, cursor + cfg.min_gap)
+        if pos > 0:
+            start = max(start, cursor + (cfg.min_gap if flexible else JOIN_GAP))
         return start
 
     def simulate(cap: float) -> float:
@@ -364,7 +517,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         pcm = base[pos]
         sped = False
         if tempo > 1.0:
-            pcm = trim_silence(ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo))
+            pcm = polish(ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo))
             sped = True
         dur = len(pcm) / _BYTES_PER_SEC
         overflow = (not cfg.natural_sync) and dur > slot_for(pos) + 0.05
@@ -384,8 +537,10 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_wav.with_suffix(".part.wav")
     cursor = 0.0
+    written = 0                        # số mẫu đã ghi — đệm lặng theo mẫu, không cộng dồn sai số làm tròn
     sped_up = overflow_n = 0
     synced: list[Cue] = []
+    over: list[tuple[float, int]] = []
     with wave.open(str(tmp), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
@@ -397,11 +552,15 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             sped_up += int(sped)
             overflow_n += int(overflow)
             start = start_of(pos, cue, cursor)
-            gap = start - cursor
-            if gap > 0:
-                wf.writeframes(b"\x00" * (int(gap * SAMPLE_RATE) * 2))
+            pad = int(round(start * SAMPLE_RATE)) - written
+            if pad > 0:
+                wf.writeframes(b"\x00\x00" * pad)
+                written += pad
             wf.writeframes(pcm)
+            written += len(pcm) // 2
             dur = len(pcm) / _BYTES_PER_SEC
+            if overflow:
+                over.append((dur - slot_for(pos), pos))
             synced.append(Cue(len(synced) + 1, start, start + max(0.3, dur), cue.text, dict(cue.meta)))
             cursor = start + dur
     tmp.replace(out_wav)
@@ -410,6 +569,11 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     if log:
         log(f"Track giọng: {cursor:.1f}s · {sped_up} cue tăng tốc · {overflow_n} cue vẫn tràn"
             + (" · phụ đề dời theo giọng" if (cfg.natural_sync or cfg.soft_timing) else ""))
+        if over:
+            over.sort(reverse=True)
+            log("Câu dài hơn khung phụ đề (nên rút gọn bản dịch): " + " · ".join(
+                f"câu {order[pos] + 1} ({_mmss(by_index[order[pos]].start)}) +{d:.1f}s «{by_index[order[pos]].plain[:32]}»"
+                for d, pos in over[:6]) + (f" · và {len(over) - 6} câu khác" if len(over) > 6 else ""))
         if fit_duration and cursor > fit_duration + 0.5:
             log(f"⚠ Giọng dài hơn video {cursor - fit_duration:.1f}s dù đã tăng tốc tối đa ×{cfg.max_tempo:.2f} — "
                 "phần cuối sẽ bị cắt. Rút gọn bản dịch, tăng «Tốc độ tối đa», hoặc bật «Lặp video cho đủ giọng».")

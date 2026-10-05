@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import webbrowser
 from pathlib import Path
@@ -11,7 +12,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
-from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
+from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRON_FILE, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
 from app.core.platform import exe_name
 from app.core.state import GPU_BACKENDS, TRANSLATE_PROVIDERS, VIDEO_CODECS
 from app.services.ffmpeg import FFmpeg
@@ -273,6 +274,25 @@ class SettingsWindow(ctk.CTkToplevel):
         self.fpt_keys.pack(fill="x", pady=(0, 6))
         hint(b, "Mọi ô key đều nhận nhiều key, mỗi dòng một key: hết hạn mức hoặc key lỗi thì tự chuyển sang key kế tiếp.").pack(fill="x", pady=(2, 0))
 
+        b = self._card(c3, "Chất lượng giọng đọc (TTS)",
+                       "Kiểm từng câu sau khi đọc (đọc lặp, nói thêm, cắt cụt, «rẹt» cuối câu…) → tự đọc lại câu hỏng.")
+        self.tts_qc = SwitchRow(b, "Kiểm tra & tự đọc lại câu lỗi", value=st.tts_qc)
+        self.qc_retries = SliderRow(b, "Đọc lại tối đa", from_=1, to=5, step=1, value=st.tts_qc_retries, suffix=" lần")
+        self.qc_asr = OptionRow(b, "Whisper nghe lại", ["auto", "on", "off"], value=st.tts_qc_asr,
+                                labels={"auto": "Tự động (máy có GPU)", "on": "Luôn bật", "off": "Tắt"})
+        self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Edge TTS", "VieNeu (local, tiếng Việt)"],
+                                      value=st.tts_fallback or "Không")
+        for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback):
+            r.pack(fill="x", pady=3)
+        hint(b, "VieNeu đọc lại miễn phí (chạy trên máy) · Gemini đọc lại tối đa 1 lần (tốn lượt) · engine trả phí khác "
+                "không đọc lại. Whisper nghe lại bắt thêm chữ đọc méo, dùng model Whisper đã có trên máy. Câu lỗi hẳn "
+                "(hết lượt, mất mạng) thì đọc tạm bằng engine dự phòng thay vì để im lặng.").pack(fill="x")
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 0))
+        button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron,
+               tip="Mở pronunciation.json: «chữ viết»: «cách đọc» (vd. \"ANC\": \"ây en xi\") — áp cho mọi giọng, "
+                   "lưu file rồi tạo lại giọng").pack(side="left")
+
         b = self._card(c3, "Thư mục xuất MP4", "Mẫu dựng video (trước đây là Preset) nằm ở ô «Mẫu» trên cùng cửa sổ chính.")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x")
@@ -412,6 +432,16 @@ class SettingsWindow(ctk.CTkToplevel):
         self._cache_sizes()
         self.window.log("Đã xoá job tạm và cache TTS.")
 
+    def _open_pron(self) -> None:
+        """Mở từ điển phát âm TTS (chưa có thì tạo file mẫu — khoá bắt đầu bằng «_» là ghi chú, không áp)."""
+        if not PRON_FILE.exists():
+            PRON_FILE.write_text(json.dumps({
+                "_ghi_chú": "Mỗi dòng: \"chữ viết\": \"cách đọc\". Khớp nguyên từ, không phân biệt hoa/thường. "
+                            "Lưu file rồi bấm tạo lại giọng.",
+                "_ví_dụ": "\"ANC\": \"ây en xi\", \"Xiaomi\": \"xao mi\", \"Shopee\": \"sóp pi\""},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+        open_path(str(PRON_FILE))
+
     def _browse_out(self) -> None:
         d = filedialog.askdirectory(title="Thư mục xuất")
         if d:
@@ -437,6 +467,11 @@ class SettingsWindow(ctk.CTkToplevel):
         st.tts_workers = int(self.workers.get())
         st.whisper_compute = self.compute.get()
         st.vieneu_precision = self.vieneu.get()
+        st.tts_qc = self.tts_qc.get()
+        st.tts_qc_retries = int(self.qc_retries.get())
+        st.tts_qc_asr = self.qc_asr.get()
+        fb = self.tts_fallback.get()
+        st.tts_fallback = "" if fb == "Không" else fb
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()
         st.translate_provider = self.tr_provider.get()

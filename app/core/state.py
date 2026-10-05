@@ -376,6 +376,15 @@ class Settings:
     show_guide_on_start: bool = True     # mở Hướng dẫn ở lần chạy đầu (tắt trong cửa sổ hướng dẫn)
     ffmpeg_fast: bool = False
     gpu_encoder: str = "auto"
+    # chất lượng giọng đọc (TTS)
+    tts_qc: bool = True                  # kiểm từng câu (đọc lặp, cắt cụt, «rẹt» cuối câu…) → câu hỏng thì đọc lại
+    tts_qc_retries: int = 3              # số lần đọc lại tối đa mỗi câu (Gemini tối đa 1, engine trả phí khác không đọc lại)
+    tts_qc_asr: str = "auto"             # Whisper nghe lại: auto (có GPU + model sẵn) | on | off
+    tts_fallback: str = "Edge TTS"       # câu lỗi hẳn thì đọc bằng engine này ("" = để trống câu đó)
+    tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
+    tts_fade_out_ms: int = 25
+    tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên
+    gemini_tts_temperature: float = 0.7  # cố định cho đều giọng giữa các câu; 0 = mặc định của Google
 
 
 @dataclass

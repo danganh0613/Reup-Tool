@@ -55,6 +55,7 @@ LOGS_DIR = ROOT / "logs"
 
 CONFIG_FILE = OUTPUT_DIR / "last_config.json"     # trạng thái làm việc (autosave)
 SETTINGS_FILE = ROOT / "settings.json"            # cài đặt máy (API key, ffmpeg, theme)
+PRON_FILE = ROOT / "pronunciation.json"           # từ điển phát âm TTS người dùng tự sửa (từ → cách đọc)
 
 _ALL_DIRS = (
     BIN_DIR, OUTPUT_DIR, VIDEOS_DIR, JOBS_DIR, VOICE_DIR, SUBS_DIR,

@@ -17,7 +17,7 @@ from app.services.story import ai as story_ai
 from app.services.story.assembler import assemble
 from app.services.story.project import Scene, StoryProject
 from app.services.story.prompts import master_prompt_text
-from app.services.tts.generator import make_engine, synthesize_cached
+from app.services.tts.generator import make_engine, qc_options, synthesize_cached
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ class StoryEngine:
         audio_dir = proj.subdir("audio")
         engines: dict[str, object] = {}
         settings = self.state.settings
+        qc = qc_options(settings)
 
         def work(sc: Scene) -> tuple[Scene, Path]:
             _check(cancel, "tạo giọng")
@@ -104,7 +105,8 @@ class StoryEngine:
             from app.services.tts.generator import voice_id_for
 
             vid = voice_id_for(cfg)
-            cached = synthesize_cached(eng, vid, sc.narration.strip(), speed=cfg.tts_speed, pitch=cfg.tts_pitch)
+            cached = synthesize_cached(eng, vid, sc.narration.strip(), speed=cfg.tts_speed, pitch=cfg.tts_pitch,
+                                       qc=qc)
             idx = proj.scenes.index(sc) if sc in proj.scenes else 0
             dst = audio_dir / f"scene_{idx:03d}{Path(cached).suffix or '.mp3'}"
             shutil.copyfile(cached, dst)

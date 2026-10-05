@@ -4,24 +4,28 @@ Dùng chung key Gemini với phần dịch (Cài đặt → Gemini). Chất lư�
 («review phim cuốn hút», «giọng miền Nam», «thì thầm»…). Gói miễn phí rất ít lượt mỗi ngày → video dài nên bật
 thanh toán (khoảng vài trăm đồng mỗi phút giọng), hoặc nhập nhiều key để máy tự xoay vòng.
 
-REST: ``models/{model}:generateContent`` với ``responseModalities=["AUDIO"]`` → PCM 16-bit mono (thường 24 kHz)
-trong ``inlineData``; ghi ra WAV.
+REST: ``models/{model}:generateContent`` với ``responseModalities=["AUDIO"]`` → âm thanh trong ``inlineData``:
+model 2.5 trả PCM 16-bit thô (``audio/L16;rate=24000``), model 3.x trả nguyên file WAV (``audio/wav``: header + âm
+thanh + khối chữ ký C2PA ở cuối) — chỉ lấy khối «data», ghi ra WAV sạch.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+import random
 import re
 import threading
 import time
 import wave
 from pathlib import Path
 
+import numpy as np
 import requests
 
 from app.core.state import GEMINI_TTS_MODELS
-from app.services.tts.base import TTSEngine, Voice, part_path
+from app.services.tts import postprocess
+from app.services.tts.base import TTSEngine, Voice
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +62,18 @@ STYLES: dict[str, str] = {
     "Tự viết…": None,       # dùng TTSConfig.gemini_style_custom
 }
 
+#: lời dặn nằm trong khung đánh dấu rõ — kiểu cũ «{lời dặn}:\n{câu}» làm gemini-3.8-flash-tts đọc to cả lời dặn;
+#: systemInstruction bị model TTS từ chối («Developer instruction is not enabled») — xem audit_out/gemini_prompt
+PROMPT = ("[Lời dặn cách đọc — chỉ để định giọng, KHÔNG đọc thành tiếng]\n{style}\n\n"
+          "[Lời thoại — chỉ đọc nguyên văn phần này]\n{text}")
+
 _working_model: dict[str, str] = {}     # model chọn → model thật sự dùng được (sau khi tự thử model kế tiếp)
 _lock = threading.Lock()
+
+
+def _wait(seconds: float) -> None:
+    """Chờ có ngẫu nhiên: nhiều luồng / nhiều key lỗi cùng lúc không gọi lại đúng cùng một nhịp."""
+    time.sleep(seconds * random.uniform(0.6, 1.2))
 
 
 def style_prompt(style: str, custom: str) -> str:
@@ -74,16 +88,35 @@ class GeminiTTS(TTSEngine):
     ext = ".wav"
     native_speed_range = (1.0, 1.0)      # tốc độ chỉnh bằng atempo khi ghép
     workers = 2
+    qc_retries = 1                       # mỗi lần đọc lại tốn một lượt API
+    max_chars = 200                      # model sinh âm thanh kiểu LLM: câu quá dài dễ lạc / đọc thêm
 
     def __init__(self, keys: list[str], *, model: str = GEMINI_TTS_MODELS[0], style: str = "Tự nhiên",
-                 custom_style: str = "") -> None:
+                 custom_style: str = "", temperature: float | None = 0.7) -> None:
         self.keys = [k for k in dict.fromkeys(k.strip() for k in keys) if k]
         self._key_idx = 0
         self.model = model or GEMINI_TTS_MODELS[0]
         self.style = style_prompt(style, custom_style)
+        self.temperature = temperature
 
     def cache_signature(self, voice_id: str, speed: float, pitch: int) -> str:
-        return f"{self.name}|{voice_id}|{self.model}|{self.style}"
+        # «p2» = kiểu prompt mới: bản cache cũ có lời dặn (có thể đã bị đọc to) không dùng lại; câu «Tự nhiên» giữ cache
+        return f"{self.name}|{voice_id}|{self.model}|{self.style}" + ("|p2" if self.style else "")
+
+    def repair_cached(self, path: Path) -> None:
+        """Bản cũ ghi nguyên file WAV Gemini trả về (header + chữ ký C2PA) vào trong một WAV khác → «tách» ở đầu,
+        ~125 ms nhiễu to ở cuối mọi câu. Bóc lại đúng phần âm thanh — không tốn lượt API."""
+        try:
+            with wave.open(str(path)) as wf:
+                frames = wf.readframes(wf.getnframes())
+        except Exception:
+            return
+        w = postprocess.parse_wav(frames)
+        if w is None:
+            return
+        pcm, rate, ch, bits, tag = w
+        postprocess.write_wav(path, postprocess.to_mono16(pcm, ch, bits, tag), rate)
+        logger.info("Đã sửa file cache Gemini cũ (WAV lồng trong WAV + C2PA): %s", path.name)
 
     def list_voices(self, locale: str | None = None) -> list[Voice]:
         return [Voice(id=n, name=f"{n} — {d}", locale="", gender=g) for n, g, d in VOICES]
@@ -98,14 +131,33 @@ class GeminiTTS(TTSEngine):
             raise RuntimeError("Chưa có Gemini API key — vào Cài đặt → Gemini để nhập (dùng chung với phần dịch).")
         return self.keys[self._key_idx % len(self.keys)]
 
+    def _body(self, text: str, voice_id: str, style: str) -> dict:
+        gen: dict = {"responseModalities": ["AUDIO"],
+                     "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_id or "Leda"}}}}
+        if self.temperature is not None:
+            gen["temperature"] = self.temperature            # cố định → các câu cùng một chất giọng
+        prompt = PROMPT.format(style=style, text=text) if style else text
+        return {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen}
+
+    @staticmethod
+    def _too_long(pcm: bytes, rate: int, text: str) -> bool:
+        """Âm thanh dài bất thường so với số tiếng của câu → nhiều khả năng model đọc cả lời dặn / đọc thêm."""
+        from app.services.tts.quality import expected_duration
+
+        sh = postprocess.shape(np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768, rate)
+        return sh is not None and (sh.last - sh.first + 1) * postprocess.FRAME > 1.7 * expected_duration(text) + 1.0
+
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
-        prompt = f"{self.style}:\n{text}" if self.style else text
-        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseModalities": ["AUDIO"],
-                                     "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {
-                                         "voiceName": voice_id or "Leda"}}}}}
         out_path = out_path.with_suffix(".wav")
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        pcm, rate = self._request(self._body(text, voice_id, self.style))
+        if self.style and self._too_long(pcm, rate, text):
+            logger.warning("Gemini TTS: câu «%s» dài bất thường — có thể đã đọc cả lời dặn → đọc lại không kèm lời dặn",
+                           text[:50])
+            pcm, rate = self._request(self._body(text, voice_id, ""))
+        return postprocess.write_wav(out_path, pcm, rate)
+
+    def _request(self, body: dict) -> tuple[bytes, int]:
         models = self._models()
         mi = 0
         tried_keys = 0
@@ -117,24 +169,17 @@ class GeminiTTS(TTSEngine):
                                   json=body, timeout=180)
             except requests.RequestException as exc:
                 last = str(exc)
-                time.sleep(1.5 * (attempt + 1))
+                _wait(1.5 * (attempt + 1))
                 continue
             if r.status_code == 200:
                 pcm, rate = self._audio(r.json())
                 if not pcm:
                     last = "Gemini không trả âm thanh (câu bị chặn hoặc trống)"
-                    time.sleep(1.0)
+                    _wait(1.0)
                     continue
                 with _lock:
                     _working_model[self.model] = model
-                tmp = part_path(out_path)
-                with wave.open(str(tmp), "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(rate)
-                    wf.writeframes(pcm)
-                tmp.replace(out_path)
-                return out_path
+                return pcm, rate
             msg = r.text[:300]
             last = f"{r.status_code}: {msg}"
             if r.status_code in (404, 400) and ("not found" in msg.lower() or "not supported" in msg.lower()
@@ -151,21 +196,27 @@ class GeminiTTS(TTSEngine):
                         raise RuntimeError(
                             "Gemini TTS hết lượt / key không dùng được (" + msg[:160] + "). Gói miễn phí chỉ vài lượt "
                             "mỗi ngày — bật thanh toán cho key, thêm key khác (mỗi dòng một key) hoặc chọn nhà cung cấp khác.")
-                    time.sleep(min(30.0, 6.0 * (attempt + 1)))
+                    _wait(min(30.0, 6.0 * (attempt + 1)))
                 continue
             if r.status_code >= 500:
-                time.sleep(2.0 * (attempt + 1))
+                _wait(2.0 * (attempt + 1))
                 continue
             raise RuntimeError(f"Gemini TTS lỗi {last}")
         raise RuntimeError(f"Gemini TTS thất bại: {last}")
 
     @staticmethod
     def _audio(data: dict) -> tuple[bytes, int]:
+        """→ (PCM s16 mono, tần số). Payload là file WAV (model 3.x) → chỉ lấy khối «data», bỏ header + chữ ký C2PA."""
         for cand in data.get("candidates") or []:
             for part in (cand.get("content") or {}).get("parts") or []:
                 inline = part.get("inlineData") or part.get("inline_data")
                 if inline and inline.get("data"):
+                    raw = base64.b64decode(inline["data"])
+                    w = postprocess.parse_wav(raw)
+                    if w is not None:
+                        pcm, rate, ch, bits, tag = w
+                        return postprocess.to_mono16(pcm, ch, bits, tag), rate
                     mime = inline.get("mimeType") or inline.get("mime_type") or ""
                     m = re.search(r"rate=(\d+)", mime)
-                    return base64.b64decode(inline["data"]), int(m.group(1)) if m else 24000
+                    return raw[: len(raw) // 2 * 2], int(m.group(1)) if m else 24000
         return b"", 24000
