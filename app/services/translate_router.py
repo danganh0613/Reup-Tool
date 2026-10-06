@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -43,7 +44,24 @@ LANG_CODE = {
 # tốc độ đọc trung bình (ký tự/giây) để đặt "ngân sách" độ dài mỗi câu — bản dịch vừa thời lượng gốc thì lồng tiếng
 # không phải tăng tốc nhiều
 _CHARS_PER_SEC = {"zh": 4.5, "ja": 5.0, "ko": 5.5, "th": 12.0}
-_DEFAULT_CPS = 16.0
+_DEFAULT_CPS = 16.0                # tiếng Việt / Latin: lồng tiếng thoải mái ≤ 15–17 ký tự mỗi giây
+_OVER_BUDGET = 1.15                # dịch xong vẫn dài hơn ngân sách × hệ số này → nhờ AI rút gọn câu đó
+CONTEXT_LINES = 60                 # số câu gốc trước / sau lô gửi kèm làm ngữ cảnh (video ngắn: gần như cả video)
+
+#: yêu cầu rút gọn câu dịch cho vừa thời lượng lồng tiếng (sau khi dịch, và khi giọng đọc vẫn tràn khung)
+SHORTEN_REQUEST = ("Shorten each line so it can be spoken within its voice-over time slot: stay within [max N chars], "
+                   "keep the key meaning and the speaker's pronouns, natural spoken style, drop filler words and "
+                   "repetitions, add nothing new.")
+
+
+def _wait(seconds: float) -> None:
+    """Chờ có ngẫu nhiên: nhiều lô / nhiều key lỗi cùng lúc không gọi lại đúng cùng một nhịp."""
+    time.sleep(seconds * random.uniform(0.6, 1.2))
+
+
+def budget_for(duration: float, target: str) -> int:
+    """Số ký tự tối đa để câu dịch đọc kịp trong ``duration`` giây."""
+    return max(10, int(round(duration * _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS))))
 
 
 class QuotaError(RuntimeError):
@@ -147,7 +165,7 @@ class Router:
                     break
                 except requests.RequestException as exc:
                     last = str(exc)
-                    time.sleep(2.0 * (attempt + 1))
+                    _wait(2.0 * (attempt + 1))
                     if attempt == 2 and self.log:
                         self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
                 except RuntimeError as exc:
@@ -162,7 +180,7 @@ class Router:
                             self.log(f"⚠ {c.provider} {c.model}: {str(exc)[:110]}")
                         break
                     # máy chủ quá tải → chờ lâu hơn (4 s, 8 s) rồi thử lại; lỗi khác chờ ngắn
-                    time.sleep(4.0 * (attempt + 1) if busy else 1.5)
+                    _wait(4.0 * (attempt + 1) if busy else 1.5)
             nxt = (self.idx + 1) % len(self.cands)
             if self.log and self.cands[nxt] != c:
                 n = self.cands[nxt]
@@ -186,15 +204,17 @@ class TranslationMemory:
             self.data = {}
 
     @staticmethod
-    def key(target: str, text: str) -> str:
-        return hashlib.sha1(f"{target}|{' '.join(text.split()).lower()}".encode("utf-8")).hexdigest()
+    def key(target: str, text: str, style: str = "") -> str:
+        # «v2» + lời dặn trong khoá: đổi lời dặn (vd bỏ câu dẫn bắt buộc) thì không dùng lại bản dịch theo lời dặn cũ
+        return hashlib.sha1(f"v2|{target}|{' '.join(style.split())}|{' '.join(text.split()).lower()}"
+                            .encode("utf-8")).hexdigest()
 
-    def get(self, target: str, text: str) -> str | None:
-        return self.data.get(self.key(target, text))
+    def get(self, target: str, text: str, style: str = "") -> str | None:
+        return self.data.get(self.key(target, text, style))
 
-    def put(self, target: str, text: str, translation: str) -> None:
+    def put(self, target: str, text: str, translation: str, style: str = "") -> None:
         with self._lock:
-            self.data[self.key(target, text)] = translation
+            self.data[self.key(target, text, style)] = translation
 
     def save(self) -> None:
         with self._lock:
@@ -213,14 +233,15 @@ class TranslationMemory:
 class Checkpoint:
     """Lưu tiến độ dịch cạnh SRT nguồn: <srt>.progress.json — mở lại app vẫn tiếp tục được."""
 
-    def __init__(self, srt_path: str | Path | None, target: str) -> None:
+    def __init__(self, srt_path: str | Path | None, target: str, style: str = "") -> None:
         self.path = Path(str(srt_path) + ".progress.json") if srt_path else None
         self.target = target
+        self.style = " ".join(style.split())
         self.done: dict[str, str] = {}
         if self.path and self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
-                if data.get("target") == target:
+                if data.get("target") == target and data.get("style", "") == self.style:
                     self.done = {str(k): str(v) for k, v in (data.get("done") or {}).items()}
             except Exception:
                 self.done = {}
@@ -229,8 +250,9 @@ class Checkpoint:
         if not self.path:
             return
         try:
-            self.path.write_text(json.dumps({"target": self.target, "total": total, "done": self.done,
-                                             "updated": time.time()}, ensure_ascii=False), encoding="utf-8")
+            self.path.write_text(json.dumps({"target": self.target, "style": self.style, "total": total,
+                                             "done": self.done, "updated": time.time()}, ensure_ascii=False),
+                                 encoding="utf-8")
         except Exception:
             pass
 
@@ -269,43 +291,58 @@ def _glossary_lines(glossary: str) -> str:
 
 
 def _prompt(lines: list[str], target: str, source_hint: str, style: str, glossary: str, reflow: bool,
-            budgets: list[int] | None = None) -> str:
+            budgets: list[int] | None = None, ids: list[int] | None = None, context: list[str] | None = None,
+            done: list[tuple[str, str]] | None = None) -> str:
+    """``ids``: số thứ tự câu trong video (để AI trả đúng id, kiểm được câu thiếu / lệch dòng). ``context``: các câu
+    gốc quanh lô (chỉ để hiểu ngữ cảnh). ``done``: (gốc, bản dịch) ngay trước lô — giữ xưng hô, tên, thuật ngữ."""
+    ids = ids or list(range(1, len(lines) + 1))
     if budgets:
-        numbered = "\n".join(f"{i + 1}. [max {b} chars] {t}" for i, (t, b) in enumerate(zip(lines, budgets)))
+        numbered = "\n".join(f"{n}. [max {b} chars] {t}" for n, t, b in zip(ids, lines, budgets))
     else:
-        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(lines))
+        numbered = "\n".join(f"{n}. {t}" for n, t in zip(ids, lines))
     src = f" The source language is {source_hint}." if source_hint and source_hint != "Tự nhận diện" else ""
     extra = f"\nStyle notes from the user: {style.strip()}" if style.strip() else ""
     gl = _glossary_lines(glossary)
     gl_block = f"\nGlossary — always use these exact translations:\n{gl}" if gl else ""
     reflow_note = ("\n- Lines are consecutive subtitle cues of one speech; you may rephrase each line so the whole "
                    "reads naturally, but keep one output line per input line.") if reflow else ""
+    ctx = ("\n\nWhole-video transcript around these lines (context only — do NOT output it):\n" + "\n".join(context)
+           if context else "")
+    prev = ("\n\nAlready translated just before (keep the same pronouns, names and terms):\n"
+            + "\n".join(f"- {a} → {b}" for a, b in done) if done else "")
     return (
-        f"You are a professional subtitle translator. Translate each numbered line into {target}.{src}\n"
+        f"You are a professional subtitle translator for video dubbing. Translate each numbered line into {target}.{src}\n"
         "Rules:\n"
-        "- Keep the SAME number of items and the same order; translate every line, never merge or split.\n"
-        "- Natural, concise spoken language suitable for on-screen subtitles and voice-over.\n"
+        "- Translate EVERY id listed under «Lines» exactly once, in order; never merge, split or skip a line.\n"
+        "- Natural, concise spoken language a native speaker would say (review / sales tone when the video sells "
+        "something), suitable for on-screen subtitles and voice-over.\n"
+        "- Keep how the speaker addresses the audience (pronouns / forms of address) and product / brand names "
+        "consistent across the whole video.\n"
         "- Keep names, numbers and units as-is unless the glossary says otherwise. No explanations, no quotes."
         + ("\n- Each line shows a character budget in [max N chars]: the translation is spoken as voice-over in the same "
            "time slot, so stay within the budget (shorten, drop filler words) and never copy the bracket into the output."
            if budgets else "")
         + f"{reflow_note}{gl_block}\n"
-        "- Return ONLY a JSON object: {\"translations\": [\"...\", \"...\"]}"
-        f"{extra}\n\nLines:\n{numbered}"
+        "- Return ONLY a JSON object: {\"items\": [{\"id\": <id>, \"text\": \"...\"}, ...]} with one item per id."
+        f"{extra}{ctx}{prev}\n\nLines:\n{numbered}"
     )
 
 
-def _parse(text: str, expected: int) -> list[str]:
+def _load_json(text: str):
     text = text.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:]
     try:
-        data = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError:
         s, e = text.find("{"), text.rfind("}")
-        data = json.loads(text[s:e + 1]) if s >= 0 and e > s else None
+        return json.loads(text[s:e + 1]) if s >= 0 and e > s else None
+
+
+def _parse(text: str, expected: int) -> list[str]:
+    data = _load_json(text)
     arr = data.get("translations") if isinstance(data, dict) else data
     if not isinstance(arr, list):
         raise ValueError("JSON không đúng dạng")
@@ -313,6 +350,25 @@ def _parse(text: str, expected: int) -> list[str]:
     if len(out) != expected:
         raise ValueError(f"Số dòng trả về {len(out)} ≠ {expected}")
     return out
+
+
+def _parse_items(text: str, ids: list[int]) -> list[str]:
+    """{"items": [{"id", "text"}]} → bản dịch theo đúng thứ tự ``ids``; thiếu / thừa / trùng id → lỗi (thử lại).
+    Model trả kiểu cũ {"translations": [...]} đúng số câu vẫn nhận."""
+    data = _load_json(text)
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return _parse(text, len(ids))
+    got: dict[int, str] = {}
+    for it in items:
+        try:
+            got[int(it["id"])] = str(it.get("text", "")).strip()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise ValueError("JSON không đúng dạng (item thiếu id / text)") from None
+    missing = [n for n in ids if n not in got]
+    if missing or len(got) != len(ids):
+        raise ValueError(f"Thiếu / thừa id: thiếu {missing[:5]}, nhận {len(got)}/{len(ids)}")
+    return [got[n] for n in ids]
 
 
 # ── Dịch ──────────────────────────────────────────────────────────────────
@@ -325,21 +381,30 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
     router = Router(settings, log)
     target_en = _LANG_HINT.get(target, target)
     memory = TranslationMemory()
-    ckpt = Checkpoint(srt_path, target)
+    ckpt = Checkpoint(srt_path, target, style)
     glossary = settings.glossary
     total = len(cues)
     results: dict[int, str] = {}
+    budgets_all = [budget_for(c.duration, target) for c in cues]
 
     # 1) bộ nhớ dịch + checkpoint
     for i, c in enumerate(cues):
         if str(i) in ckpt.done:
             results[i] = ckpt.done[str(i)]
             continue
-        hit = memory.get(target, c.plain) if c.plain else ""
+        hit = memory.get(target, c.plain, style) if c.plain else ""
         if hit:
             results[i] = hit
     if results and log:
         log(f"Dùng lại {len(results)}/{total} cue từ bộ nhớ dịch/checkpoint.")
+
+    def context_for(a: int, b: int) -> list[str]:
+        """Câu gốc quanh lô [a, b] (video ngắn: gần như cả video) — dịch có ngữ cảnh, không rời từng lô."""
+        lo, hi = max(0, a - CONTEXT_LINES), min(total, b + 1 + CONTEXT_LINES // 3)
+        return [f"{k + 1}. {cues[k].plain}" for k in range(lo, hi) if cues[k].plain and not a <= k <= b]
+
+    def done_before(a: int) -> list[tuple[str, str]]:
+        return [(cues[k].plain, results[k]) for k in range(max(0, a - 8), a) if k in results and cues[k].plain]
 
     pending = [i for i in range(total) if i not in results]
     for start in range(0, len(pending), BATCH):
@@ -349,12 +414,14 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
             raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
         idxs = pending[start:start + BATCH]
         lines = [cues[i].plain or "…" for i in idxs]
-        cps = _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS)
-        budgets = [max(12, int(round(cues[i].duration * cps * 1.15))) for i in idxs]
+        ids = [i + 1 for i in idxs]
+        budgets = [budgets_all[i] for i in idxs]
+        ctx, prev = context_for(idxs[0], idxs[-1]), done_before(idxs[0])
         translated: list[str] | None = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
-                translated = _parse(router.call(_prompt(lines, target_en, source_hint, style, glossary, reflow, budgets)), len(lines))
+                translated = _parse_items(router.call(_prompt(lines, target_en, source_hint, style, glossary, reflow,
+                                                              budgets, ids, ctx, prev)), ids)
                 break
             except (ValueError, json.JSONDecodeError) as exc:
                 logger.warning("Lô dịch không hợp lệ (%s), thử lại", exc)
@@ -362,8 +429,10 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         if translated is None:
             translated = []
             for i, ln in zip(idxs, lines):
-                try:
-                    translated.append(_parse(router.call(_prompt([ln], target_en, source_hint, style, glossary, False)), 1)[0])
+                try:            # từng câu vẫn kèm ngân sách + ngữ cảnh
+                    translated.append(_parse_items(router.call(_prompt(
+                        [ln], target_en, source_hint, style, glossary, False, [budgets_all[i]], [i + 1],
+                        context_for(i, i), done_before(i))), [i + 1])[0])
                 except Exception:
                     translated.append(ln)      # giữ nguyên bản gốc cho cue này
                     failed.add(i)
@@ -374,7 +443,7 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
                 continue
             ckpt.done[str(i)] = t
             if cues[i].plain:
-                memory.put(target, cues[i].plain, t)
+                memory.put(target, cues[i].plain, t, style)
         if failed and log:
             log(f"⚠ {len(failed)} cue không dịch được, giữ nguyên bản gốc (chạy lại để dịch tiếp).")
         ckpt.save(total)
@@ -383,6 +452,29 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
             on_progress(min(1.0, (len(results)) / max(1, total)))
         if log:
             log(f"Đã dịch {done_n}/{len(pending)} cue mới ({router.current.provider}/{router.current.model})")
+
+    # 2) câu dịch vẫn dài hơn thời lượng đọc → nhờ AI rút gọn đúng các câu đó (một lượt), giữ bản ngắn hơn
+    over = [i for i in range(total) if cues[i].plain and results.get(i) and len(results[i]) > budgets_all[i] * _OVER_BUDGET]
+    if over and not (cancel is not None and cancel.is_set()):
+        memory.save()
+        if log:
+            log(f"{len(over)} câu dịch dài hơn thời lượng đọc (> {_DEFAULT_CPS:.0f} ký tự/giây) → AI rút gọn…")
+        try:
+            new = retranslate(cues, [results.get(i, "") for i in range(total)], over, settings=settings, target=target,
+                              source_hint=source_hint, style=style, instruction=SHORTEN_REQUEST, cancel=cancel,
+                              budgets={i: budgets_all[i] for i in over})
+        except RenderCancelled:
+            raise
+        except Exception as exc:
+            logger.warning("Không rút gọn được bản dịch: %s", exc)
+            new = {}
+        shorter = {i: t for i, t in new.items() if t and len(t) < len(results[i])}
+        for i, t in shorter.items():
+            results[i] = t
+            ckpt.done[str(i)] = t
+            memory.put(target, cues[i].plain, t, style)
+        if log:
+            log(f"Đã rút gọn {len(shorter)}/{len(over)} câu dài")
     memory.save()
     ckpt.finish()
     out: list[Cue] = []
@@ -424,21 +516,23 @@ def _retranslate_prompt(items: list[tuple[str, str, int]], before: list[str], af
         "- Keep names and numbers unless the glossary says otherwise. No explanations, no quotes."
         + (f"\nGlossary — always use these exact translations:\n{gl}" if gl else "")
         + ctx
-        + "\n- Return ONLY a JSON object: {\"translations\": [\"...\", \"...\"]}\n\nItems:\n" + "\n".join(rows)
+        + "\n- Return ONLY a JSON object: {\"items\": [{\"id\": <item number>, \"text\": \"...\"}, ...]} with one item "
+        "per numbered item.\n\nItems:\n" + "\n".join(rows)
     )
 
 
 def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settings: Settings, target: str,
                 source_hint: str = "", style: str = "", instruction: str = "",
                 on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
-                cancel: threading.Event | None = None) -> dict[int, str]:
+                cancel: threading.Event | None = None, budgets: dict[int, int] | None = None) -> dict[int, str]:
     """Dịch lại các cue ``idxs`` (chỉ số trong ``cues`` — bản gốc) theo yêu cầu người dùng, có xem bản dịch hiện tại
     ``previous`` và câu xung quanh làm ngữ cảnh. Bỏ qua bộ nhớ dịch / checkpoint (đó chính là bản cũ bị chê);
-    kết quả mới ghi đè vào bộ nhớ dịch để những lần dịch sau dùng bản mới. Trả {chỉ số: bản dịch mới}."""
+    kết quả mới ghi đè vào bộ nhớ dịch để những lần dịch sau dùng bản mới. ``budgets``: số ký tự tối đa riêng cho
+    từng câu (vd rút gọn câu đọc tràn khung). Trả {chỉ số: bản dịch mới}."""
     router = Router(settings, log)
     target_en = _LANG_HINT.get(target, target)
     memory = TranslationMemory()
-    cps = _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS)
+    budgets = budgets or {}
     idxs = sorted(set(i for i in idxs if 0 <= i < len(cues)))
     out: dict[int, str] = {}
     # gom theo lô các câu liền nhau để ngữ cảnh trước/sau có nghĩa
@@ -455,7 +549,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
             memory.save()
             raise RenderCancelled("Đã huỷ dịch lại.")
         items = [(cues[i].plain or "…", (previous[i] if i < len(previous) else "").replace("\n", " "),
-                  max(12, int(round(cues[i].duration * cps * 1.15)))) for i in batch]
+                  budgets.get(i) or budget_for(cues[i].duration, target)) for i in batch]
         a, b = batch[0], batch[-1]
         before = [cues[j].plain for j in range(max(0, a - CONTEXT), a)]
         after = [cues[j].plain for j in range(b + 1, min(len(cues), b + 1 + CONTEXT))]
@@ -464,7 +558,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
         result: list[str] | None = None
         for _attempt in range(3):
             try:
-                result = _parse(router.call(prompt), len(batch))
+                result = _parse_items(router.call(prompt), list(range(1, len(batch) + 1)))
                 break
             except (ValueError, json.JSONDecodeError) as exc:
                 logger.warning("Lô dịch lại không hợp lệ (%s), thử lại", exc)
@@ -474,7 +568,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
             if t:
                 out[i] = t
                 if cues[i].plain:
-                    memory.put(target, cues[i].plain, t)
+                    memory.put(target, cues[i].plain, t, style)
         if on_progress:
             on_progress((n + 1) / len(batches))
         if log:

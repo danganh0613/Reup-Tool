@@ -282,7 +282,8 @@ class SettingsWindow(ctk.CTkToplevel):
                                 labels={"auto": "Tự động (máy có GPU)", "on": "Luôn bật", "off": "Tắt"})
         self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Edge TTS", "VieNeu (local, tiếng Việt)"],
                                       value=st.tts_fallback or "Không")
-        for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback):
+        self.auto_shorten = SwitchRow(b, "Câu đọc tràn khung → AI tự rút gọn bản dịch", value=st.tts_auto_shorten)
+        for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback, self.auto_shorten):
             r.pack(fill="x", pady=3)
         hint(b, "VieNeu đọc lại miễn phí (chạy trên máy) · Gemini đọc lại tối đa 1 lần (tốn lượt) · engine trả phí khác "
                 "không đọc lại. Whisper nghe lại bắt thêm chữ đọc méo, dùng model Whisper đã có trên máy. Câu lỗi hẳn "
@@ -292,6 +293,13 @@ class SettingsWindow(ctk.CTkToplevel):
         button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron,
                tip="Mở pronunciation.json: «chữ viết»: «cách đọc» (vd. \"ANC\": \"ây en xi\") — áp cho mọi giọng, "
                    "lưu file rồi tạo lại giọng").pack(side="left")
+
+        b = self._card(c3, "Âm thanh đầu ra", "Khi bật «Chuẩn hoá âm lượng» (mục Video): đo độ to cả bài rồi chỉnh "
+                                              "đúng một lần, đỉnh luôn giới hạn ≤ −1 dBTP.")
+        self.loudness = SliderRow(b, "Độ to file xuất", from_=-23, to=-9, step=1, value=st.loudness_target,
+                                  suffix=" LUFS")
+        self.loudness.pack(fill="x", pady=3)
+        hint(b, "TikTok · Facebook · YouTube: −14 LUFS. Phát thanh / truyền hình (EBU R128): −23.").pack(fill="x")
 
         b = self._card(c3, "Thư mục xuất MP4", "Mẫu dựng video (trước đây là Preset) nằm ở ô «Mẫu» trên cùng cửa sổ chính.")
         row = ctk.CTkFrame(b, fg_color="transparent")
@@ -472,6 +480,8 @@ class SettingsWindow(ctk.CTkToplevel):
         st.tts_qc_asr = self.qc_asr.get()
         fb = self.tts_fallback.get()
         st.tts_fallback = "" if fb == "Không" else fb
+        st.tts_auto_shorten = self.auto_shorten.get()
+        st.loudness_target = float(self.loudness.get())
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()
         st.translate_provider = self.tr_provider.get()

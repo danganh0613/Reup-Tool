@@ -158,6 +158,23 @@ def wrap_lines(text: str, line_chars: int = LINE_CHARS) -> str:
     return text[:best].strip() + "\n" + text[best + 1:].strip()
 
 
+def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05, lead: float = 0.3) -> list[Cue]:
+    """Câu hiện quá ngắn (phụ đề dời theo giọng: câu ngắn chỉ hiện ~0,5 s) → kéo dài tới ``min_dur`` giây,
+    nhưng không chồng sang câu sau (cách ≥ ``gap``) và không bao giờ rút ngắn câu. Câu sau sát quá thì cho hiện
+    sớm hơn tối đa ``lead`` giây (không chồng câu trước)."""
+    out: list[Cue] = []
+    for i, c in enumerate(cues):
+        start, end = c.start, c.end
+        if end - start < min_dur:
+            limit = cues[i + 1].start - gap if i + 1 < len(cues) else float("inf")
+            end = max(end, min(start + min_dur, limit))
+            if end - start < min_dur:
+                floor = out[-1].end + gap if out else 0.0
+                start = min(start, max(end - min_dur, start - lead, floor))
+        out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
+    return out
+
+
 def cue_at(cues: list[Cue], t: float) -> Cue | None:
     for c in cues:
         if c.start <= t <= c.end:

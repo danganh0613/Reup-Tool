@@ -27,6 +27,7 @@ class EdgeTTS(TTSEngine):
     name = "edge"
     native_speed_range = (0.5, 2.0)
     workers = 4
+    qc_retries = 1                       # miễn phí → câu không đạt kiểm tra được đọc lại một lần
 
     def __init__(self) -> None:
         self._voices: list[Voice] | None = None

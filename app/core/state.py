@@ -385,6 +385,8 @@ class Settings:
     tts_fade_out_ms: int = 25
     tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên
     gemini_tts_temperature: float = 0.7  # cố định cho đều giọng giữa các câu; 0 = mặc định của Google
+    tts_auto_shorten: bool = True        # câu đọc tràn khung (đã nén tối đa) → AI tự rút gọn bản dịch rồi đọc lại
+    loudness_target: float = -14.0       # độ to file xuất (LUFS) khi bật «Chuẩn hoá âm lượng»: TikTok/FB/YouTube −14
 
 
 @dataclass

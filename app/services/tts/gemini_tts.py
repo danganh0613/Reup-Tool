@@ -206,7 +206,9 @@ class GeminiTTS(TTSEngine):
 
     @staticmethod
     def _audio(data: dict) -> tuple[bytes, int]:
-        """→ (PCM s16 mono, tần số). Payload là file WAV (model 3.x) → chỉ lấy khối «data», bỏ header + chữ ký C2PA."""
+        """→ (PCM s16 mono, tần số). WAV (model 3.x) → chỉ lấy khối «data», bỏ header + chữ ký C2PA; PCM thô
+        (``audio/L16`` / ``pcm`` / có ``rate=``, model 2.5) giữ nguyên; định dạng khác (mp3, ogg…) giải mã bằng ffmpeg —
+        không bao giờ coi một file nén là PCM (sẽ thành tiếng rè)."""
         for cand in data.get("candidates") or []:
             for part in (cand.get("content") or {}).get("parts") or []:
                 inline = part.get("inlineData") or part.get("inline_data")
@@ -216,7 +218,24 @@ class GeminiTTS(TTSEngine):
                     if w is not None:
                         pcm, rate, ch, bits, tag = w
                         return postprocess.to_mono16(pcm, ch, bits, tag), rate
-                    mime = inline.get("mimeType") or inline.get("mime_type") or ""
+                    mime = (inline.get("mimeType") or inline.get("mime_type") or "").lower()
                     m = re.search(r"rate=(\d+)", mime)
-                    return raw[: len(raw) // 2 * 2], int(m.group(1)) if m else 24000
+                    if m or "l16" in mime or "pcm" in mime:
+                        return raw[: len(raw) // 2 * 2], int(m.group(1)) if m else 24000
+                    return GeminiTTS._decode_other(raw, mime)
         return b"", 24000
+
+    @staticmethod
+    def _decode_other(raw: bytes, mime: str) -> tuple[bytes, int]:
+        import tempfile
+
+        ext = {"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/ogg": ".ogg", "audio/opus": ".opus",
+               "audio/aac": ".aac", "audio/flac": ".flac"}.get(mime.split(";")[0].strip(), ".bin")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / f"gemini{ext}"
+            p.write_bytes(raw)
+            r = postprocess.decode_any(p)
+        if r is None:
+            raise RuntimeError(f"Gemini TTS trả định dạng âm thanh lạ ({mime or 'không rõ'}) — không giải mã được.")
+        logger.info("Gemini TTS: âm thanh dạng %s → đã giải mã bằng ffmpeg", mime or "không rõ")
+        return r

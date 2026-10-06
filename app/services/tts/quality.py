@@ -153,8 +153,8 @@ def asr_check(a: np.ndarray, rate: int, text: str, v: Verdict, compute: str = "a
 # ── File ─────────────────────────────────────────────────────────────────
 
 def check_file(path: Path, text: str, *, speed: float = 1.0, asr: bool = False, compute: str = "auto") -> Verdict | None:
-    """Kiểm một file câu (WAV). Không đọc được (mp3…) → None (không kiểm)."""
-    r = postprocess.read_wav_mono16(Path(path))
+    """Kiểm một file câu (WAV đọc thẳng, MP3… giải mã bằng ffmpeg). Không đọc được → None (không kiểm)."""
+    r = postprocess.decode_any(Path(path))
     if r is None:
         return None
     pcm, rate = r

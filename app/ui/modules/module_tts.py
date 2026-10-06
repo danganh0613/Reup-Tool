@@ -133,7 +133,8 @@ class TTSModule(BaseModule):
         sec.pack(fill="x", pady=4)
         self.soft = SwitchRow(sec.body, "Bật Soft Timing (dời câu vào khoảng lặng, nén ≤1.10×)", on_change=s(cfg, "soft_timing", preview=False))
         self.natural = SwitchRow(sec.body, "Voice tự nhiên (không nén, phụ đề dời theo giọng)", on_change=s(cfg, "natural_sync", preview=False))
-        self.max_tempo = SliderRow(sec.body, "Nén tối đa (thường)", from_=1.0, to=2.0, step=0.05, fmt="{:.2f}", suffix="×",
+        # trần TỔNG (tốc độ đọc × nén cho vừa khung) — quá 1,25× giọng méo, nuốt chữ (câu còn tràn: AI rút gọn bản dịch)
+        self.max_tempo = SliderRow(sec.body, "Nén tối đa (tổng)", from_=1.0, to=1.25, step=0.05, fmt="{:.2f}", suffix="×",
                                    on_change=s(cfg, "max_tempo", cast=float, preview=False))
         self.min_gap = SliderRow(sec.body, "Nghỉ giữa câu", from_=0, to=1, step=0.02, fmt="{:.2f}", suffix="s",
                                  on_change=s(cfg, "min_gap", cast=float, preview=False))

@@ -88,6 +88,27 @@ def write_wav(path: Path, pcm16: bytes, rate: int) -> Path:
     return path
 
 
+def decode_any(path: Path, rate: int = 24000) -> tuple[bytes, int] | None:
+    """File âm thanh bất kỳ (WAV đọc thẳng; MP3… giải mã bằng ffmpeg) → (s16 mono, tần số). Lỗi → None."""
+    r = read_wav_mono16(path)
+    if r is not None:
+        return r
+    import subprocess
+
+    from app.core.platform import NO_WINDOW
+    from app.services.ffmpeg import find_binary
+
+    exe = find_binary("ffmpeg")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "-v", "error", "-nostdin", "-i", str(path), "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+                             capture_output=True, timeout=120, creationflags=NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (out.stdout, rate) if out.returncode == 0 and out.stdout else None
+
+
 def read_wav_mono16(path: Path) -> tuple[bytes, int] | None:
     """WAV trên đĩa → (s16 mono, tần số). Không đọc được (mp3, WAV lạ…) → None."""
     try:
@@ -186,7 +207,7 @@ def active_level_db(a: np.ndarray, rate: int) -> float | None:
     return float(20 * np.log10(np.sqrt(np.mean(on ** 2)) + 1e-12))
 
 
-def polish(pcm16: bytes, rate: int, *, lead: float = 0.03, tail: float = 0.06, fade_in: float = 0.010,
+def polish(pcm16: bytes, rate: int, *, lead: float = 0.05, tail: float = 0.10, fade_in: float = 0.010,
            fade_out: float = 0.025, level_db: float | None = None, cut_burst: bool = True,
            trim: bool = True) -> bytes:
     """Một câu s16 mono → cắt cụm âm lạ cuối câu, cắt lặng đầu/cuối (chừa ``lead``/``tail`` giây), fade vào/ra,

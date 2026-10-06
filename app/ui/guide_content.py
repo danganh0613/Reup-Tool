@@ -207,7 +207,8 @@ TOPICS: list[dict] = [
         ]),
         ("kv", [
             ("Thư viện voice", "Giọng đã tạo trước đây. Chọn để dùng lại, khỏi tạo mới."),
-            ("Tốc độ tối đa", "Máy được phép đọc nhanh tới mức này khi câu dài. 1.3–1.5 là vẫn dễ nghe."),
+            ("Nén tối đa (tổng)", "Máy được phép đọc nhanh tới mức này khi câu dài, tính cả «Tốc độ đọc» — tối đa 1,25 "
+                                  "để giọng không méo. Câu vẫn dài quá: máy nhờ AI rút gọn bản dịch rồi đọc lại."),
             ("Đồng bộ tự nhiên", "Không ép giọng nhanh lên; chữ và giọng đi cùng nhau, video có thể cần bật «Lặp video cho đủ giọng»."),
         ]),
         ("h", "Video có nhiều người nói"),
@@ -329,7 +330,7 @@ TOPICS: list[dict] = [
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
             ("Nghe video (STT) chậm dù có card NVIDIA", "Mục STT → bấm «Tải CUDA runtime» một lần (hoặc cài bản Setup đủ)."),
-            ("Giọng đọc bị mất ở cuối video", "Câu dịch quá dài. Tab SRT: ô «Phong cách dịch» chọn «Ngắn gọn hơn» rồi «Dịch lại»; hoặc mục TTS tăng «Tốc độ tối đa»; hoặc mục Video bật «Lặp video cho đủ giọng»."),
+            ("Video bị giữ khung cuối thêm vài giây", "Giọng dài hơn video nên máy giữ khung cuối cho đọc hết (không cắt giọng). Câu dịch quá dài: Cài đặt → «Câu đọc tràn khung → AI tự rút gọn bản dịch» (bật sẵn), hoặc tab Lời thoại: «Phong cách dịch» chọn «Ngắn gọn hơn» rồi «Dịch lại (bản mới)»; hoặc mục Video bật «Lặp video cho đủ thời lượng giọng đọc»."),
             ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm Render lại là được."),
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
             ("Gemini báo 429 / hết hạn mức", "Đợi 1 phút rồi thử lại, hoặc dán thêm key khác. Tạo ảnh/video AI cần tài khoản trả tiền."),

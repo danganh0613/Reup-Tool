@@ -62,6 +62,8 @@ class LiveSpec:
         self.cues = cues or []
         self.voice = voice
         self.voice_trimmed = voice_trimmed      # track giọng tính theo thời gian sau cắt
+        self.vspeed = rp.voice_timeline_speed(voice)     # track mới dựng theo mốc video ra (đã đổi tốc độ)
+        self._duck: tuple[str, Path | None] | None = None
         self.no_vocals: Path | None = None
         if self.vcfg.demucs_enable and self.vcfg.keep_original_audio and not self.vcfg.mute and info.has_audio:
             from app.services.vocal_remove import cached_no_vocals
@@ -132,15 +134,23 @@ class LiveSpec:
                                src_width=max(2, info.width), src_height=max(2, info.height), src_t0=src_t)
         voice_label = None
         if self.voice is not None and self.state.tts.enable_tts:
-            vt = self.kept_before(src_t) if self.voice_trimmed else src_t
+            # mốc trong track: track cũ theo mốc nguồn, track mới theo mốc video ra (÷ tốc độ lúc dựng)
+            vt = (self.kept_before(src_t) if self.voice_trimmed else src_t) / self.vspeed
             voice_label = f"[{g.add_input(['-ss', f'{vt:.3f}', '-i', str(self.voice)])}:a]"
         audio_src = "[0:a]" if info.has_audio else None
         if self.no_vocals is not None:           # âm gốc đã khử giọng nói (bản render cũng dùng file này)
             audio_src = f"[{g.add_input(['-ss', f'{src_t:.3f}', '-i', str(self.no_vocals)])}:a]"
         extras = self.mods.audio_extras(g, ctx) if self.mods.audio_extras else []
+        duck = None
+        env = self._duck_env(full) if voice_label and (
+            (vcfg.adaptive_ducking and vcfg.keep_original_audio and audio_src) or any(ex.duck for ex in extras)) else None
+        if env is not None:                      # cùng đường bao hạ nền như bản render
+            duck = g.chain(f"[{g.add_input(['-ss', f'{ctx.t0:.3f}', '-i', str(env)])}:a]",
+                           ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckenv]")
         aout = rp.build_audio_graph(g, info, vcfg, audio_src=audio_src,
                                     voice_label=voice_label, extras=extras, duration=out_dur,
-                                    orig_filters=self.mods.audio_orig_filters)
+                                    orig_filters=self.mods.audio_orig_filters, voice_tempo=speed / self.vspeed,
+                                    duck_label=duck, preview_loudness=self.state.settings.loudness_target)
         if not aout:
             return None
         g.add(f"{aout}volume={max(0.0, volume):.3f}[pout]")
@@ -151,6 +161,22 @@ class LiveSpec:
                 "-c:a", "pcm_s16le", str(out_wav)]
         return cmd
 
+    def _duck_env(self, full: float) -> Path | None:
+        """Đường bao hạ nền cho cả video (tính một lần, giữ theo track giọng + độ dài)."""
+        try:
+            key = f"{self.voice}|{self.voice.stat().st_mtime_ns}|{full:.2f}|{self.speed}|{self.vspeed}"
+        except OSError:
+            return None
+        if self._duck is None or self._duck[0] != key:
+            try:
+                env = rp.duck_envelope(self.voice, self.work / "duck.wav", duration=full,
+                                       tempo=self.speed / self.vspeed)
+            except Exception:
+                logger.exception("Không dựng được đường bao hạ nền cho xem trước")
+                env = None
+            self._duck = (key, env)
+        return self._duck[1]
+
     def signature(self) -> str:
         """Khoá cache audio: đổi cấu hình âm thanh → trích lại."""
         v, t, b, c = self.vcfg, self.state.tts, self.state.bgm, self.state.color
@@ -159,6 +185,7 @@ class LiveSpec:
         except OSError:
             vm = 0
         return repr((v.speed, v.mute, v.keep_original_audio, v.original_volume, v.tts_volume, v.vocal_filter,
-                     v.normalize_audio, v.adaptive_ducking, t.enable_tts, str(self.voice), vm, self.voice_trimmed,
+                     v.normalize_audio, self.state.settings.loudness_target, v.adaptive_ducking, t.enable_tts,
+                     str(self.voice), vm, self.voice_trimmed, self.vspeed,
                      b.enable, b.clips, b.master_volume, b.ducking, b.loop, b.fade_in, b.fade_out,
                      self.mods.audio_orig_filters, c.enable, self.segments, str(self.no_vocals)))
