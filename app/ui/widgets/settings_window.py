@@ -17,6 +17,7 @@ from app.core.platform import exe_name
 from app.core.state import GPU_BACKENDS, TRANSLATE_PROVIDERS, VIDEO_CODECS
 from app.services.ffmpeg import FFmpeg
 from app.services.sysinfo import gpu_name
+from app.services import groq_models
 from app.services.gemini_models import migrate_model, text_models
 from app.services.translate_router import DEFAULT_MODELS
 from app.ui.widgets.ui import Select, button
@@ -29,11 +30,13 @@ KEY_LINKS = {"Gemini": "https://aistudio.google.com/apikey", "Groq": "https://co
              "ElevenLabs": "https://elevenlabs.io/app/settings/api-keys",
              "Google": "https://console.cloud.google.com/apis/credentials", "FPT": "https://console.fpt.ai/"}
 MODEL_CHOICES = {"Gemini": [],          # lấy từ gemini_models.text_models() (có thể cập nhật từ Google)
-                 "Groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b"],
+                 "Groq": [],            # lấy từ groq_models.text_models() (có thể cập nhật từ Groq)
                  "DeepSeek": ["deepseek-chat", "deepseek-reasoner"],
                  "OpenAI": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"]}
 
 def _model_choices(provider: str) -> list[str]:
+    if provider == "Groq":
+        return groq_models.text_models()
     return text_models() if provider == "Gemini" else MODEL_CHOICES.get(provider, [])
 
 
@@ -216,7 +219,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.tr_model.set(st.translate_model or DEFAULT_MODELS.get(st.translate_provider, ""))
         self.tr_model.pack(side="left", fill="x", expand=True)
         self.models_btn = button(row, "", icon_name="refresh", size="sm", width=36, command=self._refresh_models,
-                                 tip="Lấy danh sách model Gemini mới nhất từ Google (dùng API key bên dưới)")
+                                 tip="Lấy danh sách model mới nhất của nhà cung cấp đang chọn (Gemini / Groq) "
+                                     "bằng API key bên dưới")
         self.models_btn.pack(side="left", padx=(6, 0))
         self.models_status = hint(b, "")
         self.models_status.pack(fill="x")
@@ -380,9 +384,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.tr_model.set(DEFAULT_MODELS.get(prov, ""))
 
     def _refresh_models(self) -> None:
-        """Hỏi Google các model Gemini key này dùng được → cập nhật danh sách (lưu cache, Dựng Truyện cũng dùng)."""
+        """Hỏi Google các model Gemini key này dùng được → cập nhật danh sách (lưu cache, Dựng Truyện cũng dùng).
+        Đang chọn Groq thì hỏi Groq."""
         from app.services.gemini_models import fetch_models
 
+        if self.tr_provider.get() == "Groq":
+            self._refresh_groq_models()
+            return
         keys = self.app_state.settings.split_keys(self.key_boxes["Gemini"].get("1.0", "end")) + \
             self.app_state.settings.split_keys(self.google_key.get("1.0", "end"))
         if not keys:
@@ -404,6 +412,28 @@ class SettingsWindow(ctk.CTkToplevel):
                                               f"{len(result['image'])} model ảnh · {len(result['video'])} model video.")
 
         self.window.run_bg(lambda: fetch_models(keys[0]), done)
+
+    def _refresh_groq_models(self) -> None:
+        keys = self.app_state.settings.split_keys(self.key_boxes["Groq"].get("1.0", "end"))
+        if not keys:
+            self.models_status.configure(text="Nhập Groq API key trước rồi bấm lại.")
+            return
+        self.models_status.configure(text="Đang hỏi Groq danh sách model…")
+        self.models_btn.configure(state="disabled")
+
+        def done(result, error):
+            self.models_btn.configure(state="normal")
+            if error:
+                self.models_status.configure(text=f"Không lấy được danh sách model: {error}")
+                return
+            if self.tr_provider.get() == "Groq":
+                cur = groq_models.migrate_model(self.tr_model.get())
+                choices = groq_models.text_models()
+                self.tr_model.configure(values=choices)
+                self.tr_model.set(cur if cur in choices else choices[0])
+            self.models_status.configure(text=f"✓ Đã cập nhật: {len(result)} model Groq dịch được.")
+
+        self.window.run_bg(lambda: groq_models.fetch_models(keys[0]), done)
 
     def _import_glossary(self) -> None:
         p = filedialog.askopenfilename(filetypes=[("Text", "*.txt *.csv"), ("Tất cả", "*.*")])

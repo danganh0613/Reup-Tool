@@ -829,6 +829,10 @@ class AppState:
             try:
                 self.settings = _from_dict(Settings, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
                 self.settings.translate_model = migrate_model(self.settings.translate_model)
+                if self.settings.translate_provider == "Groq":           # model Groq đã gỡ → model thay thế
+                    from app.services.groq_models import migrate_model as migrate_groq
+
+                    self.settings.translate_model = migrate_groq(self.settings.translate_model)
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
 

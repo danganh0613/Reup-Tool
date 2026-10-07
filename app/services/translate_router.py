@@ -2,7 +2,8 @@
 từ điển thuật ngữ, bộ nhớ dịch và checkpoint để tiếp tục khi gián đoạn.
 
 Thứ tự thử: nhà cung cấp chính (từng key) → các nhà cung cấp khác có key. Lỗi quota/auth
-(401/402/403/429) chuyển sang key/nhà cung cấp kế; lỗi khác thử lại vài lần.
+(401/402/403/429) chuyển sang key/nhà cung cấp kế — riêng 429 «thử lại sau ≤ 60 s» (giới hạn token/phút, hay gặp
+ở gói miễn phí Groq) thì chờ rồi thử lại đúng model đó; lỗi khác thử lại vài lần.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -21,13 +23,22 @@ import requests
 
 from app.config.paths import CACHE_DIR
 from app.core.state import Settings
+from app.services import groq_models
 from app.services.ffmpeg import RenderCancelled
 from app.services.srt_utils import Cue, wrap_lines
 
 logger = logging.getLogger(__name__)
 
 BATCH = 40
-DEFAULT_MODELS = {"Gemini": "gemini-flash-latest", "Groq": "llama-3.3-70b-versatile", "DeepSeek": "deepseek-chat",
+# Groq gói miễn phí chặn theo token TRẢ RA mỗi phút (qwen3.8-27b: 1000, 10/2026) và từ chối hẳn yêu cầu «đoán» ra
+# nhiều hơn mức đó («Request too large») → lô nhỏ hơn + báo trước max_tokens vừa đủ (~50 token mỗi câu)
+GROQ_BATCH = 16
+
+
+def max_out(lines: int) -> int:
+    """Số token trả ra tối đa cho một lô ``lines`` câu (JSON id + text)."""
+    return 100 + 50 * max(1, lines)
+DEFAULT_MODELS = {"Gemini": "gemini-flash-latest", "Groq": groq_models.DEFAULT_TEXT[0], "DeepSeek": "deepseek-chat",
                   "OpenAI": "gpt-4o-mini"}
 OPENAI_COMPAT = {"Groq": "https://api.groq.com/openai/v1/chat/completions",
                  "DeepSeek": "https://api.deepseek.com/chat/completions",
@@ -53,6 +64,16 @@ SHORTEN_REQUEST = ("Shorten each line so it can be spoken within its voice-over 
                    "keep the key meaning and the speaker's pronouns, natural spoken style, drop filler words and "
                    "repetitions, add nothing new.")
 
+#: câu dịch còn sót chữ nguồn → yêu cầu dịch lại hết sang ngôn ngữ đích
+LEAK_REQUEST = ("The CURRENT translation still contains source-language (Chinese / Japanese / Korean) characters. "
+                "Translate the whole line into the target language with no CJK characters at all.")
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")      # chữ Hán / Kana / Hangul
+
+
+def _leaks(text: str, target: str) -> bool:
+    """Dịch sang ngôn ngữ không dùng chữ Hán / Kana / Hangul mà bản dịch vẫn còn sót."""
+    return LANG_CODE.get(target) not in ("zh", "ja", "ko") and bool(_CJK.search(text or ""))
+
 
 def _wait(seconds: float) -> None:
     """Chờ có ngẫu nhiên: nhiều lô / nhiều key lỗi cùng lúc không gọi lại đúng cùng một nhịp."""
@@ -65,7 +86,22 @@ def budget_for(duration: float, target: str) -> int:
 
 
 class QuotaError(RuntimeError):
-    pass
+    def __init__(self, msg: str, retry_after: float | None = None) -> None:
+        super().__init__(msg)
+        self.retry_after = retry_after          # máy chủ bảo «thử lại sau N giây» (giới hạn theo phút)
+
+
+def _quota_error(r: requests.Response, name: str) -> QuotaError:
+    """401/402/403/429 → QuotaError, kèm số giây chờ nếu máy chủ cho biết (Retry-After / «try again in 7.2s» /
+    «retryDelay»: «17s» của Google)."""
+    wait = None
+    if r.status_code == 429:
+        try:
+            wait = float(r.headers.get("retry-after") or "")
+        except ValueError:
+            m = re.search(r'try again in ([\d.]+)s|"retryDelay":\s*"([\d.]+)s"', r.text)
+            wait = float(m.group(1) or m.group(2)) if m else None
+    return QuotaError(f"{name} {r.status_code}: {r.text[:200]}", wait)
 
 
 @dataclass
@@ -81,7 +117,9 @@ def _keys(text: str) -> list[str]:
 
 #: model dự phòng cùng nhà cung cấp — dùng khi model chính quá tải (503) hoặc hết quota riêng của model đó
 ALT_MODELS = {"Gemini": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"],
-              "Groq": ["llama-3.1-8b-instant"], "DeepSeek": [], "OpenAI": ["gpt-4o-mini"]}
+              "Groq": ["qwen/qwen3.8-27b"], "DeepSeek": [], "OpenAI": ["gpt-4o-mini"]}
+#: model chỉ dùng khi mọi nhà cung cấp khác cũng hỏng — dịch thử Trung → Việt kém rõ (sai thành ngữ, tên con vật)
+LAST_RESORT = {"Groq": ["openai/gpt-oss-120b"]}
 
 
 def build_candidates(settings: Settings) -> list[Candidate]:
@@ -91,6 +129,8 @@ def build_candidates(settings: Settings) -> list[Candidate]:
     out: list[Candidate] = []
     for prov in order:
         model = settings.translate_model if prov == settings.translate_provider and settings.translate_model else DEFAULT_MODELS[prov]
+        if prov == "Groq":
+            model = groq_models.migrate_model(model)
         if prov == "Gemini":
             keys = settings.gemini_keys()
         elif prov == "Groq":
@@ -102,16 +142,19 @@ def build_candidates(settings: Settings) -> list[Candidate]:
         for m in [model, *(x for x in ALT_MODELS.get(prov, []) if x != model)]:
             for k in keys:
                 out.append(Candidate(prov, k, m))
+    for prov, models in LAST_RESORT.items():
+        keys = _keys(settings.groq_api_key) if prov == "Groq" else []
+        out += [Candidate(prov, k, m) for m in models for k in keys if Candidate(prov, k, m) not in out]
     return out
 
 
-def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
+def _call_gemini(c: Candidate, prompt: str, timeout: float = 120, max_tokens: int | None = None) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{c.model}:generateContent"
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json"}}
     r = requests.post(url, params={"key": c.key}, json=body, timeout=timeout)
     if r.status_code in (401, 402, 403, 429):
-        raise QuotaError(f"Gemini {r.status_code}: {r.text[:200]}")
+        raise _quota_error(r, "Gemini")
     if r.status_code != 200:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
     data = r.json()
@@ -121,16 +164,20 @@ def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
     return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
 
 
-def _call_openai_compat(c: Candidate, prompt: str, timeout: float = 120) -> str:
+def _call_openai_compat(c: Candidate, prompt: str, timeout: float = 120, max_tokens: int | None = None) -> str:
     url = OPENAI_COMPAT[c.provider]
     body = {"model": c.model, "temperature": 0.3,
             "messages": [{"role": "system", "content": "You are a professional subtitle translator. Reply with JSON only."},
                          {"role": "user", "content": prompt}]}
     if c.provider in ("OpenAI", "DeepSeek", "Groq"):
         body["response_format"] = {"type": "json_object"}
+    if c.provider == "Groq" and c.model.startswith("openai/gpt-oss"):
+        body["reasoning_effort"] = "low"       # dịch không cần nghĩ lâu: ra ít token hơn ~3,5× (đỡ chạm giới hạn phút)
+    elif c.provider == "Groq" and max_tokens:
+        body["max_tokens"] = max_tokens        # model suy luận (gpt-oss) không đặt: phần suy nghĩ cũng tính vào đây
     r = requests.post(url, headers={"Authorization": f"Bearer {c.key}"}, json=body, timeout=timeout)
     if r.status_code in (401, 402, 403, 429):
-        raise QuotaError(f"{c.provider} {r.status_code}: {r.text[:200]}")
+        raise _quota_error(r, c.provider)
     if r.status_code != 200:
         raise RuntimeError(f"{c.provider} {r.status_code}: {r.text[:300]}")
     data = r.json()
@@ -149,17 +196,30 @@ class Router:
     def current(self) -> Candidate:
         return self.cands[self.idx]
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, max_tokens: int | None = None) -> str:
         tried = 0
         last = ""
         while tried < len(self.cands):
             c = self.current
             fn = _call_gemini if c.provider == "Gemini" else _call_openai_compat
-            for attempt in range(3):
+            attempt = 0
+            waited = 0.0                        # giây đã chờ vì giới hạn mỗi phút (không tính vào 3 lần thử)
+            while attempt < 3:
                 try:
-                    return fn(c, prompt)
+                    return fn(c, prompt, max_tokens=max_tokens)
                 except QuotaError as exc:
                     last = str(exc)
+                    nxt = self.cands[(self.idx + 1) % len(self.cands)]
+                    if (exc.retry_after is not None and exc.retry_after <= 60 and waited < 150
+                            and (nxt.provider, nxt.model) != (c.provider, c.model)):
+                        # chạm giới hạn token/phút mà không còn key khác cùng model → chờ cho đầy lại, giữ model
+                        # tốt thay vì rơi xuống model dịch kém hơn / nhà cung cấp đang quá tải
+                        if self.log:
+                            self.log(f"⏳ {c.provider} {c.model} chạm giới hạn mỗi phút → chờ {exc.retry_after:.0f}s rồi thử lại")
+                        pause = exc.retry_after * random.uniform(1.0, 1.2) + 0.5
+                        time.sleep(pause)
+                        waited += pause
+                        continue
                     if self.log:
                         self.log(f"⚠ {c.provider} hết quota/lỗi key ({str(exc)[:80]}) → xoay sang key/model kế")
                     break
@@ -168,6 +228,7 @@ class Router:
                     _wait(2.0 * (attempt + 1))
                     if attempt == 2 and self.log:
                         self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
+                    attempt += 1
                 except RuntimeError as exc:
                     last = str(exc)
                     busy = " 503" in last or " 500" in last or " 502" in last or " 529" in last
@@ -181,6 +242,7 @@ class Router:
                         break
                     # máy chủ quá tải → chờ lâu hơn (4 s, 8 s) rồi thử lại; lỗi khác chờ ngắn
                     _wait(4.0 * (attempt + 1) if busy else 1.5)
+                    attempt += 1
             nxt = (self.idx + 1) % len(self.cands)
             if self.log and self.cands[nxt] != c:
                 n = self.cands[nxt]
@@ -329,7 +391,8 @@ def _prompt(lines: list[str], target: str, source_hint: str, style: str, glossar
 
 
 def _load_json(text: str):
-    text = text.strip()
+    # bỏ phần «<think>…</think>» model suy luận (Qwen3…) đôi khi trả kèm trước JSON
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
@@ -407,12 +470,13 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         return [(cues[k].plain, results[k]) for k in range(max(0, a - 8), a) if k in results and cues[k].plain]
 
     pending = [i for i in range(total) if i not in results]
-    for start in range(0, len(pending), BATCH):
+    step = GROQ_BATCH if settings.translate_provider == "Groq" else BATCH
+    for start in range(0, len(pending), step):
         if cancel is not None and cancel.is_set():
             ckpt.save(total)
             memory.save()
             raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
-        idxs = pending[start:start + BATCH]
+        idxs = pending[start:start + step]
         lines = [cues[i].plain or "…" for i in idxs]
         ids = [i + 1 for i in idxs]
         budgets = [budgets_all[i] for i in idxs]
@@ -421,7 +485,7 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         for _attempt in range(3):
             try:
                 translated = _parse_items(router.call(_prompt(lines, target_en, source_hint, style, glossary, reflow,
-                                                              budgets, ids, ctx, prev)), ids)
+                                                              budgets, ids, ctx, prev), max_out(len(ids))), ids)
                 break
             except (ValueError, json.JSONDecodeError) as exc:
                 logger.warning("Lô dịch không hợp lệ (%s), thử lại", exc)
@@ -432,7 +496,7 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
                 try:            # từng câu vẫn kèm ngân sách + ngữ cảnh
                     translated.append(_parse_items(router.call(_prompt(
                         [ln], target_en, source_hint, style, glossary, False, [budgets_all[i]], [i + 1],
-                        context_for(i, i), done_before(i))), [i + 1])[0])
+                        context_for(i, i), done_before(i)), max_out(1)), [i + 1])[0])
                 except Exception:
                     translated.append(ln)      # giữ nguyên bản gốc cho cue này
                     failed.add(i)
@@ -447,34 +511,51 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         if failed and log:
             log(f"⚠ {len(failed)} cue không dịch được, giữ nguyên bản gốc (chạy lại để dịch tiếp).")
         ckpt.save(total)
-        done_n = min(start + BATCH, len(pending))
+        done_n = min(start + step, len(pending))
         if on_progress:
             on_progress(min(1.0, (len(results)) / max(1, total)))
         if log:
             log(f"Đã dịch {done_n}/{len(pending)} cue mới ({router.current.provider}/{router.current.model})")
 
-    # 2) câu dịch vẫn dài hơn thời lượng đọc → nhờ AI rút gọn đúng các câu đó (một lượt), giữ bản ngắn hơn
-    over = [i for i in range(total) if cues[i].plain and results.get(i) and len(results[i]) > budgets_all[i] * _OVER_BUDGET]
-    if over and not (cancel is not None and cancel.is_set()):
+    def redo(idxs: list[int], instruction: str, accept: Callable[[int, str], bool]) -> int:
+        """Nhờ AI làm lại đúng các câu ``idxs`` (một lượt), giữ bản mới nếu ``accept(i, bản mới)``. Trả số câu đã thay."""
         memory.save()
-        if log:
-            log(f"{len(over)} câu dịch dài hơn thời lượng đọc (> {_DEFAULT_CPS:.0f} ký tự/giây) → AI rút gọn…")
         try:
-            new = retranslate(cues, [results.get(i, "") for i in range(total)], over, settings=settings, target=target,
-                              source_hint=source_hint, style=style, instruction=SHORTEN_REQUEST, cancel=cancel,
-                              budgets={i: budgets_all[i] for i in over})
+            new = retranslate(cues, [results.get(i, "") for i in range(total)], idxs, settings=settings, target=target,
+                              source_hint=source_hint, style=style, instruction=instruction, cancel=cancel,
+                              budgets={i: budgets_all[i] for i in idxs}, log=log)     # thấy cả lúc chờ / đổi model
         except RenderCancelled:
             raise
         except Exception as exc:
-            logger.warning("Không rút gọn được bản dịch: %s", exc)
-            new = {}
-        shorter = {i: t for i, t in new.items() if t and len(t) < len(results[i])}
-        for i, t in shorter.items():
+            logger.warning("Không làm lại được bản dịch: %s", exc)
+            return 0
+        ok = {i: t for i, t in new.items() if t and accept(i, t)}
+        for i, t in ok.items():
             results[i] = t
             ckpt.done[str(i)] = t
             memory.put(target, cues[i].plain, t, style)
+        return len(ok)
+
+    def stopped() -> bool:
+        return cancel is not None and cancel.is_set()
+
+    # 2) câu còn sót chữ gốc (Hán / Kana / Hangul — Qwen hay chêm «俗称»…) → dịch lại riêng các câu đó (một lượt)
+    leak = [i for i in range(total) if cues[i].plain and _leaks(results.get(i, ""), target)]
+    if leak and not stopped():
         if log:
-            log(f"Đã rút gọn {len(shorter)}/{len(over)} câu dài")
+            log(f"{len(leak)} câu dịch còn sót chữ gốc → AI dịch lại…")
+        n = redo(leak, LEAK_REQUEST, lambda i, t: not _leaks(t, target))
+        if log:
+            log(f"Đã dịch lại {n}/{len(leak)} câu còn sót chữ gốc")
+
+    # 3) câu dịch vẫn dài hơn thời lượng đọc → nhờ AI rút gọn đúng các câu đó (một lượt), giữ bản ngắn hơn
+    over = [i for i in range(total) if cues[i].plain and results.get(i) and len(results[i]) > budgets_all[i] * _OVER_BUDGET]
+    if over and not stopped():
+        if log:
+            log(f"{len(over)} câu dịch dài hơn thời lượng đọc (> {_DEFAULT_CPS:.0f} ký tự/giây) → AI rút gọn…")
+        n = redo(over, SHORTEN_REQUEST, lambda i, t: len(t) < len(results[i]) and not _leaks(t, target))
+        if log:
+            log(f"Đã rút gọn {n}/{len(over)} câu dài")
     memory.save()
     ckpt.finish()
     out: list[Cue] = []
@@ -536,9 +617,10 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
     idxs = sorted(set(i for i in idxs if 0 <= i < len(cues)))
     out: dict[int, str] = {}
     # gom theo lô các câu liền nhau để ngữ cảnh trước/sau có nghĩa
+    step = GROQ_BATCH if settings.translate_provider == "Groq" else BATCH
     batches: list[list[int]] = []
     for i in idxs:
-        if batches and i == batches[-1][-1] + 1 and len(batches[-1]) < BATCH:
+        if batches and i == batches[-1][-1] + 1 and len(batches[-1]) < step:
             batches[-1].append(i)
         elif batches and len(batches[-1]) < 8 and i - batches[-1][-1] <= CONTEXT:
             batches[-1].append(i)            # câu lẻ gần nhau → chung một lô
@@ -558,7 +640,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
         result: list[str] | None = None
         for _attempt in range(3):
             try:
-                result = _parse_items(router.call(prompt), list(range(1, len(batch) + 1)))
+                result = _parse_items(router.call(prompt, max_out(len(batch))), list(range(1, len(batch) + 1)))
                 break
             except (ValueError, json.JSONDecodeError) as exc:
                 logger.warning("Lô dịch lại không hợp lệ (%s), thử lại", exc)
