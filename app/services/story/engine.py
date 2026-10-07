@@ -17,7 +17,7 @@ from app.services.story import ai as story_ai
 from app.services.story.assembler import assemble
 from app.services.story.project import Scene, StoryProject
 from app.services.story.prompts import master_prompt_text
-from app.services.tts.generator import make_engine, qc_options, synthesize_cached
+from app.services.tts.generator import make_engine, prefill_batches, qc_options, synthesize_cached, voice_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -95,16 +95,17 @@ class StoryEngine:
         settings = self.state.settings
         qc = qc_options(settings)
 
-        def work(sc: Scene) -> tuple[Scene, Path]:
-            _check(cancel, "tạo giọng")
+        def engine_for(sc: Scene) -> tuple[TTSConfig, object, str]:
             cfg = self._tts_config_for(proj, sc.speaker)
             key = f"{cfg.tts_provider}|{cfg.edge_voice}|{cfg.eleven_model}"
             eng = engines.get(key)
             if eng is None:
                 eng = engines[key] = make_engine(cfg, settings)
-            from app.services.tts.generator import voice_id_for
+            return cfg, eng, voice_id_for(cfg)
 
-            vid = voice_id_for(cfg)
+        def work(sc: Scene) -> tuple[Scene, Path]:
+            _check(cancel, "tạo giọng")
+            cfg, eng, vid = engine_for(sc)
             cached = synthesize_cached(eng, vid, sc.narration.strip(), speed=cfg.tts_speed, pitch=cfg.tts_pitch,
                                        qc=qc)
             idx = proj.scenes.index(sc) if sc in proj.scenes else 0
@@ -115,6 +116,13 @@ class StoryEngine:
         done = 0
         if log:
             log(f"Tạo giọng cho {len(targets)} cảnh…")
+        # Gemini TTS: lời kể nhiều cảnh (theo từng đoạn ≤ 200 ký tự) gộp vào ít lượt gọi rồi tách lại — trước đây mỗi
+        # đoạn một lượt (truyện 30 cảnh ≈ 90 lượt)
+        jobs = []
+        for sc in targets:
+            cfg, eng, vid = engine_for(sc)
+            jobs.append((eng, vid, cfg.tts_speed, cfg.tts_pitch, sc.narration.strip()))
+        prefill_batches(jobs, settings, qc, log=log, check=lambda: _check(cancel, "tạo giọng"))
         with ThreadPoolExecutor(max_workers=max(1, min(4, settings.tts_workers))) as pool:
             futs = [pool.submit(work, s) for s in targets]
             for fut in as_completed(futs):

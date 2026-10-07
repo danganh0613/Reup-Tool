@@ -93,8 +93,9 @@ class GeminiTTS(TTSEngine):
     name = "gemini_tts"
     ext = ".wav"
     native_speed_range = (1.0, 1.0)      # tốc độ chỉnh bằng atempo khi ghép
-    workers = 2
+    workers = 1                          # gói miễn phí ~15 lượt/phút: gọi song song chỉ thêm lỗi 429
     qc_retries = 1                       # mỗi lần đọc lại tốn một lượt API
+    reread_soft = False                  # lỗi nhẹ (Whisper nghe «Bắt» thành «Bắc») không đáng một lượt gọi
     max_chars = 200                      # model sinh âm thanh kiểu LLM: câu quá dài dễ lạc / đọc thêm
     batch_lines = 25                     # gói miễn phí ~15 lượt/phút → gộp ~25 câu một lượt (thử thật: tách đúng 25/25)
 

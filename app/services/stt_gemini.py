@@ -1,4 +1,4 @@
-"""Nhận diện giọng nói bằng Gemini (cloud): cắt audio thành đoạn ~8 phút, gửi inline, nhận JSON có mốc thời gian."""
+"""Nhận diện giọng nói bằng Gemini (cloud): cắt audio thành đoạn ~2,5 phút tại khoảng lặng, gửi inline, nhận JSON có mốc thời gian."""
 
 from __future__ import annotations
 
@@ -16,11 +16,52 @@ from app.services.whisper_stt import STTResult
 
 logger = logging.getLogger(__name__)
 
-# Mốc thời gian do LLM ước lượng trôi dần theo thời lượng (test thực tế: +40 s sau 3 phút) → gửi đoạn ngắn để
-# sai số không tích luỹ; đầu mỗi đoạn là mốc chính xác do ta cắt.
-CHUNK_SEC = 60
+# Mốc thời gian do LLM ước lượng trôi dần theo thời lượng (test thực tế: +40 s sau 3 phút nếu gửi cả video) → cắt
+# đoạn ~2,5 phút để ít lượt gọi, nhưng cắt TẠI KHOẢNG LẶNG (không cắt ngang câu); đầu mỗi đoạn là mốc chính xác do
+# ta cắt, cuối đoạn đã có bước co tỉ lệ. Không tìm được khoảng lặng → cắt ở ``TARGET_SEC``.
+TARGET_SEC = 150.0        # độ dài đoạn mong muốn
+MIN_SEC = 60.0            # không cắt sớm hơn (để đoạn không quá vụn)
+MAX_SEC = 210.0           # không để đoạn dài quá (mốc trôi nhiều)
+_SILENCE_DB = -32.0       # ngưỡng im lặng cho silencedetect
+_SILENCE_MIN = 0.35       # khoảng lặng tối thiểu (giây) coi là chỗ nghỉ giữa câu
+CHUNK_SEC = TARGET_SEC    # tương thích tên cũ (bị ghi đè khi chạy thử)
 _LANG_NAMES = {"vi": "Vietnamese", "en": "English", "zh": "Chinese", "ja": "Japanese", "ko": "Korean", "fr": "French",
                "de": "German", "es": "Spanish", "th": "Thai", "id": "Indonesian", "ru": "Russian"}
+
+
+def _silence_mids(path: Path, ffmpeg: FFmpeg) -> list[float]:
+    """Thời điểm GIỮA mỗi khoảng lặng (giây) trong audio — chỗ có thể cắt đoạn mà không cắt ngang câu."""
+    import re
+    import subprocess
+
+    from app.core.platform import NO_WINDOW
+
+    try:
+        r = subprocess.run([ffmpeg.ffmpeg, "-hide_banner", "-nostats", "-i", str(path),
+                            "-af", f"silencedetect=noise={_SILENCE_DB}dB:d={_SILENCE_MIN}", "-f", "null", "-"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           creationflags=NO_WINDOW, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    starts = [float(m) for m in re.findall(r"silence_start:\s*(-?[\d.]+)", r.stderr)]
+    ends = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", r.stderr)]
+    return [(a + b) / 2 for a, b in zip(starts, ends)]
+
+
+def _chunk_bounds(duration: float, silences: list[float], *, target: float = TARGET_SEC, min_sec: float = MIN_SEC,
+                  max_sec: float = MAX_SEC) -> list[tuple[float, float]]:
+    """Chia [0, duration] thành các đoạn (bắt đầu, độ dài): mỗi đoạn kết thúc ở khoảng lặng gần mốc ``target`` nhất
+    trong [min_sec, max_sec]; không có khoảng lặng nào trong khoảng đó thì cắt cứng ở ``target``."""
+    bounds: list[tuple[float, float]] = []
+    pos = 0.0
+    while duration - pos > max_sec:
+        lo, hi = pos + min_sec, pos + max_sec
+        cand = [t for t in silences if lo <= t <= hi]
+        cut = min(cand, key=lambda t: abs(t - (pos + target))) if cand else pos + target
+        bounds.append((pos, cut - pos))
+        pos = cut
+    bounds.append((pos, duration - pos))
+    return bounds
 
 
 def _parse_ts(v) -> float:
@@ -50,19 +91,21 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
     work_dir = work_dir or Path(video_path).parent
     work_dir.mkdir(parents=True, exist_ok=True)
     duration = ffmpeg.duration_of(video_path)
-    n_chunks = max(1, int(duration // CHUNK_SEC) + (1 if duration % CHUNK_SEC > 1 else 0))
+    target = float(globals().get("CHUNK_SEC", TARGET_SEC))        # chạy thử có thể ghi đè CHUNK_SEC
+    bounds = _chunk_bounds(duration, _silence_mids(Path(video_path), ffmpeg) if duration > target + MIN_SEC else [],
+                           target=target, max_sec=max(target + 1, MAX_SEC if target >= TARGET_SEC else target * 1.4))
+    n_chunks = len(bounds)
     lang_note = f"The speech is in {_LANG_NAMES.get(language, language)}." if language not in ("", "auto") else \
         "Detect the language automatically."
     cues: list[Cue] = []
     detected = language if language not in ("", "auto") else ""
-    for i in range(n_chunks):
+    for i, (start, seg_len) in enumerate(bounds):
         if cancel is not None and cancel.is_set():
             raise RenderCancelled("Đã huỷ nhận diện")
-        start = i * CHUNK_SEC
         chunk = work_dir / f"stt_chunk_{i:02d}.mp3"
         if log:
-            log(f"Gemini STT: đoạn {i + 1}/{n_chunks} ({start / 60:.0f}–{min(duration, start + CHUNK_SEC) / 60:.0f} phút)…")
-        res = ffmpeg.run_simple(["-ss", f"{start:.3f}", "-t", f"{CHUNK_SEC}", "-i", str(video_path), "-vn", "-ac", "1",
+            log(f"Gemini STT: đoạn {i + 1}/{n_chunks} ({start / 60:.0f}–{min(duration, start + seg_len) / 60:.0f} phút)…")
+        res = ffmpeg.run_simple(["-ss", f"{start:.3f}", "-t", f"{seg_len:.3f}", "-i", str(video_path), "-vn", "-ac", "1",
                                  "-ar", "16000", "-b:a", "48k", str(chunk)], timeout=300)
         if res.returncode != 0 or not chunk.exists():
             raise RuntimeError("Không tách được audio để gửi Gemini")
@@ -99,7 +142,7 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
             parsed = json.loads(text[s:e + 1]) if s >= 0 else {}
         if not detected:
             detected = str(parsed.get("language", "")).strip()
-        chunk_len = max(0.5, min(CHUNK_SEC, duration - start))
+        chunk_len = max(0.5, min(seg_len, duration - start))
         raw: list[tuple[float, float, str]] = []
         for c in parsed.get("cues", []) or []:
             if not isinstance(c, dict):

@@ -34,6 +34,9 @@ class TTSEngine:
     qc_retries: int = 0
     #: câu dài hơn thì tách đoạn đọc riêng rồi ghép (0 = engine tự chia câu dài)
     max_chars: int = 0
+    #: đọc lại cả câu chỉ có lỗi nhẹ (vd «chữ đầu nghe thành…» — Whisper hay nghe nhầm). Engine tính tiền / lượt gọi
+    #: đặt False: chỉ đọc lại khi lỗi nặng (đọc lặp, sai chữ, cụt…)
+    reread_soft: bool = True
     #: đọc gộp tối đa bấy nhiêu câu trong một lượt gọi rồi tách lại (``synthesize_batch``; 0 = không gộp)
     batch_lines: int = 0
 

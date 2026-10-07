@@ -204,6 +204,7 @@ class Router:
             fn = _call_gemini if c.provider == "Gemini" else _call_openai_compat
             attempt = 0
             waited = 0.0                        # giây đã chờ vì giới hạn mỗi phút (không tính vào 3 lần thử)
+            model_down = False                  # quá tải / hết giờ / model bị gỡ: lỗi theo MODEL, đổi key không giúp gì
             while attempt < 3:
                 try:
                     return fn(c, prompt, max_tokens=max_tokens)
@@ -226,17 +227,21 @@ class Router:
                 except requests.RequestException as exc:
                     last = str(exc)
                     _wait(2.0 * (attempt + 1))
-                    if attempt == 2 and self.log:
-                        self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
+                    if attempt == 2:
+                        model_down = True
+                        if self.log:
+                            self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
                     attempt += 1
                 except RuntimeError as exc:
                     last = str(exc)
                     busy = " 503" in last or " 500" in last or " 502" in last or " 529" in last
                     if " 404" in last:          # model không còn phục vụ → thử model khác ngay
+                        model_down = True
                         if self.log:
                             self.log(f"⚠ {c.provider}: model {c.model} không còn khả dụng → đổi model")
                         break
                     if attempt == 2:
+                        model_down = busy
                         if self.log:
                             self.log(f"⚠ {c.provider} {c.model}: {str(exc)[:110]}")
                         break
@@ -244,6 +249,11 @@ class Router:
                     _wait(4.0 * (attempt + 1) if busy else 1.5)
                     attempt += 1
             nxt = (self.idx + 1) % len(self.cands)
+            if model_down:
+                # các key khác của cùng model sẽ hỏng y hệt (trước: mỗi key thử thêm 3 lần, chờ 4–8 s mỗi lần)
+                while tried + 1 < len(self.cands) and (self.cands[nxt].provider, self.cands[nxt].model) == (c.provider, c.model):
+                    nxt = (nxt + 1) % len(self.cands)
+                    tried += 1
             if self.log and self.cands[nxt] != c:
                 n = self.cands[nxt]
                 self.log(f"→ Thử tiếp: {n.provider} · {n.model}")
@@ -404,6 +414,23 @@ def _load_json(text: str):
         return json.loads(text[s:e + 1]) if s >= 0 and e > s else None
 
 
+def _solve(call: Callable[[list[int]], list[str]], idxs: list[int], tries: int = 2) -> dict[int, str]:
+    """Gọi AI cho một lô; trả JSON hỏng / thiếu id ``tries`` lần → chia đôi lô, gọi từng nửa (trước: dịch từng câu một,
+    lô 40 câu thành 40 lượt). Nửa đầu cũng hỏng hết → model đang trả sai liên tục, thôi chia. Câu thiếu = chưa dịch được."""
+    for _ in range(tries):
+        try:
+            return dict(zip(idxs, call(idxs)))
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Lô %d câu trả JSON không hợp lệ (%s)", len(idxs), exc)
+    if len(idxs) == 1:
+        return {}
+    mid = len(idxs) // 2
+    left = _solve(call, idxs[:mid], 1)
+    if not left:
+        return {}
+    return {**left, **_solve(call, idxs[mid:], 1)}
+
+
 def _parse(text: str, expected: int) -> list[str]:
     data = _load_json(text)
     arr = data.get("translations") if isinstance(data, dict) else data
@@ -477,30 +504,18 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
             memory.save()
             raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
         idxs = pending[start:start + step]
-        lines = [cues[i].plain or "…" for i in idxs]
-        ids = [i + 1 for i in idxs]
-        budgets = [budgets_all[i] for i in idxs]
-        ctx, prev = context_for(idxs[0], idxs[-1]), done_before(idxs[0])
-        translated: list[str] | None = None
-        for _attempt in range(3):
-            try:
-                translated = _parse_items(router.call(_prompt(lines, target_en, source_hint, style, glossary, reflow,
-                                                              budgets, ids, ctx, prev), max_out(len(ids))), ids)
-                break
-            except (ValueError, json.JSONDecodeError) as exc:
-                logger.warning("Lô dịch không hợp lệ (%s), thử lại", exc)
-        failed: set[int] = set()
-        if translated is None:
-            translated = []
-            for i, ln in zip(idxs, lines):
-                try:            # từng câu vẫn kèm ngân sách + ngữ cảnh
-                    translated.append(_parse_items(router.call(_prompt(
-                        [ln], target_en, source_hint, style, glossary, False, [budgets_all[i]], [i + 1],
-                        context_for(i, i), done_before(i)), max_out(1)), [i + 1])[0])
-                except Exception:
-                    translated.append(ln)      # giữ nguyên bản gốc cho cue này
-                    failed.add(i)
-        for i, t in zip(idxs, translated):
+
+        def call(part: list[int]) -> list[str]:          # lô (hoặc nửa lô) vẫn kèm ngân sách + ngữ cảnh
+            ids = [i + 1 for i in part]
+            return _parse_items(router.call(_prompt(
+                [cues[i].plain or "…" for i in part], target_en, source_hint, style, glossary,
+                reflow and len(part) > 1, [budgets_all[i] for i in part], ids, context_for(part[0], part[-1]),
+                done_before(part[0])), max_out(len(part))), ids)
+
+        got = _solve(call, idxs)
+        failed = {i for i in idxs if not got.get(i)}
+        for i in idxs:
+            t = got.get(i) or cues[i].plain or "…"        # không dịch được → giữ nguyên bản gốc cho cue này
             results[i] = t
             if i in failed:
                 # không ghi vào checkpoint / bộ nhớ dịch: lần chạy sau sẽ dịch lại thay vì "nhớ" bản chưa dịch
@@ -569,22 +584,20 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
 
 RETRANSLATE_PRESETS = ["Tự nhiên, đời thường hơn", "Ngắn gọn hơn (vừa lồng tiếng)", "Xưng hô nhất quán theo ngữ cảnh",
                        "Sát nghĩa bản gốc hơn", "Trẻ trung, bắt trend", "Giọng kể chuyện / thuyết minh phim"]
-CONTEXT = 3        # số câu trước/sau gửi kèm làm ngữ cảnh
 
 
-def _retranslate_prompt(items: list[tuple[str, str, int]], before: list[str], after: list[str], target: str,
-                        source_hint: str, style: str, instruction: str, glossary: str) -> str:
+def _retranslate_prompt(items: list[tuple[str, str, int, str, str]], target: str, source_hint: str, style: str,
+                        instruction: str, glossary: str) -> str:
+    """``items``: (gốc, bản dịch hiện tại, ngân sách, câu gốc ngay trước, câu gốc ngay sau) — câu kề chỉ để hiểu ngữ
+    cảnh (để trống khi câu kề cũng nằm trong lô)."""
     rows = []
-    for k, (src, prev, budget) in enumerate(items):
-        rows.append(f"{k + 1}. [max {budget} chars] SOURCE: {src}\n   CURRENT: {prev or '(none)'}")
+    for k, (src, prev, budget, before, after) in enumerate(items):
+        around = "; ".join(x for x in (f"before: {before}" if before else "", f"after: {after}" if after else "") if x)
+        rows.append(f"{k + 1}. [max {budget} chars] SOURCE: {src}\n   CURRENT: {prev or '(none)'}"
+                    + (f"\n   CONTEXT (do not translate): {around}" if around else ""))
     src = f" The source language is {source_hint}." if source_hint and source_hint != "Tự nhận diện" else ""
     req = instruction.strip() or "Make it sound more natural and fluent, like real spoken dialogue."
     gl = _glossary_lines(glossary)
-    ctx = ""
-    if before:
-        ctx += "\nLines just BEFORE (context only, do not output):\n" + "\n".join(f"- {t}" for t in before)
-    if after:
-        ctx += "\nLines just AFTER (context only, do not output):\n" + "\n".join(f"- {t}" for t in after)
     return (
         f"You are a professional subtitle translator revising subtitles into {target}.{src}\n"
         "The user is NOT satisfied with the CURRENT translations below and wants them redone.\n"
@@ -596,7 +609,7 @@ def _retranslate_prompt(items: list[tuple[str, str, int]], before: list[str], af
         "- Spoken as voice-over in the same time slot: stay within [max N chars]; never output the bracket.\n"
         "- Keep names and numbers unless the glossary says otherwise. No explanations, no quotes."
         + (f"\nGlossary — always use these exact translations:\n{gl}" if gl else "")
-        + ctx
+        + "\n- CONTEXT lines are neighbouring source lines, only to understand the scene — never output them."
         + "\n- Return ONLY a JSON object: {\"items\": [{\"id\": <item number>, \"text\": \"...\"}, ...]} with one item "
         "per numbered item.\n\nItems:\n" + "\n".join(rows)
     )
@@ -616,37 +629,28 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
     budgets = budgets or {}
     idxs = sorted(set(i for i in idxs if 0 <= i < len(cues)))
     out: dict[int, str] = {}
-    # gom theo lô các câu liền nhau để ngữ cảnh trước/sau có nghĩa
+    # cả nhóm câu (kể cả câu rải rác) một lượt, mỗi câu kèm câu gốc trước / sau — trước đây câu cách nhau > 3 câu
+    # đi riêng: rút gọn 7 câu tốn 6 lượt
     step = GROQ_BATCH if settings.translate_provider == "Groq" else BATCH
-    batches: list[list[int]] = []
-    for i in idxs:
-        if batches and i == batches[-1][-1] + 1 and len(batches[-1]) < step:
-            batches[-1].append(i)
-        elif batches and len(batches[-1]) < 8 and i - batches[-1][-1] <= CONTEXT:
-            batches[-1].append(i)            # câu lẻ gần nhau → chung một lô
-        else:
-            batches.append([i])
+    batches = [idxs[k:k + step] for k in range(0, len(idxs), step)]
+    lost = 0
+
+    def call(part: list[int]) -> list[str]:
+        inside = set(part)
+        items = [(cues[i].plain or "…", (previous[i] if i < len(previous) else "").replace("\n", " "),
+                  budgets.get(i) or budget_for(cues[i].duration, target),
+                  cues[i - 1].plain if i > 0 and i - 1 not in inside else "",
+                  cues[i + 1].plain if i + 1 < len(cues) and i + 1 not in inside else "") for i in part]
+        prompt = _retranslate_prompt(items, target_en, source_hint, style, instruction, settings.glossary)
+        return _parse_items(router.call(prompt, max_out(len(part))), list(range(1, len(part) + 1)))
+
     for n, batch in enumerate(batches):
         if cancel is not None and cancel.is_set():
             memory.save()
             raise RenderCancelled("Đã huỷ dịch lại.")
-        items = [(cues[i].plain or "…", (previous[i] if i < len(previous) else "").replace("\n", " "),
-                  budgets.get(i) or budget_for(cues[i].duration, target)) for i in batch]
-        a, b = batch[0], batch[-1]
-        before = [cues[j].plain for j in range(max(0, a - CONTEXT), a)]
-        after = [cues[j].plain for j in range(b + 1, min(len(cues), b + 1 + CONTEXT))]
-        prompt = _retranslate_prompt(items, before, after, target_en, source_hint, style, instruction,
-                                     settings.glossary)
-        result: list[str] | None = None
-        for _attempt in range(3):
-            try:
-                result = _parse_items(router.call(prompt, max_out(len(batch))), list(range(1, len(batch) + 1)))
-                break
-            except (ValueError, json.JSONDecodeError) as exc:
-                logger.warning("Lô dịch lại không hợp lệ (%s), thử lại", exc)
-        if result is None:
-            raise RuntimeError("AI trả về không đúng định dạng sau 3 lần thử — thử lại hoặc đổi model ở Cài đặt.")
-        for i, t in zip(batch, result):
+        result = _solve(call, batch)
+        lost += len(batch) - len(result)
+        for i, t in result.items():
             if t:
                 out[i] = t
                 if cues[i].plain:
@@ -657,6 +661,10 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
             log(f"Đã dịch lại {sum(len(x) for x in batches[:n + 1])}/{len(idxs)} câu "
                 f"({router.current.provider}/{router.current.model})")
     memory.save()
+    if idxs and not out:
+        raise RuntimeError("AI trả về không đúng định dạng — thử lại hoặc đổi model ở Cài đặt.")
+    if lost and log:
+        log(f"⚠ {lost} câu AI trả sai định dạng — giữ bản dịch cũ")
     return out
 
 

@@ -249,6 +249,10 @@ def synthesize_cached(engine: TTSEngine, voice_id: str, text: str, *, speed: flo
         return quality.check_file(path, text, speed=engine.clamp_speed(speed), asr=asr,
                                   compute=qc.compute) if check else None
 
+    def good(v: quality.Verdict | None) -> bool:
+        """Không cần đọc lại: đạt, hoặc chỉ lỗi nhẹ mà engine tốn lượt gọi (Gemini) — đọc lại hiếm khi khá hơn."""
+        return v is None or v.ok or (not engine.reread_soft and v.score < quality.HARD)
+
     cands: list[tuple[Path, quality.Verdict | None]] = []
     if p.exists() and p.stat().st_size > 0:
         m = quality.read_mark(p)
@@ -258,7 +262,7 @@ def synthesize_cached(engine: TTSEngine, voice_id: str, text: str, *, speed: flo
             return p
         engine.repair_cached(p)
         v = verdict(p)
-        if v is None or v.ok or budget == 0:
+        if good(v) or budget == 0:
             if wav:
                 postprocess.clean_file(p)
             quality.mark(p, v, qc=check, asr=asr, tries=int((m or {}).get("tries", 1)))
@@ -279,7 +283,7 @@ def synthesize_cached(engine: TTSEngine, voice_id: str, text: str, *, speed: flo
         out = Path(out) if out else _try_path(p, k)
         v = verdict(out)
         cands.append((out, v))
-        if v is None or v.ok:
+        if good(v):
             break
         logger.info("%s: «%s» lần %d chưa đạt: %s", tag, text[:50], len(cands), "; ".join(v.problems))
     if check and len(cands) > 1 and qc is not None:
@@ -315,30 +319,36 @@ def _synthesize_parts(engine: TTSEngine, voice_id: str, text: str, parts: list[s
     return p
 
 
-def prefill_batches(items: list[tuple[int, Cue, str]], plan: dict[int, tuple[TTSEngine, str, float, int]],
-                    settings: Settings, qc: QCOptions | None, *, log: Callable[[str], None] | None = None,
-                    check: Callable[[], None] | None = None,
+def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings: Settings, qc: QCOptions | None, *,
+                    log: Callable[[str], None] | None = None, check: Callable[[], None] | None = None,
                     on_progress: Callable[[float], None] | None = None) -> bool:
-    """Engine đọc gộp được (Gemini TTS): câu chưa có trong cache → gộp lô ~25 câu, đọc MỘT lượt, tách ra file cache
-    từng câu (tts/batch.py) — né giới hạn lượt gọi mỗi phút. Câu tách không chắc / lô lỗi → bước đọc từng câu lo như
-    cũ (vẫn kiểm chất lượng, đọc lại). Trả True nếu đã đọc gộp ít nhất một lô."""
+    """``jobs``: (engine, giọng, tốc độ, cao độ, chữ) theo thứ tự đọc. Engine đọc gộp được (Gemini TTS): câu chưa có
+    trong cache → gộp lô ~25 câu, đọc MỘT lượt, tách ra file cache từng câu (tts/batch.py) — né giới hạn lượt gọi
+    mỗi phút. Câu dài hơn ``max_chars`` (lời kể Dựng truyện…) gộp theo từng đoạn — đúng các đoạn ``_synthesize_parts``
+    sẽ đọc. Câu tách không chắc / lô lỗi → bước đọc từng câu lo như cũ. Trả True nếu đã đọc gộp ít nhất một lô."""
     if not settings.tts_batch:
         return False
     groups: dict[tuple, list[str]] = {}
     engs: dict[tuple, TTSEngine] = {}
     seen: set[Path] = set()
-    for i, _c, text in items:
-        eng, vid, sp, pt = plan[i]
+    for eng, vid, sp, pt, text in jobs:
         t = normalize_vi_text(text)
-        if not eng.batch_lines or not t or (eng.max_chars and len(t) > eng.max_chars):
+        if not eng.batch_lines or not t:
             continue
-        p = cache_path(eng, vid, t, sp, pt)
-        if p in seen or (p.exists() and p.stat().st_size > 0):        # câu trùng chữ / đã có trong cache
-            continue
-        seen.add(p)
-        key = (id(eng), vid, sp, pt)
-        engs[key] = eng
-        groups.setdefault(key, []).append(t)
+        parts = split_long(t, eng.max_chars) if eng.max_chars and len(t) > eng.max_chars else [t]
+        if len(parts) > 1:
+            whole = cache_path(eng, vid, t, sp, pt)
+            if whole.exists() and whole.stat().st_size > 0:
+                continue
+            parts = [normalize_vi_text(x) for x in parts]
+        for part in parts:
+            p = cache_path(eng, vid, part, sp, pt)
+            if p in seen or (p.exists() and p.stat().st_size > 0):     # câu trùng chữ / đã có trong cache
+                continue
+            seen.add(p)
+            key = (id(eng), vid, sp, pt)
+            engs[key] = eng
+            groups.setdefault(key, []).append(part)
     lots = [(key, lot) for key, texts in groups.items() for lot in batch.chunks(texts, engs[key].batch_lines)
             if len(lot) >= batch.MIN_LINES]
     if not lots:
@@ -450,7 +460,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
-    base = 0.3 if prefill_batches(items, plan, settings, qc, log=log, check=_check, on_progress=on_progress) else 0.0
+    base = 0.3 if prefill_batches([(*plan[i], text) for i, _c, text in items], settings, qc, log=log, check=_check,
+                                  on_progress=on_progress) else 0.0
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(synth, i, text): i for i, _, text in items}
