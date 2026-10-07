@@ -67,6 +67,12 @@ STYLES: dict[str, str] = {
 PROMPT = ("[Lời dặn cách đọc — chỉ để định giọng, KHÔNG đọc thành tiếng]\n{style}\n\n"
           "[Lời thoại — chỉ đọc nguyên văn phần này]\n{text}")
 
+#: đọc gộp nhiều câu một lượt (tts/batch.py tách lại): nghỉ rõ giữa các dòng để có chỗ cắt, không đọc số thứ tự
+BATCH_PROMPT = ("[Lời dặn cách đọc — chỉ để định giọng, KHÔNG đọc thành tiếng]\n{style}"
+                "Đọc lần lượt từng dòng lời thoại bên dưới. Hết mỗi dòng nghỉ hẳn khoảng một giây rồi mới đọc dòng sau. "
+                "Không đọc số thứ tự, không thêm hay bỏ chữ nào.\n\n"
+                "[Lời thoại — chỉ đọc nguyên văn phần này]\n{text}")
+
 _working_model: dict[str, str] = {}     # model chọn → model thật sự dùng được (sau khi tự thử model kế tiếp)
 _lock = threading.Lock()
 
@@ -90,6 +96,7 @@ class GeminiTTS(TTSEngine):
     workers = 2
     qc_retries = 1                       # mỗi lần đọc lại tốn một lượt API
     max_chars = 200                      # model sinh âm thanh kiểu LLM: câu quá dài dễ lạc / đọc thêm
+    batch_lines = 25                     # gói miễn phí ~15 lượt/phút → gộp ~25 câu một lượt (thử thật: tách đúng 25/25)
 
     def __init__(self, keys: list[str], *, model: str = GEMINI_TTS_MODELS[0], style: str = "Tự nhiên",
                  custom_style: str = "", temperature: float | None = 0.7) -> None:
@@ -156,6 +163,12 @@ class GeminiTTS(TTSEngine):
                            text[:50])
             pcm, rate = self._request(self._body(text, voice_id, ""))
         return postprocess.write_wav(out_path, pcm, rate)
+
+    def synthesize_batch(self, lines: list[str], voice_id: str) -> tuple[bytes, int]:
+        body = self._body("", voice_id, "")
+        body["contents"][0]["parts"][0]["text"] = BATCH_PROMPT.format(
+            style=f"{self.style}\n" if self.style else "", text="\n".join(lines))
+        return self._request(body)
 
     def _request(self, body: dict) -> tuple[bytes, int]:
         models = self._models()

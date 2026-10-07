@@ -34,6 +34,8 @@ class TTSEngine:
     qc_retries: int = 0
     #: câu dài hơn thì tách đoạn đọc riêng rồi ghép (0 = engine tự chia câu dài)
     max_chars: int = 0
+    #: đọc gộp tối đa bấy nhiêu câu trong một lượt gọi rồi tách lại (``synthesize_batch``; 0 = không gộp)
+    batch_lines: int = 0
 
     def list_voices(self, locale: str | None = None) -> list[Voice]:
         raise NotImplementedError
@@ -42,6 +44,10 @@ class TTSEngine:
         """Sửa file cache do bản cũ ghi sai định dạng (mặc định: không làm gì)."""
 
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
+        raise NotImplementedError
+
+    def synthesize_batch(self, lines: list[str], voice_id: str) -> tuple[bytes, int]:
+        """Đọc liền nhiều câu trong một lượt gọi (nghỉ rõ giữa các câu) → (PCM s16 mono, tần số)."""
         raise NotImplementedError
 
     def cache_signature(self, voice_id: str, speed: float, pitch: int) -> str:

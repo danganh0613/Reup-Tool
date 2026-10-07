@@ -287,11 +287,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Edge TTS", "VieNeu (local, tiếng Việt)"],
                                       value=st.tts_fallback or "Không")
         self.auto_shorten = SwitchRow(b, "Câu đọc tràn khung → AI tự rút gọn bản dịch", value=st.tts_auto_shorten)
-        for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback, self.auto_shorten):
+        self.tts_batch = SwitchRow(b, "Gemini: gộp ~25 câu một lượt gọi (né giới hạn lượt/phút)", value=st.tts_batch)
+        for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback, self.auto_shorten, self.tts_batch):
             r.pack(fill="x", pady=3)
         hint(b, "VieNeu đọc lại miễn phí (chạy trên máy) · Gemini đọc lại tối đa 1 lần (tốn lượt) · engine trả phí khác "
                 "không đọc lại. Whisper nghe lại bắt thêm chữ đọc méo, dùng model Whisper đã có trên máy. Câu lỗi hẳn "
-                "(hết lượt, mất mạng) thì đọc tạm bằng engine dự phòng thay vì để im lặng.").pack(fill="x")
+                "(hết lượt, mất mạng) thì đọc tạm bằng engine dự phòng thay vì để im lặng. Đọc gộp: Whisper trên máy "
+                "tách lại từng câu, câu tách không chắc thì đọc riêng.").pack(fill="x")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
         button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron,
@@ -511,6 +513,7 @@ class SettingsWindow(ctk.CTkToplevel):
         fb = self.tts_fallback.get()
         st.tts_fallback = "" if fb == "Không" else fb
         st.tts_auto_shorten = self.auto_shorten.get()
+        st.tts_batch = self.tts_batch.get()
         st.loudness_target = float(self.loudness.get())
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()

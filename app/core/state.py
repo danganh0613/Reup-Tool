@@ -381,6 +381,7 @@ class Settings:
     tts_qc_retries: int = 3              # số lần đọc lại tối đa mỗi câu (Gemini tối đa 1, engine trả phí khác không đọc lại)
     tts_qc_asr: str = "auto"             # Whisper nghe lại: auto (có GPU + model sẵn) | on | off
     tts_fallback: str = "Edge TTS"       # câu lỗi hẳn thì đọc bằng engine này ("" = để trống câu đó)
+    tts_batch: bool = True               # Gemini TTS: gộp ~25 câu một lượt gọi rồi tách lại (né giới hạn lượt/phút)
     tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
     tts_fade_out_ms: int = 25
     tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên

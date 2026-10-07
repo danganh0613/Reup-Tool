@@ -25,7 +25,7 @@ from app.config.paths import PRON_FILE, TTS_CACHE_DIR
 from app.core.state import Settings, TTSConfig
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration
-from app.services.tts import postprocess, quality
+from app.services.tts import batch, postprocess, quality
 from app.services.tts.base import TTSEngine
 from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
@@ -315,6 +315,70 @@ def _synthesize_parts(engine: TTSEngine, voice_id: str, text: str, parts: list[s
     return p
 
 
+def prefill_batches(items: list[tuple[int, Cue, str]], plan: dict[int, tuple[TTSEngine, str, float, int]],
+                    settings: Settings, qc: QCOptions | None, *, log: Callable[[str], None] | None = None,
+                    check: Callable[[], None] | None = None,
+                    on_progress: Callable[[float], None] | None = None) -> bool:
+    """Engine đọc gộp được (Gemini TTS): câu chưa có trong cache → gộp lô ~25 câu, đọc MỘT lượt, tách ra file cache
+    từng câu (tts/batch.py) — né giới hạn lượt gọi mỗi phút. Câu tách không chắc / lô lỗi → bước đọc từng câu lo như
+    cũ (vẫn kiểm chất lượng, đọc lại). Trả True nếu đã đọc gộp ít nhất một lô."""
+    if not settings.tts_batch:
+        return False
+    groups: dict[tuple, list[str]] = {}
+    engs: dict[tuple, TTSEngine] = {}
+    seen: set[Path] = set()
+    for i, _c, text in items:
+        eng, vid, sp, pt = plan[i]
+        t = normalize_vi_text(text)
+        if not eng.batch_lines or not t or (eng.max_chars and len(t) > eng.max_chars):
+            continue
+        p = cache_path(eng, vid, t, sp, pt)
+        if p in seen or (p.exists() and p.stat().st_size > 0):        # câu trùng chữ / đã có trong cache
+            continue
+        seen.add(p)
+        key = (id(eng), vid, sp, pt)
+        engs[key] = eng
+        groups.setdefault(key, []).append(t)
+    lots = [(key, lot) for key, texts in groups.items() for lot in batch.chunks(texts, engs[key].batch_lines)
+            if len(lot) >= batch.MIN_LINES]
+    if not lots:
+        return False
+    if not batch.available():
+        if log:
+            log("Máy chưa có Whisper → không tách được đoạn đọc gộp, đọc từng câu như cũ")
+        return False
+    total = sum(len(lot) for _k, lot in lots)
+    if log:
+        log(f"Đọc gộp: {total} câu → {len(lots)} lượt gọi (≤ {batch.MAX_LINES} câu mỗi lượt, né giới hạn lượt/phút)…")
+    compute = qc.compute if qc else settings.whisper_compute
+    ok = 0
+    for n, (key, lot) in enumerate(lots):
+        if check:
+            check()
+        eng, (vid, sp, pt) = engs[key], key[1:]
+        try:
+            pcm, rate = eng.synthesize_batch(lot, vid)
+            parts = batch.split(pcm, rate, lot, compute)
+        except RenderCancelled:
+            raise
+        except Exception as exc:
+            logger.warning("Đọc gộp lô %d lỗi: %s", n + 1, exc)
+            if log:
+                log(f"⚠ Đọc gộp lô {n + 1} lỗi ({str(exc)[:80]}) → các câu đó đọc riêng")
+            continue
+        for t, seg in zip(lot, parts):
+            if seg:
+                p = cache_path(eng, vid, t, sp, pt)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                postprocess.write_wav(p, seg, rate)
+                ok += 1
+        if on_progress:
+            on_progress(0.3 * (n + 1) / len(lots))
+    if log:
+        log(f"Đọc gộp xong: tách được {ok}/{total} câu" + (f" · {total - ok} câu đọc riêng" if ok < total else ""))
+    return True
+
+
 def _fallback_config(cfg: TTSConfig, provider: str, text: str) -> TTSConfig:
     """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu."""
     if provider.startswith("VieNeu"):
@@ -386,6 +450,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
+    base = 0.3 if prefill_batches(items, plan, settings, qc, log=log, check=_check, on_progress=on_progress) else 0.0
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(synth, i, text): i for i, _, text in items}
@@ -400,7 +465,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 logger.warning("TTS cue %d lỗi: %s", i + 1, exc)
             done += 1
             if on_progress:
-                on_progress(0.65 * done / len(items))
+                on_progress(base + (0.65 - base) * done / len(items))
     if failed:
         # lỗi thường do dịch vụ quá tải khi gọi song song → thử lại tuần tự một lượt trước khi bỏ
         still: list[int] = []
