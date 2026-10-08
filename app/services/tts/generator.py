@@ -27,6 +27,7 @@ from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration
 from app.services.tts import batch, postprocess, quality
 from app.services.tts.base import TTSEngine
+from app.services.direction.apply import Director, compiled_for, emotion_label, needs_faster
 from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
 logger = logging.getLogger(__name__)
@@ -421,12 +422,15 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     if not items:
         raise RuntimeError("Phụ đề trống — không có gì để đọc.")
 
-    # giọng cho từng câu: nhiều giọng theo người nói (meta["speaker"]), còn lại giọng chính
+    # giọng cho từng câu: nhiều giọng theo người nói (meta["speaker"]), còn lại giọng chính;
+    # câu có direction (Đạo diễn âm thanh) → lời dặn cảm xúc riêng, câu cùng lời dặn dùng chung engine (đọc gộp chung)
     spk_cfgs = speaker_configs(cfg)
     engines: dict[str, TTSEngine] = {cfg.tts_provider: engine}
     plan: dict[int, tuple[TTSEngine, str, float, int]] = {}      # cue → (engine, giọng, tốc độ, cao độ)
     used: dict[str, int] = {}
-    for i, c, _t in items:
+    director = Director(settings) if cfg.emotion_direction else None
+    faster = 0
+    for pos, (i, c, text) in enumerate(items):
         sc = spk_cfgs.get(str(c.meta.get("speaker", "")), cfg)
         if sc.tts_provider not in engines:
             engines[sc.tts_provider] = make_engine(sc, settings)
@@ -434,6 +438,13 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         pitch_i = sc.tts_pitch if sc.tts_provider == "Edge TTS" else 0
         vid = voice_id_for(sc)
         plan[i] = (eng, vid, sc.tts_speed, pitch_i)
+        d = c.meta.get("direction") if director else None
+        if d:
+            slot = items[pos + 1][1].start - c.start - cfg.min_gap if pos + 1 < len(items) else c.duration
+            fast = not cfg.natural_sync and needs_faster(text, slot, sc.tts_speed)
+            faster += int(fast)
+            plan[i] = director.plan(sc, eng, vid, sc.tts_speed, pitch_i, d, faster=fast)
+            vid = plan[i][1]
         key = f"{vid}{f' {pitch_i:+d}Hz' if pitch_i else ''}"
         used[key] = used.get(key, 0) + 1
     _check_script_matches_voice(items, cfg, voice_id)
@@ -460,6 +471,10 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
+        if director is not None and director.styles:
+            log(f"Cảm xúc từng câu: {sum(director.styles.values())} câu · {len(director.styles)} kiểu lời dặn "
+                "(câu cùng kiểu đọc gộp chung một lượt)"
+                + (f" · {faster} câu chật khung → dặn nói nhanh hơn" if faster else ""))
     base = 0.3 if prefill_batches([(*plan[i], text) for i, _c, text in items], settings, qc, log=log, check=_check,
                                   on_progress=on_progress) else 0.0
     done = 0
@@ -497,13 +512,18 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         rescued: list[int] = []
         for i in failed:
             _check()
-            text = next(t for j, _c, t in items if j == i)
+            cue_i, text = next((c, t) for j, c, t in items if j == i)
             try:
                 fcfg = _fallback_config(cfg, fb, text)
                 eng = fb_engines.get(fcfg.tts_provider) or fb_engines.setdefault(fcfg.tts_provider, make_engine(fcfg, settings))
                 vid = voice_id_for(fcfg)
-                paths[i] = synthesize_cached(eng, vid, text, speed=plan[i][2], pitch=0, qc=qc, label=f"câu {i + 1}")
-                plan[i] = (eng, vid, plan[i][2], 0)
+                sp_f, pt_f = plan[i][2], 0
+                d = cue_i.meta.get("direction") if director is not None else None
+                if d and fcfg.tts_provider == "Edge TTS":       # dự phòng Edge vẫn giữ nhịp / cao độ của cảm xúc
+                    comp = compiled_for(d)
+                    sp_f, pt_f = sp_f * (1.0 + comp.edge_rate / 100.0), comp.edge_pitch
+                paths[i] = synthesize_cached(eng, vid, text, speed=sp_f, pitch=pt_f, qc=qc, label=f"câu {i + 1}")
+                plan[i] = (eng, vid, sp_f, pt_f)
                 rescued.append(i)
                 fallback_used.add(i)
             except Exception as exc:
@@ -669,6 +689,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                            "engine": eng.name, "giong": vid, "tempo": round(residual_of(idx) * tempo, 3),
                            "so_lan_doc": int(mark.get("tries", 1)), "loi_qc": "; ".join(mark.get("problems") or []),
                            "du_phong": idx in fallback_used,
+                           "cam_xuc": emotion_label(cue.meta.get("direction")) if director is not None else "",
+                           "loi_dan": getattr(eng, "style", "") or "",
                            "chu": cue.plain})
     tmp.replace(out_wav)
     if on_progress:

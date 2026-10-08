@@ -32,21 +32,39 @@ def sidecar_path(srt_path: str | Path) -> Path:
     return Path(str(srt_path) + ".directions.json")
 
 
-def load(srt_path: str | Path | None) -> dict[int, dict]:
-    """{chỉ số cue (0-based): direction} — không có file / file hỏng → {}."""
+def _read(srt_path: str | Path | None) -> dict:
     if not srt_path:
         return {}
     try:
         data = json.loads(sidecar_path(srt_path).read_text(encoding="utf-8"))
-        return {int(k): v for k, v in (data.get("items") or {}).items()}
-    except (OSError, ValueError, AttributeError):
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
         return {}
 
 
-def save(srt_path: str | Path, items: dict[int, dict]) -> Path:
+def load(srt_path: str | Path | None, n: int | None = None) -> dict[int, dict]:
+    """{chỉ số cue (0-based): direction} — không có file / file hỏng → {}. ``n`` (số câu của SRT hiện tại) khác số câu
+    lúc lưu → bản dịch đã đổi hẳn, direction cũ không còn khớp câu → {}."""
+    data = _read(srt_path)
+    if n is not None and isinstance(data.get("n"), int) and data["n"] != n:
+        return {}
+    try:
+        return {int(k): v for k, v in (data.get("items") or {}).items() if isinstance(v, dict)}
+    except (ValueError, AttributeError):
+        return {}
+
+
+def save(srt_path: str | Path, items: dict[int, dict], *, n: int | None = None, keep_manual: bool = False) -> Path:
+    """Ghi file direction. ``keep_manual``: câu người dùng đã chỉnh tay trên bánh xe (``manual``) giữ nguyên khi gợi ý
+    lại — nếu số câu không đổi."""
+    if keep_manual:
+        old = load(srt_path, n)
+        items = {**items, **{k: v for k, v in old.items() if v.get("manual") and (n is None or k < n)}}
+    data: dict = {"version": VERSION, "items": {str(k): v for k, v in sorted(items.items())}}
+    if n is not None:
+        data["n"] = n
     p = sidecar_path(srt_path)
-    p.write_text(json.dumps({"version": VERSION, "items": {str(k): v for k, v in sorted(items.items())}},
-                            ensure_ascii=False, indent=1), encoding="utf-8")
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return p
 
 

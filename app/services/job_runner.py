@@ -20,6 +20,7 @@ from app.config.paths import JOBS_DIR, PREVIEW_CACHE_DIR, SUBS_DIR, VOICE_DIR
 from app.core.state import ENCODE_PRESETS, SRT_MODES, SRT_SOURCES, TRIM_MODES, TTS_SOURCES, AppState, VideoItem
 from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
+from app.services.direction import apply as direction_apply
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration, load_srt, merge_bilingual, save_srt, shift, wrap_lines
 from app.services.subtitle_style import write_ass
@@ -150,7 +151,7 @@ class Pipeline:
                 items = suggest.suggest([c.plain for c in cues], [c.plain for c in out_cues],
                                         settings=self.state.settings, log=log, cancel=cancel)
                 if items:
-                    suggest.save(out, items)
+                    suggest.save(out, items, n=len(out_cues), keep_manual=True)
             except Exception as exc:                   # noqa: BLE001 — phụ, không làm hỏng bước dịch
                 logger.warning("Không gợi ý được cảm xúc: %s", exc)
         return out_cues
@@ -250,6 +251,8 @@ class Pipeline:
             mtime = int(Path(srt_path).stat().st_mtime)
         except OSError:
             mtime = 0
+        # cảm xúc từng câu: chỉ thêm vào chữ ký khi có file direction (track cũ không có thì giữ nguyên chữ ký)
+        dsig = direction_apply.signature(srt_path) if t.emotion_direction else ""
         multi = ""
         if t.multi_voice:
             try:
@@ -264,7 +267,8 @@ class Pipeline:
             + ((multi,) if multi else ())
             + ((t.gemini_voice, t.gemini_tts_model, t.gemini_style, t.gemini_style_custom)
                if t.tts_provider.startswith("Gemini") or multi else ())
-            + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ()))
+            + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ())
+            + ((f"dir{dsig}",) if dsig else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,
@@ -278,6 +282,8 @@ class Pipeline:
             cues = load_srt(srt_path)
             self.ensure_speakers(item, log=log, cancel=cancel)
             self.annotate_speakers(item, cues)
+            if self.state.tts.emotion_direction:
+                direction_apply.annotate(cues, srt_path)
         srt_path = srt_path or item.srt_path or ""
         out = (out_dir or VOICE_DIR) / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
         if out.exists() and not force:
@@ -610,6 +616,8 @@ class Pipeline:
                 if tcfg.multi_voice:
                     self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
                     self.annotate_speakers(item, src_cues)
+                if tcfg.emotion_direction:
+                    direction_apply.annotate(src_cues, src_path)     # cảm xúc từng câu (Đạo diễn âm thanh)
                 src_cues = rp.remap_cues_for_trim(src_cues, trim)
                 fit = trim.kept_duration if trim.active else info.duration      # thời lượng nguồn (÷ tốc độ khi dựng)
                 return self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,

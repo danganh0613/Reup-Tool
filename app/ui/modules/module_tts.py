@@ -79,6 +79,11 @@ class TTSModule(BaseModule):
                              ("🎬 Đạo diễn âm thanh…", self._open_direction, None)]).pack(fill="x", pady=(4, 2))
         self.voice_status = StatusLabel(sec.body, "")
         self.voice_status.pack(fill="x")
+        self.emotion = SwitchRow(sec.body, "Đọc theo cảm xúc từng câu",
+                                 on_change=s(cfg, "emotion_direction", preview=False))
+        self.emotion.pack(fill="x", pady=(4, 0))
+        hint(sec.body, "Dịch xong AI gợi ý cảm xúc cho từng câu; chỉnh ở tab «Lời thoại» → «Cảm xúc». Gemini TTS đọc đủ "
+                       "cảm xúc (câu cùng cảm xúc đọc gộp một lượt), Edge chỉ đổi nhịp / cao độ.").pack(fill="x")
         self.speed = OptionRow(sec.body, "Tốc độ đọc", SPEED_OPTIONS, on_change=lambda v: self.set_value(cfg, "tts_speed", float(v), preview=False))
         self.pitch = SliderRow(sec.body, "Cao độ (Edge)", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
                                on_change=s(cfg, "tts_pitch", cast=int, preview=False))
@@ -174,6 +179,7 @@ class TTSModule(BaseModule):
             self.max_tempo.set(cfg.max_tempo)
             self.min_gap.set(cfg.min_gap)
             self.multi.set(cfg.multi_voice)
+            self.emotion.set(cfg.emotion_direction)
             self.gemini_style.set(cfg.gemini_style)
             self.gemini_custom.set(cfg.gemini_style_custom)
             self.gemini_model.set(cfg.gemini_tts_model)

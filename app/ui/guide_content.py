@@ -224,6 +224,20 @@ TOPICS: list[dict] = [
             "Máy nhận sai câu nào thì bấm «Gán từng câu…» sửa tay. Không nhận diện được thì cũng tự chia tay ở đây.",
             "Render hàng loạt: video nào chưa nhận diện, máy tự nhận diện trước khi lồng tiếng.",
         ]),
+        ("h", "Cảm xúc từng câu (Đạo diễn âm thanh)"),
+        ("steps", [
+            "Bật «Thêm lồng tiếng vào video» TRƯỚC khi dịch: dịch xong AI tự gợi ý cảm xúc + bậc 1–5 cho từng câu và một "
+            "kiểu nói cho cả video (thêm 1–2 lượt gọi).",
+            "Tab «Lời thoại»: cạnh mỗi câu có nhãn màu (vd «● Vui tươi 2»). Bấm nhãn hoặc nút «Cảm xúc» → bảng «Cảm xúc "
+            "từng câu»: dòng thời gian tô màu theo cảm xúc, bánh xe để kéo kim (góc = cảm xúc, xa tâm = bậc).",
+            "Đổi nhiều câu một lần: ô «Áp cho câu» gõ «3-8, 12», hoặc bấm «Cùng cảm xúc» / «Cả video», rồi «Áp dụng».",
+            "«Nghe thử câu» đọc đúng như lúc dựng giọng (lần đầu tốn 1 lượt, sau đó lấy từ cache). Ưng thì «Tạo lại giọng "
+            "video» — chỉ câu đổi cảm xúc mới gọi API, câu khác dùng lại.",
+            "Câu đã chỉnh tay được giữ khi dịch / gợi ý lại. Không muốn dùng cảm xúc: tắt «Đọc theo cảm xúc từng câu» ở mục TTS.",
+        ]),
+        ("p", "Gemini TTS đọc đủ cảm xúc; câu cùng cảm xúc được gộp chung một lượt gọi (dù nằm rải rác), nên video 1–2 "
+              "phút thường chỉ 8–15 lượt. Edge TTS chỉ đổi nhịp / cao độ theo cảm xúc. Câu chữ nhiều mà khung ngắn: máy dặn "
+              "«nói nhanh hơn một chút» ngay lượt đầu."),
     ]},
     {"key": "blur", "title": "Che mờ: giấu chữ, logo, mặt người", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),

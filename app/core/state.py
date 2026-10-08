@@ -188,6 +188,7 @@ class TTSConfig:
     natural_sync: bool = False         # đọc tốc độ tự nhiên, dời phụ đề theo giọng (không tăng tốc)
     soft_timing: bool = False          # dời câu vào khoảng lặng, nén tối đa 1.10×
     multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
+    emotion_direction: bool = True     # đọc theo cảm xúc từng câu (Đạo diễn âm thanh — file <srt>.directions.json)
     speaker_count: str = SPEAKER_COUNTS[0]
     #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
     speaker_voices: list = field(default_factory=list)

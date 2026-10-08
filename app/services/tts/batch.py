@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 MAX_LINES = 25              # số câu tối đa mỗi lượt
 MAX_CHARS = 1500            # tổng ký tự tối đa mỗi lượt (đoạn quá dài model dễ lạc, đọc sót)
-MIN_LINES = 3               # ít hơn thì đọc từng câu như cũ
+MIN_LINES = 2               # ít hơn thì đọc từng câu như cũ (cảm xúc từng câu chia nhóm nhỏ: 2 câu gộp vẫn đỡ 1 lượt)
 _SILENCE_DB = -40.0         # dưới đỉnh bấy nhiêu dB coi là lặng (đường bao 10 ms)
 _MIN_CUT = 8                # khoảng lặng ≥ 80 ms mới được cắt
 

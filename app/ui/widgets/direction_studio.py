@@ -23,21 +23,30 @@ from app.ui.widgets.ui import button
 
 _GENDER_VI = {"Female": "Nữ", "Male": "Nam"}
 _MODES = ["Độc thoại", "Hội thoại"]
+VIDEO_VOICE = "video"            # chế độ từng câu: giọng để trống = giọng đang chọn cho video
 
 
-def _default_direction(voice: str = "Leda", theta: float = 27.69) -> dict:
+def _default_direction(voice: str | None = "Leda", theta: float = 27.69) -> dict:
     return {"voice_id": voice, "emotion": {"theta": theta, "level": 3, "overrides": {}},
             "speaking_style": {"a": "tan_phiem", "b": "", "mix": 0.0}, "special": "", "temperature": None}
 
 
 class DirectionStudio(ctk.CTkFrame):
+    """``segment=True``: panel chỉnh cảm xúc cho câu lồng tiếng (không có ô văn bản / hội thoại / nút tạo — cửa sổ
+    chứa nó lo phần nghe thử, áp dụng); giọng có thêm lựa chọn «giọng của video». ``on_change(direction)`` mỗi khi
+    người dùng chỉnh."""
+
     def __init__(self, master, *, settings, play: Callable[[Path], None] | None = None,
-                 on_generate: Callable[[str, dict, Path], None] | None = None, wheel_size: int = 400) -> None:
+                 on_generate: Callable[[str, dict, Path], None] | None = None, wheel_size: int = 400,
+                 segment: bool = False, on_change: Callable[[dict], None] | None = None) -> None:
         super().__init__(master, fg_color="transparent")
         self.settings = settings
         self.play = play
         self.on_generate = on_generate
-        self._dirs = {"A": _default_direction("Leda"), "B": _default_direction("Charon", 152.31)}
+        self.segment = segment
+        self.on_change = on_change
+        first = None if segment else "Leda"
+        self._dirs = {"A": _default_direction(first), "B": _default_direction("Charon", 152.31)}
         self._spk = "A"
         self._nuance_ids: list[str] = []
         self._loading = False
@@ -51,7 +60,8 @@ class DirectionStudio(ctk.CTkFrame):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", pady=(0, 6))
         self.mode = OptionRow(top, "Chế độ", _MODES, value=_MODES[0], on_change=lambda _v: self._mode_changed())
-        self.mode.pack(fill="x", pady=2)
+        if not self.segment:
+            self.mode.pack(fill="x", pady=2)
         self.speaker = OptionRow(top, "Người nói", ["A", "B"], value="A",
                                  labels={"A": "Người nói A", "B": "Người nói B"},
                                  on_change=lambda v: self._switch_speaker(v))
@@ -60,8 +70,10 @@ class DirectionStudio(ctk.CTkFrame):
         self.gender.pack(fill="x", pady=2)
         vrow = ctk.CTkFrame(top, fg_color="transparent")
         vrow.pack(fill="x", pady=2)
-        self.voice = OptionRow(vrow, "Giọng", [v[0] for v in GEMINI_VOICES],
-                               labels={n: f"{n} — {d} ({_GENDER_VI[g]})" for n, g, d in GEMINI_VOICES},
+        names = ([VIDEO_VOICE] if self.segment else []) + [v[0] for v in GEMINI_VOICES]
+        self.voice = OptionRow(vrow, "Giọng", names,
+                               labels={VIDEO_VOICE: "— giọng của video —",
+                                       **{n: f"{n} — {d} ({_GENDER_VI[g]})" for n, g, d in GEMINI_VOICES}},
                                on_change=lambda _v: self._changed())
         self.voice.pack(side="left", fill="x", expand=True)
         button(vrow, "▶ Nghe mẫu", size="sm", command=self._preview_voice).pack(side="left", padx=(6, 0))
@@ -105,21 +117,24 @@ class DirectionStudio(ctk.CTkFrame):
         for r in (self.style_a, self.style_b, self.mix):
             r.pack(fill="x", pady=2)
 
-        ctk.CTkLabel(self, text="Văn bản (hội thoại: mỗi dòng bắt đầu «A:» hoặc «B:»)", font=T.font(12),
-                     text_color=T.TEXT_DIM, anchor="w").pack(fill="x", pady=(8, 0))
+        self.text_label = ctk.CTkLabel(self, text="Văn bản (hội thoại: mỗi dòng bắt đầu «A:» hoặc «B:»)",
+                                       font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.text = ctk.CTkTextbox(self, height=90, font=T.font(13))
-        self.text.pack(fill="x")
         self.text.bind("<KeyRelease>", lambda _e: self._count())
         self.count = ctk.CTkLabel(self, text="0 ký tự", font=T.font(11), text_color=T.TEXT_MUTED, anchor="e")
-        self.count.pack(fill="x")
+        if not self.segment:
+            self.text_label.pack(fill="x", pady=(8, 0))
+            self.text.pack(fill="x")
+            self.count.pack(fill="x")
         self.special = ctk.CTkEntry(self, placeholder_text="Yêu cầu đặc biệt (vd: nhấn mạnh tên sản phẩm)",
                                     height=34, font=T.font(12))
         self.special.pack(fill="x", pady=(2, 4))
         self.special.bind("<KeyRelease>", lambda _e: self._changed())
         self.lang = OptionRow(self, "Ngôn ngữ đọc", ["vi"], value="vi", labels={"vi": "Tiếng Việt"})
-        self.lang.pack(fill="x", pady=2)
-        ButtonRow(self, [("Tạo giọng nói", self._generate, T.primary_button()),
-                         ("Đặt lại", self._reset, None)]).pack(fill="x", pady=(6, 2))
+        if not self.segment:
+            self.lang.pack(fill="x", pady=2)
+            ButtonRow(self, [("Tạo giọng nói", self._generate, T.primary_button()),
+                             ("Đặt lại", self._reset, None)]).pack(fill="x", pady=(6, 2))
         self.status = StatusLabel(self, "Kéo kim trên bánh xe: góc = cảm xúc, khoảng cách từ tâm = bậc 1–5.")
         self.status.configure(wraplength=640)
         self.status.pack(fill="x")
@@ -128,12 +143,12 @@ class DirectionStudio(ctk.CTkFrame):
     def _fill_voices(self) -> None:
         g = self.gender.get()
         names = [n for n, gd, _d in GEMINI_VOICES if g == "Tất cả" or gd == g]
-        self.voice.set_values(names or [v[0] for v in GEMINI_VOICES])
+        self.voice.set_values(([VIDEO_VOICE] if self.segment else []) + (names or [v[0] for v in GEMINI_VOICES]))
 
     def _load(self, d: dict) -> None:
         self._loading = True
         try:
-            self.voice.set(d.get("voice_id") or "Leda")
+            self.voice.set(d.get("voice_id") or (VIDEO_VOICE if self.segment else "Leda"))
             emo = d.get("emotion") or {}
             self.wheel.set(emo.get("theta", 0.0), emo.get("level", 3))
             self._overrides = dict(emo.get("overrides") or {})
@@ -141,7 +156,8 @@ class DirectionStudio(ctk.CTkFrame):
             self.style_a.set(sp.get("a") or "tan_phiem")
             self.style_b.set(sp.get("b") or "none")
             self.mix.set(round(float(sp.get("mix") or 0.0) * 100))
-            self.special.delete(0, "end")
+            if self.special.get():                 # ô đang hiện chữ gợi ý (placeholder) thì xoá sẽ mất luôn chữ gợi ý
+                self.special.delete(0, "end")
             if d.get("special"):
                 self.special.insert(0, d["special"])
         finally:
@@ -151,7 +167,8 @@ class DirectionStudio(ctk.CTkFrame):
     def get_direction(self) -> dict:
         theta, level = self.wheel.get()
         mix = float(self.mix.get()) / 100.0
-        return {"voice_id": self.voice.get(),
+        voice = self.voice.get()
+        return {"voice_id": None if voice == VIDEO_VOICE else voice,
                 "emotion": {"theta": round(theta, 2), "level": level, "overrides": dict(self._overrides)},
                 "speaking_style": {"a": self.style_a.get(), "b": "" if self.style_b.get() == "none" else self.style_b.get(),
                                    "mix": round(mix, 2)},
@@ -178,6 +195,8 @@ class DirectionStudio(ctk.CTkFrame):
             return
         self._dirs[self._spk] = self.get_direction()
         self._refresh(update_sliders)
+        if self.on_change:
+            self.on_change(self._dirs[self._spk])
 
     def _refresh(self, update_sliders: bool = True) -> None:
         c = compile_direction(self.get_direction())
@@ -248,6 +267,9 @@ class DirectionStudio(ctk.CTkFrame):
 
     def _preview_voice(self) -> None:
         voice = self.voice.get()
+        if voice == VIDEO_VOICE:
+            self.status.info("Đang dùng giọng của video — bấm «▶ Nghe thử câu» để nghe câu này với cảm xúc đang chọn.")
+            return
         d = _default_direction(voice)
         sample = "Xin chào, đây là giọng mẫu để bạn nghe thử."
         self.status.info(f"Đang tạo mẫu giọng {voice}… (có cache, nghe lại không tốn lượt)")

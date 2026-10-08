@@ -16,6 +16,7 @@ from app.config import theme as T
 
 _LEVELS = 5
 _HUB = 0.30          # bán kính lỗ tâm so với bánh xe
+_LABEL_GAP = 13      # khoảng cách dọc tối thiểu giữa hai nhãn cùng bên (px, chữ cỡ 8)
 
 
 class EmotionWheel(ctk.CTkFrame):
@@ -67,16 +68,29 @@ class EmotionWheel(ctk.CTkFrame):
             r = rin + (R - rin) * lv / _LEVELS
             c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=T.BORDER_SOFT, width=1)
         c.create_oval(cx - rin, cy - rin, cx + rin, cy + rin, fill=T.BG_PANEL, outline=T.BORDER, width=1)
-        # nhãn quanh vòng: so le 2 bán kính (đỡ đè nhau ở đỉnh / đáy), bám ra phía ngoài theo bên trái / phải
+        # nhãn quanh vòng: nửa phải canh trái, nửa trái canh phải; nhãn nào sát nhau theo chiều dọc thì đẩy giãn ra
+        # (kiểu nhãn biểu đồ tròn) rồi đặt lại sát mép vòng ở độ cao mới — không còn chữ đè chữ ở đỉnh / đáy
         main_id = self._main_id()
-        for i, e in enumerate(self.emotions):
-            # nửa trên / dưới đảo thứ tự so le → hai nhãn kề nhau ở đáy không rơi cùng độ cao
-            near = (i % 2 == 0) if math.cos(math.radians(e["angle"])) >= 0 else (i % 2 == 1)
-            lx, ly = self._point(cx, cy, R + (10 if near else 30), e["angle"])
-            anchor = "center" if abs(lx - cx) < R * 0.12 else ("w" if lx > cx else "e")
-            hot = e["id"] == main_id
-            c.create_text(lx, ly, text=e["vi"], anchor=anchor, font=(T.UI_FONT, 8, "bold" if hot else "normal"),
-                          fill=T.TEXT if hot else T.TEXT_MUTED)
+        h = self.canvas.winfo_height() or self._size
+        ro = R + 8
+        for right in (True, False):
+            grp = []
+            for e in self.emotions:
+                if (math.sin(math.radians(e["angle"])) >= -1e-9) == right:
+                    grp.append([e, self._point(cx, cy, ro, e["angle"])[1]])
+            grp.sort(key=lambda g: g[1])
+            for a, b in zip(grp, grp[1:]):               # đẩy xuống cho đủ khoảng cách
+                b[1] = max(b[1], a[1] + _LABEL_GAP)
+            if grp and grp[-1][1] > h - 7:                # tràn đáy → kéo cả cụm lên
+                grp[-1][1] = h - 7
+                for a, b in reversed(list(zip(grp, grp[1:]))):
+                    a[1] = min(a[1], b[1] - _LABEL_GAP)
+            for e, ly in grp:
+                dy = ly - cy
+                dx = math.sqrt(max(0.0, ro * ro - dy * dy)) + (4 if abs(dy) > ro * 0.92 else 0)
+                hot = e["id"] == main_id
+                c.create_text(cx + dx if right else cx - dx, ly, text=e["vi"], anchor="w" if right else "e",
+                              font=(T.UI_FONT, 8, "bold" if hot else "normal"), fill=T.TEXT if hot else T.TEXT_MUTED)
         # kim chỉ: từ mép lỗ tâm tới chấm (bậc 1 sát lỗ tâm, bậc 5 sát mép)
         r = self._level_radius(rin, R, self.level)
         hx, hy = self._point(cx, cy, rin, self.theta)

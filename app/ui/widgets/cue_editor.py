@@ -45,6 +45,9 @@ class CueEditor(ctk.CTkFrame):
         self._tick_id: str | None = None
         self._ai_marks: set[int] = set()          # câu AI vừa sửa (tô vàng tới khi lưu / đổi video)
         self._ai_before: dict[int, str] | None = None
+        self.directions: dict[int, dict] = {}     # cảm xúc từng câu (<srt>.directions.json)
+        self._dir_dirty = False                   # vừa đổi cảm xúc → «Lưu & tạo lại giọng» dựng lại track
+        self._director = None
         self.grid_columnconfigure(0, weight=1)
 
         self.head = ctk.CTkLabel(self, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
@@ -59,6 +62,10 @@ class CueEditor(ctk.CTkFrame):
             play = ctk.CTkButton(top, text="", width=96, height=22, anchor="w", font=T.mono(10), fg_color="transparent",
                                  hover_color=T.BG_HOVER, text_color=T.TEXT_MUTED, command=lambda r=r: self._play_row(r))
             play.pack(side="left")
+            chip = ctk.CTkButton(top, text="", width=92, height=22, anchor="e", font=T.font(11), fg_color="transparent",
+                                 hover_color=T.BG_HOVER, text_color=T.TEXT_MUTED, command=lambda r=r: self._direct_row(r))
+            chip.pack(side="right")
+            Tooltip(chip, "Cảm xúc khi lồng tiếng câu này — bấm để chỉnh trên bánh xe Đạo diễn âm thanh")
             ref = ctk.CTkLabel(top, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", justify="left",
                                wraplength=260)
             ref.pack(side="left", fill="x", expand=True, padx=(4, 0))
@@ -75,7 +82,7 @@ class CueEditor(ctk.CTkFrame):
                                  **{**T.secondary_button(), "font": T.font(13, "bold")})
             Tooltip(play, "Phát đúng câu này trên khung xem trước (có giọng lồng)")
             Tooltip(redo, "AI dịch lại riêng câu này (theo «Phong cách dịch», xem câu trước/sau làm ngữ cảnh)")
-            self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "top": top,
+            self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "top": top, "chip": chip,
                                "widgets": [(top, dict(row=2 * r, column=0, columnspan=2, sticky="ew", padx=4, pady=(4, 0))),
                                            (ent, dict(row=2 * r + 1, column=0, sticky="ew", padx=(4, 2), pady=(0, 2))),
                                            (redo, dict(row=2 * r + 1, column=1, padx=(2, 4), pady=(0, 2)))]})
@@ -94,6 +101,11 @@ class CueEditor(ctk.CTkFrame):
                                command=self.save,
                                tip="Lưu các câu đã sửa; video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
         self.save_btn.pack(side="right")
+        self.emo_btn = button(nav, "Cảm xúc", icon_name="sparkle", size="sm",
+                              command=lambda: self._open_director(self._cur if self._cur >= 0 else self.page * self.PAGE),
+                              tip="Cảm xúc từng câu (Đạo diễn âm thanh): dòng thời gian tô màu theo cảm xúc, chỉnh một "
+                                  "hoặc nhiều câu cùng lúc")
+        self.emo_btn.pack(side="right", padx=(0, 6))
 
         # ── Nhờ AI sửa (kiểu chat): AI tự tìm câu liên quan tới yêu cầu và chỉ sửa đúng những câu đó ──
         ai = ctk.CTkFrame(self, fg_color="transparent")
@@ -146,8 +158,17 @@ class CueEditor(ctk.CTkFrame):
         self._starts = [c.start for c in self.cues]
         self.texts = [c.text.replace("\n", " ") for c in self.cues]
         self._orig_texts = list(self.texts)
+        self._load_directions()
+        self._dir_dirty = False
+        if self._director is not None and self._director.winfo_exists() and self._director.item is not it:
+            self._director.close()                 # đổi video → đóng bảng cảm xúc của video cũ (tự lưu phần đang chỉnh)
         self.show_page(0, sync=False)
         self.status.info("")
+
+    def _load_directions(self) -> None:
+        from app.services.direction import suggest
+
+        self.directions = suggest.load(self.edit_path, len(self.cues)) if self.edit_path else {}
 
     def _range(self) -> range:
         a = self.page * self.PAGE
@@ -173,6 +194,7 @@ class CueEditor(ctk.CTkFrame):
                 row["entry"].delete(0, "end")
                 row["entry"].insert(0, self.texts[i])
                 row["entry"].configure(border_color=self._base_border(i))
+                self._paint_chip(row["chip"], i)
                 for w, kw in row["widgets"]:
                     if w is not row["redo"] or self.is_translation:
                         w.grid(**kw)
@@ -192,6 +214,53 @@ class CueEditor(ctk.CTkFrame):
         self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
         self.save_btn.configure(state="normal" if self.cues else "disabled")
         self.ai_send.configure(state="normal" if self.cues else "disabled")
+        self.emo_btn.configure(state="normal" if self.cues else "disabled")
+
+    # ── Cảm xúc từng câu (Đạo diễn âm thanh) ─────────────────────────────
+    def _paint_chip(self, chip: ctk.CTkButton, i: int) -> None:
+        from app.ui.widgets.segment_director import emotion_of
+
+        lbl, color = emotion_of(self.directions.get(i))
+        chip.configure(text=f"● {lbl}" if lbl else "＋ cảm xúc", text_color=color or T.TEXT_MUTED)
+
+    def _direct_row(self, r: int) -> None:
+        i = self._row_index(r)
+        if i is not None:
+            self._open_director(i)
+
+    def _open_director(self, i: int) -> None:
+        it = self.item
+        if it is None or not self.cues or not self.edit_path:
+            return
+        if self._director is not None and self._director.winfo_exists():
+            self._director.go(i)
+            self._director._raise()
+            return
+        from app.ui.widgets.segment_director import open_segment_director
+
+        self._director = open_segment_director(self.winfo_toplevel(), self.window, it, self.cues, self.ref,
+                                               self.edit_path, index=i, on_saved=self._directions_saved,
+                                               on_regenerate=lambda: self._regenerate_directions(it))
+
+    def _directions_saved(self) -> None:
+        self._load_directions()
+        self._dir_dirty = True
+        if self.cues:
+            self.show_page(self.page)
+        self.status.warn("Đã đổi cảm xúc — bấm «Lưu & tạo lại giọng» (chỉ câu đổi cảm xúc gọi API).")
+
+    def _regenerate_directions(self, it: VideoItem) -> None:
+        if it is not self.item:
+            return
+        if self._text_dirty():
+            self.save()                      # còn câu chữ sửa dở → lưu luôn (save tự tạo lại giọng)
+            return
+        self._dir_dirty = False
+        if self.app_state.state_for(it).tts.enable_tts:
+            self.status.warn("Đang tạo lại giọng theo cảm xúc mới (câu không đổi dùng lại)…")
+            self._regenerate(it)
+        else:
+            self.status.info("Video chưa bật lồng tiếng (tab Lồng tiếng → «Thêm lồng tiếng vào video»).")
 
     # ── Gắn với khung xem trước ──────────────────────────────────────────
     def _row_index(self, r: int) -> int | None:
@@ -277,11 +346,14 @@ class CueEditor(ctk.CTkFrame):
         self._painted = want
 
     # ── Lưu ──────────────────────────────────────────────────────────────
-    def dirty(self) -> bool:
+    def _text_dirty(self) -> bool:
         if not self.cues:
             return False
         self._sync()
         return self.texts != self._orig_texts
+
+    def dirty(self) -> bool:
+        return self._text_dirty() or (self._dir_dirty and bool(self.cues))
 
     def save(self) -> None:
         it = self.item
@@ -294,8 +366,12 @@ class CueEditor(ctk.CTkFrame):
                 c.text = wrap_lines(new.strip())
                 changed += 1
         if not changed:
-            self.status.info("Không có câu nào thay đổi.")
+            if self._dir_dirty:                  # chỉ đổi cảm xúc → dựng lại giọng, chữ giữ nguyên
+                self._regenerate_directions(it)
+            else:
+                self.status.info("Không có câu nào thay đổi.")
             return
+        self._dir_dirty = False
         save_srt(self.cues, self.edit_path)
         self._orig_texts = list(self.texts)
         if self._ai_marks:
