@@ -166,6 +166,8 @@ def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05
     out: list[Cue] = []
     for i, c in enumerate(cues):
         start, end = c.start, c.end
+        if out and out[-1].end + gap > start:  # câu trước đã mượn đầu câu này
+            start = out[-1].end + gap
         if end - start < want:
             limit = cues[i + 1].start - gap if i + 1 < len(cues) else float("inf")
             end = max(end, min(start + want, limit))
@@ -179,6 +181,12 @@ def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05
                 if take > 0.01:
                     prev.end -= take
                     start = max(prev.end + gap, start - take)
+            if end - start < want and i + 1 < len(cues):
+                # vẫn thiếu → mượn đầu câu sau (câu sau hiện muộn ≤ ``lead`` giây, vẫn ≥ min_dur)
+                nxt = cues[i + 1]
+                take = min(want - (end - start), nxt.end - nxt.start - want, lead)
+                if take > 0.01:
+                    end = min(start + want, nxt.start - gap + take)
         out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
     return out
 

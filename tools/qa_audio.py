@@ -328,7 +328,10 @@ def qa(path: Path, *, target: float = -14.0, tol: float = 1.0, tp_max: float = -
             fr = fr[db[fr] > (gate if silent_bg else max(gate, float(db[fr].max()) - 20.0))]
         return np.concatenate([kw[f * w:(f + 1) * w] for f in fr]) if len(fr) else kw[:0]
 
-    seg_l = [lufs(voiced(a, b)) for a, b in segments if (b - a) * FRAME >= 0.4]
+    # câu có < 0,8 s giọng («Gà rừng») đo LUFS trên vài khung 100 ms + nền đã duck → lệch 2–2,6 LU dù track giọng riêng
+    # đều ±1,5 LU (audit_out/m7/kweight_probe.py) → không tính vào độ đều
+    seg_v = [voiced(a, b) for a, b in segments if (b - a) * FRAME >= 0.4]
+    seg_l = [lufs(v) for v in seg_v if len(v) >= 0.8 * SR]
     seg_l = [v for v in seg_l if np.isfinite(v)]
     if seg_l:
         med = float(np.median(seg_l))
