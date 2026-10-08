@@ -74,7 +74,30 @@ BATCH_PROMPT = ("[Lời dặn cách đọc — chỉ để định giọng, KHÔ
                 "[Lời thoại — chỉ đọc nguyên văn phần này]\n{text}")
 
 _working_model: dict[str, str] = {}     # model chọn → model thật sự dùng được (sau khi tự thử model kế tiếp)
+#: (model, key) → hết lượt NGÀY tới thời điểm này (time.time()): không gọi lại key đó cho model đó tới lúc hồi
+_exhausted: dict[tuple[str, str], float] = {}
 _lock = threading.Lock()
+
+
+def _quota_info(r: requests.Response) -> tuple[bool, float | None]:
+    """429 → (hết lượt theo NGÀY?, số giây máy chủ bảo chờ). Đọc cả khối ``details`` (quotaId «…PerDay…»,
+    retryDelay) — 300 ký tự đầu chỉ có câu «You exceeded your current quota» nên trước đây tưởng là giới hạn phút,
+    thử lại ~14 lần kèm chờ cho TỪNG câu."""
+    try:
+        err = r.json().get("error") or {}
+    except ValueError:
+        return "per day" in r.text.lower() or "PerDay" in r.text, None
+    daily, delay = "per day" in str(err.get("message", "")).lower(), None
+    for d in err.get("details") or []:
+        for v in d.get("violations") or []:
+            if "PerDay" in str(v.get("quotaId", "")) or "per_day" in str(v.get("quotaMetric", "")).lower():
+                daily = True
+        rd = str(d.get("retryDelay") or "").rstrip("s")
+        try:
+            delay = float(rd) if rd else delay
+        except ValueError:
+            pass
+    return daily or (delay is not None and delay > 3600), delay
 
 
 def _wait(seconds: float) -> None:
@@ -134,7 +157,7 @@ class GeminiTTS(TTSEngine):
     # ── Gọi API ───────────────────────────────────────────────────────────
     def _models(self) -> list[str]:
         first = _working_model.get(self.model, self.model)
-        return [first] + [m for m in [self.model, *GEMINI_TTS_MODELS] if m != first]
+        return list(dict.fromkeys([first, self.model, *GEMINI_TTS_MODELS]))
 
     def _key(self) -> str:
         if not self.keys:
@@ -173,15 +196,33 @@ class GeminiTTS(TTSEngine):
             style=f"{self.style}\n" if self.style else "", text="\n".join(lines))
         return self._request(body)
 
+    def _alive(self, model: str) -> list[str]:
+        """Key còn lượt NGÀY cho ``model`` (key đã báo hết lượt hôm nay thì bỏ qua tới lúc hồi)."""
+        now = time.time()
+        return [k for k in self.keys if _exhausted.get((model, k), 0.0) <= now]
+
     def _request(self, body: dict) -> tuple[bytes, int]:
         models = self._models()
         mi = 0
         tried_keys = 0
         last = ""
-        for attempt in range(8 + 2 * max(1, len(self.keys))):
+        self._key()                                       # chưa có key → báo ngay
+        for attempt in range(8 + 2 * max(1, len(self.keys)) + len(models)):
             model = models[mi]
+            alive = self._alive(model)
+            if not alive:
+                # mọi key hết lượt NGÀY của model này (hạn mức tính theo từng model) → model TTS kế tiếp; hết cả thì
+                # báo lỗi ngay để engine dự phòng (Edge) đọc, không thử lại từng câu
+                if mi + 1 < len(models):
+                    logger.warning("Gemini TTS: %s hết lượt hôm nay (mọi key) → dùng %s", model, models[mi + 1])
+                    mi += 1
+                    continue
+                raise RuntimeError("Gemini TTS hết lượt hôm nay với mọi key / model (gói miễn phí giới hạn số lượt mỗi "
+                                   "ngày cho từng model, hồi lúc nửa đêm giờ Mỹ) — bật thanh toán cho key hoặc chọn "
+                                   "nhà cung cấp khác. " + last[:120])
+            key = alive[self._key_idx % len(alive)]
             try:
-                r = requests.post(f"{BASE}/models/{model}:generateContent", headers={"x-goog-api-key": self._key()},
+                r = requests.post(f"{BASE}/models/{model}:generateContent", headers={"x-goog-api-key": key},
                                   json=body, timeout=180)
             except requests.RequestException as exc:
                 last = str(exc)
@@ -203,12 +244,19 @@ class GeminiTTS(TTSEngine):
                 logger.info("Gemini TTS: model %s không dùng được → thử %s", model, models[mi + 1])
                 mi += 1
                 continue
+            if r.status_code == 429:
+                daily, delay = _quota_info(r)
+                if daily:                                  # hết lượt NGÀY: nhớ lại, không gọi key này nữa tới lúc hồi
+                    with _lock:
+                        _exhausted[(model, key)] = time.time() + (delay if delay and delay > 60 else 6 * 3600)
+                    logger.info("Gemini TTS: một key hết lượt hôm nay cho %s (còn %d key)", model, len(alive) - 1)
+                    continue
             if r.status_code in (401, 403, 429):
                 # hết lượt / key lỗi → key kế tiếp; đã thử hết key thì đợi chút (giới hạn theo phút) rồi thử lại
                 tried_keys += 1
                 self._key_idx += 1
-                if tried_keys % max(1, len(self.keys)) == 0:
-                    if r.status_code != 429 or "per day" in msg.lower() or "PerDay" in msg:
+                if tried_keys % max(1, len(alive)) == 0:
+                    if r.status_code != 429:
                         raise RuntimeError(
                             "Gemini TTS hết lượt / key không dùng được (" + msg[:160] + "). Gói miễn phí chỉ vài lượt "
                             "mỗi ngày — bật thanh toán cho key, thêm key khác (mỗi dòng một key) hoặc chọn nhà cung cấp khác.")

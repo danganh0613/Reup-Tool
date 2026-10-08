@@ -38,7 +38,7 @@ RECHECK = 20             # dù không thấy đổi, cứ 2 s OCR lại một l�
 MIN_SCORE = 0.6          # bỏ dòng OCR không chắc
 SAME = 0.8               # hai chữ giống ≥ 80 % → cùng một câu (OCR dao động một ký tự)
 MIN_DUR = 0.3
-_HAN = re.compile(r"[一-鿿]")
+_HAN = re.compile(r"[㐀-䶿一-鿿]")    # gồm cả chữ Hán hiếm (䴙䴘 — tên chim)
 _ocr = None
 _cc = None
 _lock = threading.Lock()
@@ -80,6 +80,9 @@ def _read(ocr, img: np.ndarray) -> str:
         for tx, sc in zip(r.get("rec_texts") or [], r.get("rec_scores") or []):
             if float(sc) >= MIN_SCORE and tx.strip():
                 lines.append(tx.strip())
+    if any(_HAN.search(t) for t in lines):
+        # có phụ đề chữ Hán → bỏ các khung chữ lẻ không có chữ Hán cùng dải (số «008», logo «Oog»… lọt vào câu dịch)
+        lines = [t for t in lines if _HAN.search(t)]
     return to_simplified(" ".join(lines))
 
 
