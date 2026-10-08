@@ -63,7 +63,8 @@ KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → tr
 TTS_PROVIDERS = ["Edge TTS", "Gemini TTS (Google AI)", "ElevenLabs", "Google Cloud TTS", "FPT.AI",
                  "VieNeu (local, tiếng Việt)"]
 #: model Gemini TTS — model đầu không dùng được với key thì tự thử model kế tiếp
-GEMINI_TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview",
+# flash-lite trước: điểm tiếng Việt cao nhất trên Voice Arena, hợp lồng tiếng hàng loạt; flash cho cảnh cần diễn mạnh
+GEMINI_TTS_MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview",
                      "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]

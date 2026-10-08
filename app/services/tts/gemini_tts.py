@@ -108,8 +108,10 @@ class GeminiTTS(TTSEngine):
         self.temperature = temperature
 
     def cache_signature(self, voice_id: str, speed: float, pitch: int) -> str:
-        # «p2» = kiểu prompt mới: bản cache cũ có lời dặn (có thể đã bị đọc to) không dùng lại; câu «Tự nhiên» giữ cache
-        return f"{self.name}|{voice_id}|{self.model}|{self.style}" + ("|p2" if self.style else "")
+        # «p2» = kiểu prompt mới: bản cache cũ có lời dặn (có thể đã bị đọc to) không dùng lại; câu «Tự nhiên» giữ cache.
+        # temperature khác mặc định 0,7 (Đạo diễn âm thanh chỉnh theo bậc) → khoá riêng; mặc định giữ khoá cũ
+        temp = "" if self.temperature in (None, 0.7) else f"|t{self.temperature:.2f}"
+        return f"{self.name}|{voice_id}|{self.model}|{self.style}" + ("|p2" if self.style else "") + temp
 
     def repair_cached(self, path: Path) -> None:
         """Bản cũ ghi nguyên file WAV Gemini trả về (header + chữ ký C2PA) vào trong một WAV khác → «tách» ở đầu,

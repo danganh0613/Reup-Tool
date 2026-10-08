@@ -75,7 +75,8 @@ class TTSModule(BaseModule):
         self.language = OptionRow(sec.body, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(sec.body, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         pack_rows(sec.body, [self.search, self.language, self.voice])
-        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button())]).pack(fill="x", pady=(4, 2))
+        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button()),
+                             ("🎬 Đạo diễn âm thanh…", self._open_direction, None)]).pack(fill="x", pady=(4, 2))
         self.voice_status = StatusLabel(sec.body, "")
         self.voice_status.pack(fill="x")
         self.speed = OptionRow(sec.body, "Tốc độ đọc", SPEED_OPTIONS, on_change=lambda v: self.set_value(cfg, "tts_speed", float(v), preview=False))
@@ -459,6 +460,12 @@ class TTSModule(BaseModule):
         self._load_voices(force=True)
 
     # ── Hành động ────────────────────────────────────────────────────────
+    def _open_direction(self) -> None:
+        """Cửa sổ Đạo diễn âm thanh: chọn giọng + bánh xe cảm xúc, thử đọc (cache, không tốn lượt khi nghe lại)."""
+        from app.ui.widgets.direction_studio import open_studio
+
+        open_studio(self.window, self.state.settings, play=self.window.player.play)
+
     def _preview_voice(self) -> None:
         cfg = self.state.tts
         engine = self._engine
