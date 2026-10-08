@@ -63,6 +63,9 @@ except Exception:  # pragma: no cover
     _HAS_DND = False
 
 RAIL_W = 72                      # thanh tính năng bên trái (gọn: chỉ icon + nhãn ngắn)
+#: tab dựng sẵn (ẩn) lúc người dùng rảnh, theo thứ tự hay dùng — mở lần đầu khỏi đứng hình 0,2–0,7 s (audit_out/perf)
+PREWARM = ["srt", "tts", "subtitle", "stt", "video", "blur", "color", "bgm", "brand", "trim", "story"]
+PREWARM_IDLE = 1.5               # giây không bấm / gõ / cuộn mới dựng sẵn
 RAIL_LABELS = {"story": "Truyện"}  # nhãn ngắn trên thanh bên (tiêu đề đầy đủ vẫn ở đầu bảng tính năng)
 MODULES: list[type[BaseModule]] = [VideoModule, SubtitleModule, STTModule, SRTModule, TTSModule, BlurModule,
                                    BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
@@ -127,6 +130,10 @@ class MainWindow(_Root):
             self.dnd_bind("<<Drop>>", self._on_drop)
 
         self.show_module(self.app_state.ui.get("active_module", "video"))
+        self._last_input = time.monotonic()
+        for seq in ("<KeyPress>", "<ButtonPress>", "<MouseWheel>"):
+            self.bind_all(seq, self._mark_input, add="+")
+        self.after(3000, self._prewarm)
         if self.app_state.settings.show_guide_on_start:
             self.after(600, lambda: self.open_guide("start"))
         elif self.app_state.ui.get("help_open"):
@@ -372,6 +379,34 @@ class MainWindow(_Root):
 
     def current_module_key(self) -> str:
         return self._current_module or ""
+
+    def _mark_input(self, _e=None) -> None:
+        self._last_input = time.monotonic()
+
+    def _prewarm(self) -> None:
+        """Dựng sẵn (ẩn) một tab chưa mở khi người dùng rảnh — dựng widget tốn 0,2–0,7 s, hiện tab đã dựng chỉ 0,1–0,27 s.
+        Đang bấm / gõ / cuộn hoặc đang chạy tác vụ thì hoãn; mỗi lần một tab."""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        todo = [k for k in PREWARM if k not in self.modules]
+        if not todo:
+            return
+        if time.monotonic() - self._last_input < PREWARM_IDLE or self._running:
+            self.after(1000, self._prewarm)
+            return
+        key = todo[0]
+        cls = next((c for c in MODULES if c.key == key), None)
+        try:
+            if cls is not None:
+                m = self.modules[key] = cls(self.panel, self)
+                m._fresh = False                 # dựng từ lâu → lần hiện đầu vẫn đổ lại giá trị mới nhất
+        except Exception:
+            logger.exception("Không dựng sẵn được tab %s", key)
+            PREWARM.remove(key)                  # lỗi thì để lúc mở tab dựng như cũ, không thử lại liên tục
+        self.after(600, self._prewarm)
 
     def refresh_modules(self) -> None:
         for m in self.modules.values():

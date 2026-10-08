@@ -15,6 +15,7 @@ from customtkinter.windows.widgets.core_rendering import DrawEngine
 from customtkinter.windows.widgets.ctk_button import CTkButton
 from customtkinter.windows.widgets.ctk_frame import CTkFrame
 from customtkinter.windows.widgets.ctk_label import CTkLabel
+from customtkinter.windows.widgets.ctk_optionmenu import CTkOptionMenu
 from customtkinter.windows.widgets.ctk_scrollable_frame import CTkScrollableFrame
 from customtkinter.windows.widgets.ctk_scrollbar import CTkScrollbar
 from customtkinter.windows.widgets.ctk_slider import CTkSlider
@@ -115,6 +116,22 @@ def _sb_set(self, start_value, end_value):
     _orig_sb_set(self, start_value, end_value)
 
 
+# CTkScrollbar / CTkOptionMenu: cuối _draw gọi self._canvas.update_idletasks() → ép Tk xử lý NGAY mọi việc đang chờ của
+# cả cửa sổ (dàn trang hàng trăm widget), lồng nhau vì dàn trang lại làm thanh cuộn vẽ lại: mở tab lần đầu tốn 0,4–0,7 s
+# chỉ ở đây, kéo giãn cửa sổ giật tới 0,4 s (đo: audit_out/perf). Canvas vẫn tự vẽ ở nhịp rảnh kế tiếp → bỏ lệnh ép đó.
+def _no_flush(*_a, **_k):
+    return None
+
+
+def _make_no_flush_draw(orig):
+    def _draw(self, *a, **k):
+        cv = self.__dict__.get("_canvas")
+        if cv is not None and "update_idletasks" not in cv.__dict__:
+            cv.update_idletasks = _no_flush             # chỉ canvas riêng của widget này
+        return orig(self, *a, **k)
+    return _draw
+
+
 # CTk gắn callback của CTkImage vào widget nhưng destroy() không gỡ → widget đã huỷ vẫn bị ảnh giữ lại.
 # Gỡ khi huỷ để icons.icon() dùng chung được một CTkImage cho mọi nút (khỏi tạo lại ảnh mỗi lần vẽ).
 def _make_destroy(cls):
@@ -199,6 +216,8 @@ def apply() -> None:
     DrawEngine._round_height_to_even_numbers = False
     DrawEngine.draw_rounded_rect_with_border = _draw_rounded_rect_with_border
     CTkScrollbar.set = _sb_set
+    CTkScrollbar._draw = _make_no_flush_draw(CTkScrollbar._draw)
+    CTkOptionMenu._draw = _make_no_flush_draw(CTkOptionMenu._draw)
     CTkFrame._draw = _frame_draw
     if _orig_tb_check is not None:
         CTkTextbox._check_if_scrollbars_needed = _tb_check
