@@ -324,11 +324,11 @@ class TTSModule(BaseModule):
             cur = next((v.label for v in subset if v.id == wanted), labels[0])
             self.voice.set(cur)
             if subset and wanted not in {v.id for v in subset} and not q:
-                self._store_voice(subset[0])
+                self._store_voice(subset[0], auto=True)        # máy tự chọn giọng đầu danh sách
         finally:
             self._loading = False
 
-    def _store_voice(self, v: Voice) -> None:
+    def _store_voice(self, v: Voice, *, auto: bool = False) -> None:
         cfg = self.state.tts
         if cfg.tts_provider == "ElevenLabs":
             cfg.eleven_voice_id, cfg.eleven_voice_name = v.id, v.name
@@ -342,7 +342,7 @@ class TTSModule(BaseModule):
             cfg.google_voice, cfg.google_language = v.id, v.locale
         else:
             cfg.edge_voice, cfg.edge_language = v.id, v.locale
-        self.state.config_changed("tts")
+        self.state.config_changed("tts", auto=auto)
 
     def _language_changed(self, loc: str) -> None:
         cfg = self.state.tts

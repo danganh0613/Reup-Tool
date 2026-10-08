@@ -238,6 +238,8 @@ class SettingsWindow(ctk.CTkToplevel):
             self.key_boxes[prov] = box
         hint(b, "Mỗi dòng một key. Tự xoay vòng: nhà cung cấp chính → các nhà cung cấp khác có key. "
                 "Gemini/Groq có gói miễn phí · DeepSeek/OpenAI cần key trả phí · Edge-TTS không cần key.").pack(fill="x", pady=(4, 0))
+        hint(b, "Gói miễn phí Gemini: Google có thể dùng chữ / âm thanh bạn gửi để cải thiện sản phẩm — đừng gửi nội dung "
+                "nhạy cảm. Gemini TTS miễn phí chỉ vài lượt mỗi ngày cho mỗi model.").pack(fill="x", pady=(2, 0))
         r = ctk.CTkFrame(b, fg_color="transparent")
         r.pack(fill="x", pady=(10, 0))
         ctk.CTkLabel(r, text="Từ điển tên riêng (Thuật ngữ):", font=T.font(12, "bold"), anchor="w").pack(side="left")
