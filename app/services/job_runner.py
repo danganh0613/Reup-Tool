@@ -626,7 +626,9 @@ class Pipeline:
                                            out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None)
 
             voice_path = build_voice(cues_tr if use_tr else cues_orig)
-            over = [o for o in self.voice_overflow(voice_path, untried=True) if o[1] > 0.15]
+            # câu ≤ 3 tiếng («Không bắt», «Trắng tinh») không rút gọn được nữa — nhờ AI chỉ tốn lượt dịch + lượt đọc lại
+            over = [o for o in self.voice_overflow(voice_path, untried=True) if o[1] > 0.15
+                    and cues_tr and 0 <= o[0] < len(cues_tr) and len(cues_tr[o[0]].plain.split()) > 3]
             if (over and use_tr and preview_out is None and st.settings.tts_auto_shorten and scfg.translate_enable
                     and item.srt_path and Path(item.srt_path).exists()):
                 # đã nén tới trần mà vẫn tràn → câu dịch quá dài: AI rút gọn đúng các câu đó (một lượt) rồi đọc lại

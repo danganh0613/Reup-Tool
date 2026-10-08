@@ -26,6 +26,7 @@ MAX_CHARS = 1500            # tổng ký tự tối đa mỗi lượt (đoạn q
 MIN_LINES = 2               # ít hơn thì đọc từng câu như cũ (cảm xúc từng câu chia nhóm nhỏ: 2 câu gộp vẫn đỡ 1 lượt)
 _SILENCE_DB = -40.0         # dưới đỉnh bấy nhiêu dB coi là lặng (đường bao 10 ms)
 _MIN_CUT = 8                # khoảng lặng ≥ 80 ms mới được cắt
+_EDGE_CUT = 15              # đầu / cuối đoạn: lặng ≥ 150 ms (khe giữa hai tiếng trong một từ có thể ~80 ms)
 
 
 def available() -> bool:
@@ -71,6 +72,8 @@ def split(pcm: bytes, rate: int, lines: list[str], compute: str = "auto") -> lis
     # trong khoảng [đầu chữ cuối câu trước, cuối chữ đầu câu sau], không chỉ giữa hai mốc
     first: dict[int, float] = {}            # cuối chữ đầu tiên khớp được của câu
     last: dict[int, float] = {}             # đầu chữ cuối cùng khớp được của câu
+    head: float | None = None               # đầu chữ khớp đầu tiên của cả đoạn
+    tail: float | None = None               # cuối chữ khớp cuối cùng của cả đoạn
     hits = [0] * n
     sm = difflib.SequenceMatcher(None, [x[0] for x in ref], [x[0] for x in hyp], autojunk=False)
     for blk in sm.get_matching_blocks():
@@ -80,6 +83,8 @@ def split(pcm: bytes, rate: int, lines: list[str], compute: str = "auto") -> lis
             first.setdefault(k, we)
             last[k] = ws
             hits[k] += 1
+            head = ws if head is None else head
+            tail = we
 
     fr = rate // 100
     env = 20 * np.log10(np.sqrt(np.mean(a[: len(a) // fr * fr].reshape(-1, fr) ** 2, axis=1)) + 1e-9)
@@ -98,10 +103,30 @@ def split(pcm: bytes, rate: int, lines: list[str], compute: str = "auto") -> lis
                 best_len, best_at = run, (start + i + 1) / 200
         return best_at if best_len >= _MIN_CUT else None
 
+    def edge_cut(t0: float, t1: float, *, latest: bool) -> float | None:
+        """Giữa khoảng lặng đủ dài GẦN chữ nhất trong [t0, t1]: ``latest`` = khoảng cuối cùng (trước chữ đầu đoạn),
+        không thì khoảng đầu tiên (sau chữ cuối đoạn) — không lấy khoảng dài nhất kẻo ôm luôn phần đọc thừa."""
+        i0, i1 = max(0, int(t0 * 100)), min(len(quiet), int(t1 * 100) + 1)
+        runs, run = [], 0
+        for i in range(i0, i1):
+            run = run + 1 if quiet[i] else 0
+            if run == _EDGE_CUT:
+                runs.append([i - _EDGE_CUT + 1, i + 1])
+            elif run > _EDGE_CUT:
+                runs[-1][1] = i + 1
+        if not runs:
+            return None
+        s, e = runs[-1] if latest else runs[0]
+        return (s + e) / 200
+
     # câu Whisper khớp kém → đọc riêng. Model đọc thêm gì đó (vd cả lời dặn) thì câu đầu / cuối dài bất thường → bị
     # loại ở bước kiểm độ dài bên dưới
     bad = {k for k in range(n) if total[k] == 0 or hits[k] < max(1, 0.6 * total[k])}
-    cuts = [0.0]
+    # đầu / cuối đoạn: cắt ở chỗ lặng ngay trước chữ khớp đầu tiên / sau chữ khớp cuối cùng — model (lite) đôi khi đọc to
+    # cả lời dặn trước lời thoại: trước đây câu đầu dính cả đoạn đó → «dài bất thường» → bỏ, phải gọi đọc riêng
+    start = edge_cut(max(0.0, head - 3.0), head + 0.05, latest=True) if head is not None and 0 not in bad else None
+    end = edge_cut(tail - 0.05, tail + 3.0, latest=False) if tail is not None and n - 1 not in bad else None
+    cuts = [start or 0.0]
     for k in range(n - 1):
         a0, b0 = last.get(k), first.get(k + 1)
         c = None
@@ -116,7 +141,7 @@ def split(pcm: bytes, rate: int, lines: list[str], compute: str = "auto") -> lis
             guess = [x for x in (a0, b0) if x is not None]
             c = max(cuts[-1], sum(guess) / len(guess) if guess else cuts[-1])
         cuts.append(c)
-    cuts.append(max(dur, cuts[-1]))
+    cuts.append(end if end is not None and end > cuts[-1] else max(dur, cuts[-1]))
 
     out: list[bytes | None] = []
     for k, ln in enumerate(lines):

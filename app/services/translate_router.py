@@ -583,7 +583,8 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         if log:
             log(f"{len(over)} câu dịch dài hơn thời lượng đọc (> {_DEFAULT_CPS:.0f} ký tự/giây) → AI rút gọn…")
         before = {i: tried_key(i) for i in over}
-        n = redo(over, SHORTEN_REQUEST, lambda i, t: len(t) < len(results[i]) and not _leaks(t, target))
+        n = redo(over, SHORTEN_REQUEST,
+                 lambda i, t: len(t) < len(results[i]) and not _leaks(t, target) and not cut_off(t, results[i]))
         for k in before.values():
             memory.put(target, k, "1", style)
         if log:
@@ -650,7 +651,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
     # đi riêng: rút gọn 7 câu tốn 6 lượt
     step = GROQ_BATCH if settings.translate_provider == "Groq" else BATCH
     batches = [idxs[k:k + step] for k in range(0, len(idxs), step)]
-    lost = 0
+    lost = cut = 0
 
     def call(part: list[int]) -> list[str]:
         inside = set(part)
@@ -668,6 +669,9 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
         result = _solve(call, batch)
         lost += len(batch) - len(result)
         for i, t in result.items():
+            if t and i < len(previous) and cut_off(t, previous[i]):
+                cut += 1                         # AI chỉ cắt cụt chữ cuối («Hơi hung dữ» → «Hơi hung») → giữ câu cũ
+                continue
             if t:
                 out[i] = t
                 if cues[i].plain:
@@ -678,11 +682,20 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
             log(f"Đã dịch lại {sum(len(x) for x in batches[:n + 1])}/{len(idxs)} câu "
                 f"({router.current.provider}/{router.current.model})")
     memory.save()
-    if idxs and not out:
+    if idxs and not out and not cut:
         raise RuntimeError("AI trả về không đúng định dạng — thử lại hoặc đổi model ở Cài đặt.")
     if lost and log:
         log(f"⚠ {lost} câu AI trả sai định dạng — giữ bản dịch cũ")
+    if cut and log:
+        log(f"Bỏ {cut} bản rút gọn chỉ cắt cụt chữ cuối câu (mất nghĩa) — giữ câu cũ")
     return out
+
+
+def cut_off(new: str, old: str) -> bool:
+    """``new`` chỉ là ``old`` bị cắt bớt chữ cuối («Bắt là phải chịu trách nhiệm» → «… chịu trách»): mất nghĩa, không
+    phải rút gọn thật."""
+    a, b = re.findall(r"\w+", new.lower()), re.findall(r"\w+", (old or "").lower())
+    return 0 < len(a) < len(b) and b[:len(a)] == a
 
 
 # ── Nhờ AI sửa phụ đề theo yêu cầu (chỉ sửa đúng câu liên quan) ──────────
