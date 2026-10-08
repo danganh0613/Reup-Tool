@@ -199,28 +199,31 @@ class Router:
     def call(self, prompt: str, max_tokens: int | None = None) -> str:
         tried = 0
         last = ""
+        waited = 0.0                            # giây đã chờ vì giới hạn mỗi phút — chung cả lượt gọi, mọi key / model
+        down: set[tuple[str, str]] = set()      # model đã hỏng trong lượt gọi này
         while tried < len(self.cands):
             c = self.current
             fn = _call_gemini if c.provider == "Gemini" else _call_openai_compat
             attempt = 0
-            waited = 0.0                        # giây đã chờ vì giới hạn mỗi phút (không tính vào 3 lần thử)
-            model_down = False                  # quá tải / hết giờ / model bị gỡ: lỗi theo MODEL, đổi key không giúp gì
+            # quá tải / hết giờ / model bị gỡ / chờ hết ngân sách giới hạn phút: lỗi theo MODEL (key cùng tài khoản dùng
+            # chung hạn mức) → đổi key không giúp gì, sang model kế
+            model_down = False
             while attempt < 3:
                 try:
                     return fn(c, prompt, max_tokens=max_tokens)
                 except QuotaError as exc:
                     last = str(exc)
-                    nxt = self.cands[(self.idx + 1) % len(self.cands)]
-                    if (exc.retry_after is not None and exc.retry_after <= 60 and waited < 150
-                            and (nxt.provider, nxt.model) != (c.provider, c.model)):
-                        # chạm giới hạn token/phút mà không còn key khác cùng model → chờ cho đầy lại, giữ model
-                        # tốt thay vì rơi xuống model dịch kém hơn / nhà cung cấp đang quá tải
+                    if exc.retry_after is not None and exc.retry_after <= 60 and waited < 150:
+                        # chạm giới hạn token/phút → chờ cho đầy lại rồi thử lại CHÍNH key/model này: giữ model tốt
+                        # thay vì rơi xuống model kém hơn; key khác cùng tài khoản dùng chung hạn mức (đo: 2 key kế
+                        # tiếp đều 429 ngay) nên đổi key chỉ tốn thêm lượt gọi bị từ chối
                         if self.log:
                             self.log(f"⏳ {c.provider} {c.model} chạm giới hạn mỗi phút → chờ {exc.retry_after:.0f}s rồi thử lại")
                         pause = exc.retry_after * random.uniform(1.0, 1.2) + 0.5
                         time.sleep(pause)
                         waited += pause
                         continue
+                    model_down = exc.retry_after is not None
                     if self.log:
                         self.log(f"⚠ {c.provider} hết quota/lỗi key ({str(exc)[:80]}) → xoay sang key/model kế")
                     break
@@ -250,10 +253,14 @@ class Router:
                     attempt += 1
             nxt = (self.idx + 1) % len(self.cands)
             if model_down:
-                # các key khác của cùng model sẽ hỏng y hệt (trước: mỗi key thử thêm 3 lần, chờ 4–8 s mỗi lần)
-                while tried + 1 < len(self.cands) and (self.cands[nxt].provider, self.cands[nxt].model) == (c.provider, c.model):
-                    nxt = (nxt + 1) % len(self.cands)
-                    tried += 1
+                down.add((c.provider, c.model))
+            # các key khác của model đã hỏng sẽ hỏng y hệt (trước: mỗi key thử thêm 3 lần, chờ 4–8 s mỗi lần) — kể cả
+            # khi vòng lại từ đầu danh sách
+            while tried + 1 < len(self.cands) and (self.cands[nxt].provider, self.cands[nxt].model) in down:
+                nxt = (nxt + 1) % len(self.cands)
+                tried += 1
+            if (self.cands[nxt].provider, self.cands[nxt].model) in down:
+                break                                # chỉ còn model đã hỏng
             if self.log and self.cands[nxt] != c:
                 n = self.cands[nxt]
                 self.log(f"→ Thử tiếp: {n.provider} · {n.model}")
