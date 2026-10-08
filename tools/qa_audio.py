@@ -322,7 +322,10 @@ def qa(path: Path, *, target: float = -14.0, tol: float = 1.0, tp_max: float = -
 
     def voiced(a: int, b: int) -> np.ndarray:
         fr = np.arange(a, min(b, len(db)))
-        fr = fr[db[fr] > gate] if silent_bg else fr
+        if len(fr):
+            # có nền: vẫn chỉ lấy các khung gần mức to nhất của câu (phần có giọng) — khung phụ đề được kéo ≥ 1 s nên câu
+            # ngắn («Không bắt» 0,5 s) gồm nửa khung là nền đã duck → đo nhỏ hơn thật 2–3 LU
+            fr = fr[db[fr] > (gate if silent_bg else max(gate, float(db[fr].max()) - 20.0))]
         return np.concatenate([kw[f * w:(f + 1) * w] for f in fr]) if len(fr) else kw[:0]
 
     seg_l = [lufs(voiced(a, b)) for a, b in segments if (b - a) * FRAME >= 0.4]

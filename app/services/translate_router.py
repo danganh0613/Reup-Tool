@@ -57,6 +57,7 @@ LANG_CODE = {
 _CHARS_PER_SEC = {"zh": 4.5, "ja": 5.0, "ko": 5.5, "th": 12.0}
 _DEFAULT_CPS = 16.0                # tiếng Việt / Latin: lồng tiếng thoải mái ≤ 15–17 ký tự mỗi giây
 _OVER_BUDGET = 1.15                # dịch xong vẫn dài hơn ngân sách × hệ số này → nhờ AI rút gọn câu đó
+_SHORT_TRIED = "⟂đã-rút-gọn|"      # khoá bộ nhớ dịch: bản dịch này đã nhờ AI rút gọn (không gọi lại)
 CONTEXT_LINES = 60                 # số câu gốc trước / sau lô gửi kèm làm ngữ cảnh (video ngắn: gần như cả video)
 
 #: yêu cầu rút gọn câu dịch cho vừa thời lượng lồng tiếng (sau khi dịch, và khi giọng đọc vẫn tràn khung)
@@ -570,12 +571,21 @@ def translate_cues(cues: list[Cue], *, settings: Settings, target: str, source_h
         if log:
             log(f"Đã dịch lại {n}/{len(leak)} câu còn sót chữ gốc")
 
-    # 3) câu dịch vẫn dài hơn thời lượng đọc → nhờ AI rút gọn đúng các câu đó (một lượt), giữ bản ngắn hơn
-    over = [i for i in range(total) if cues[i].plain and results.get(i) and len(results[i]) > budgets_all[i] * _OVER_BUDGET]
+    # 3) câu dịch vẫn dài hơn thời lượng đọc → nhờ AI rút gọn đúng các câu đó (một lượt), giữ bản ngắn hơn.
+    # Bản dịch nào đã nhờ rút gọn rồi thì nhớ lại (bộ nhớ dịch) → dịch lại video lấy từ bộ nhớ không gọi rút gọn lần
+    # nữa (đo: «rút gọn 0/23» — 2 lượt gọi phí mỗi lần dịch lại)
+    def tried_key(i: int) -> str:
+        return f"{_SHORT_TRIED}{results[i]}"
+
+    over = [i for i in range(total) if cues[i].plain and results.get(i)
+            and len(results[i]) > budgets_all[i] * _OVER_BUDGET and not memory.get(target, tried_key(i), style)]
     if over and not stopped():
         if log:
             log(f"{len(over)} câu dịch dài hơn thời lượng đọc (> {_DEFAULT_CPS:.0f} ký tự/giây) → AI rút gọn…")
+        before = {i: tried_key(i) for i in over}
         n = redo(over, SHORTEN_REQUEST, lambda i, t: len(t) < len(results[i]) and not _leaks(t, target))
+        for k in before.values():
+            memory.put(target, k, "1", style)
         if log:
             log(f"Đã rút gọn {n}/{len(over)} câu dài")
     memory.save()

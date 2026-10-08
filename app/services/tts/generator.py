@@ -441,7 +441,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         d = c.meta.get("direction") if director else None
         if d:
             slot = items[pos + 1][1].start - c.start - cfg.min_gap if pos + 1 < len(items) else c.duration
-            fast = not cfg.natural_sync and needs_faster(text, slot, sc.tts_speed)
+            # cả chế độ «Voice tự nhiên»: không nén nên câu dài đẩy lùi cả đoạn sau (đo: trễ tới 1,75 s)
+            fast = needs_faster(text, slot, sc.tts_speed)
             faster += int(fast)
             plan[i] = director.plan(sc, eng, vid, sc.tts_speed, pitch_i, d, faster=fast)
             vid = plan[i][1]

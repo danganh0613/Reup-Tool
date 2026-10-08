@@ -22,7 +22,10 @@ from app.services.tts.base import TTSEngine
 logger = logging.getLogger(__name__)
 
 FASTER_EN = "speaking a bit faster than normal"
-FAST_RATIO = 1.05                 # dự kiến dài hơn khe ≥ 5 % → dặn nói nhanh hơn
+FAST_RATIO = 1.0                  # dự kiến (đã hiệu chỉnh) dài hơn khe → dặn nói nhanh hơn
+#: thời lượng thật trên track (Gemini, gồm lặng đệm đầu / cuối câu) ≈ PACE × ước lượng theo số tiếng + PAD — khớp bình
+#: phương tối thiểu trên 77 câu đo thật (audit_out/m7/fast_fit.py): báo đúng 30/34 câu tràn khung, trước chỉ 8/34
+PACE, PAD = 0.87, 0.34
 _SLOW = "speaking slowly, soft and low"
 
 
@@ -88,7 +91,7 @@ def needs_faster(text: str, slot: float, speed: float = 1.0) -> bool:
     """Chữ nhiều so với khe thời gian của câu → nên dặn nói nhanh hơn ngay từ lượt đọc đầu."""
     from app.services.tts.quality import expected_duration
 
-    return slot > 0 and expected_duration(text, speed) > slot * FAST_RATIO
+    return slot > 0 and expected_duration(text, speed) * PACE + PAD > slot * FAST_RATIO
 
 
 def preview_cue(cues: list, i: int, direction: dict | None, cfg: TTSConfig, settings: Settings, *,
@@ -106,7 +109,7 @@ def preview_cue(cues: list, i: int, direction: dict | None, cfg: TTSConfig, sett
     slot = (nxt.start - c.start) / sp - cfg.min_gap if nxt is not None else c.duration / sp
     plan = (eng, vid, cfg.tts_speed, pitch)
     if direction and cfg.emotion_direction:
-        fast = not cfg.natural_sync and needs_faster(c.plain, slot, cfg.tts_speed)
+        fast = needs_faster(c.plain, slot, cfg.tts_speed)
         plan = Director(settings).plan(cfg, eng, vid, cfg.tts_speed, pitch, direction, faster=fast)
     e, v, s, p = plan
     return Path(synthesize_cached(e, v, c.plain, speed=s, pitch=p, qc=qc_options(settings), label=f"câu {i + 1}"))

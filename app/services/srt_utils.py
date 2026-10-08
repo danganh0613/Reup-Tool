@@ -160,17 +160,25 @@ def wrap_lines(text: str, line_chars: int = LINE_CHARS) -> str:
 
 def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05, lead: float = 0.3) -> list[Cue]:
     """Câu hiện quá ngắn (phụ đề dời theo giọng: câu ngắn chỉ hiện ~0,5 s) → kéo dài tới ``min_dur`` giây,
-    nhưng không chồng sang câu sau (cách ≥ ``gap``) và không bao giờ rút ngắn câu. Câu sau sát quá thì cho hiện
-    sớm hơn tối đa ``lead`` giây (không chồng câu trước)."""
+    nhưng không chồng sang câu sau (cách ≥ ``gap``). Câu sau sát quá thì cho hiện sớm hơn tối đa ``lead`` giây (không
+    chồng câu trước); vẫn thiếu thì mượn đuôi câu trước (câu trước vẫn ≥ ``min_dur``), sớm tổng cộng ≤ 2 × ``lead``."""
+    want = min_dur + 0.02                 # dư 20 ms: ASS ghi mốc theo 1/100 s, làm tròn không được tụt dưới min_dur
     out: list[Cue] = []
     for i, c in enumerate(cues):
         start, end = c.start, c.end
-        if end - start < min_dur:
+        if end - start < want:
             limit = cues[i + 1].start - gap if i + 1 < len(cues) else float("inf")
-            end = max(end, min(start + min_dur, limit))
-            if end - start < min_dur:
+            end = max(end, min(start + want, limit))
+            if end - start < want:
                 floor = out[-1].end + gap if out else 0.0
-                start = min(start, max(end - min_dur, start - lead, floor))
+                start = min(start, max(end - want, start - lead, floor))
+            if end - start < want and out and start - c.start > -2 * lead:
+                # câu trước sát quá → mượn đuôi câu trước nếu nó còn dài hơn min_dur (vd «Không bắt» 0,6 s kẹp giữa)
+                prev = out[-1]
+                take = min(want - (end - start), prev.end - prev.start - want, start - (c.start - 2 * lead))
+                if take > 0.01:
+                    prev.end -= take
+                    start = max(prev.end + gap, start - take)
         out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
     return out
 

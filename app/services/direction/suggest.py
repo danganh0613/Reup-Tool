@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,6 +27,9 @@ _BATCH = 60
 _GROQ_BATCH = 40                 # Groq gói miễn phí: ~1000 token ra mỗi phút
 _TOKENS_PER_LINE = 20            # [12, "ngac_nhien", 3], — đo ~14–16 token
 DEFAULT_STYLE = "tan_phiem"
+#: số cặp (cảm xúc, bậc) tối đa cả video — mỗi cặp là một lời dặn riêng = một lượt đọc gộp riêng của Gemini TTS
+#: (đo: không giới hạn → 15 cặp cho 77 câu, nhiều cặp chỉ 1 câu = 1 lượt gọi riêng; giọng kể cũng nhảy cảm xúc quá nhiều)
+PALETTE = 6
 
 
 def sidecar_path(srt_path: str | Path) -> Path:
@@ -76,7 +80,8 @@ def direction_for(emotion_id: str, level: int, style_id: str) -> dict:
             "speaking_style": {"a": style_id, "b": "", "mix": 0.0}, "special": "", "temperature": None}
 
 
-def _prompt(rows: list[tuple[int, str, str]], style: str | None = None) -> str:
+def _prompt(rows: list[tuple[int, str, str]], style: str | None = None,
+            used: list[tuple[str, int]] | None = None) -> str:
     emo = ", ".join(f"{e['id']} ({e['vi']})" for e in emotions())
     lines = "\n".join(f"{i}. SOURCE: {src}\n   VI: {vi}" for i, src, vi in rows)
     if style:
@@ -84,11 +89,15 @@ def _prompt(rows: list[tuple[int, str, str]], style: str | None = None) -> str:
     else:
         sty = ", ".join(f"{s['id']} ({s['vi']})" for s in speaking_styles())
         rule, fmt = f"- style: ONE id for the whole video (same speaker throughout) from: {sty}\n", '"style": "<id>", '
+    reuse = (" Already used in earlier lines — reuse these whenever they fit: "
+             + ", ".join(f"{e} {lv}" for e, lv in used) + ".") if used else ""
     return (
         "You direct the Vietnamese voice-over of a short video (vlog / review / story). For EACH numbered line pick how "
         "it should be voiced.\n"
         f"- emotion: exactly one id from: {emo}\n"
         "- level: 1 (subtle) … 5 (extreme); most lines 2–3, use 4–5 only for real peaks\n"
+        f"- keep a SMALL palette like a real narrator: at most {PALETTE} different (emotion, level) pairs for the whole "
+        f"video; repeated / similar lines get the same pair.{reuse}\n"
         f"{rule}"
         f"Return ONLY compact JSON, one array per line, no indentation: "
         f"{{{fmt}\"items\": [[<line number>, \"<emotion id>\", <level 1-5>], …]}} with one array for EVERY line."
@@ -129,8 +138,9 @@ def suggest(src: list[str], vi: list[str], *, settings: Settings, log: Callable[
             if not todo or (cancel is not None and cancel.is_set()):
                 break
             rows = [(i + 1, src[i].replace("\n", " "), vi[i].replace("\n", " ")) for i in todo]
+            used = [p for p, _n in Counter(got.values()).most_common(PALETTE)]   # lô sau dùng lại bảng cảm xúc
             try:
-                data = _load_json(router.call(_prompt(rows, style), 80 + _TOKENS_PER_LINE * len(todo)))
+                data = _load_json(router.call(_prompt(rows, style, used), 80 + _TOKENS_PER_LINE * len(todo)))
             except ValueError as exc:                  # JSON hỏng (bị cắt giữa chừng) → hỏi lại
                 logger.warning("Gợi ý cảm xúc trả JSON hỏng: %s", exc)
                 continue
@@ -144,10 +154,11 @@ def suggest(src: list[str], vi: list[str], *, settings: Settings, log: Callable[
             for r in filter(None, map(_row, data.get("items") or [])):
                 i = _int(r[0], 0) - 1
                 if i in todo:
-                    got[i] = (r[1] if isinstance(r[1], str) and r[1] in em else "tram_lang", _int(r[2], 3))
+                    got[i] = (r[1] if isinstance(r[1], str) and r[1] in em else "tram_lang",
+                              max(1, min(5, _int(r[2], 3))))
     out = {i: direction_for(e_id, lv, style or DEFAULT_STYLE) for i, (e_id, lv) in sorted(got.items())}
     if log:
         name = next((s["vi"] for s in speaking_styles() if s["id"] == (style or DEFAULT_STYLE)), "")
-        log(f"Gợi ý cảm xúc: {len(out)}/{len(idxs)} câu · kiểu nói «{name}» "
+        log(f"Gợi ý cảm xúc: {len(out)}/{len(idxs)} câu · {len(set(got.values()))} kiểu cảm xúc · kiểu nói «{name}» "
             "(chỉnh lại được trên bánh xe Đạo diễn âm thanh)")
     return out
