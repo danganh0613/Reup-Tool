@@ -147,13 +147,18 @@ class STTModule(BaseModule):
         self.window.run_task(f"Tải model Whisper {size}", lambda _cancel: download_whisper_model(size, self.window.log_bg), done)
 
     def _layout_engine(self) -> None:
-        cloud = self.state.subtitle.stt_engine.startswith("Gemini")
-        self.engine_hint.configure(text="Gửi audio lên Gemini, không cần GPU (cần Gemini API key trong Cài đặt)"
-                                   if cloud else "Model chạy trên máy, không cần mạng")
+        eng = self.state.subtitle.stt_engine
+        hints = {"Gemini": "Gửi audio lên Gemini, không cần GPU (cần Gemini API key trong Cài đặt)",
+                 "SenseVoice": "Tiếng Trung chính xác hơn Whisper nhiều; chạy trên máy (CPU được), lần đầu tải model "
+                               "~0,9 GB. Tên riêng hiếm vẫn có thể sai — video có chữ in sẵn thì dùng OCR",
+                 "OCR": "Đọc phụ đề in sẵn trên video (Douyin…): đúng từng chữ, kể cả tên riêng. Video không có chữ "
+                        "in sẵn thì báo lỗi — chọn SenseVoice / Whisper"}
+        self.engine_hint.configure(text=next((t for k, t in hints.items() if eng.startswith(k)),
+                                             "Model chạy trên máy, không cần mạng"))
+        whisper = eng.startswith("Whisper")                # model / thiết bị / máy yếu chỉ dành cho Whisper
         for r in (self.model, self.device, self.weak):
-            r.menu.configure(state="disabled") if hasattr(r, "menu") and cloud else None
-            if hasattr(r, "menu") and not cloud:
-                r.menu.configure(state="normal")
+            if hasattr(r, "menu"):
+                r.menu.configure(state="normal" if whisper else "disabled")
 
     def _engine_changed(self, v: str) -> None:
         self.set_value(self.state.subtitle, "stt_engine", v, preview=False)

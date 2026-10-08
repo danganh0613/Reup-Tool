@@ -36,7 +36,8 @@ VIDEO_CODECS = ["H.264 / AVC", "H.265 / HEVC", "AV1"]
 ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
-STT_ENGINES = ["Whisper (local)", "Gemini (cloud)"]
+# SenseVoice: tiếng Trung chính xác hơn Whisper nhiều; OCR: đọc phụ đề in sẵn trên video (Douyin) — đúng từng chữ
+STT_ENGINES = ["Whisper (local)", "Gemini (cloud)", "SenseVoice (local, tiếng Trung)", "OCR phụ đề in sẵn"]
 TEXT_EFFECTS = ["Không có (Khuyên dùng)", "Viền đậm", "Bóng đổ", "Viền + bóng", "Phát sáng (glow)"]
 SUB_BG_STYLES = ["Không nền", "Hộp mờ bo góc", "Hộp đen", "Dải ngang toàn khung", "Bóng mềm"]
 TRANSLATE_PROVIDERS = ["Gemini", "Groq", "DeepSeek", "OpenAI"]
@@ -383,6 +384,7 @@ class Settings:
     tts_qc_asr: str = "auto"             # Whisper nghe lại: auto (có GPU + model sẵn) | on | off
     tts_fallback: str = "Edge TTS"       # câu lỗi hẳn thì đọc bằng engine này ("" = để trống câu đó)
     tts_batch: bool = True               # Gemini TTS: gộp ~25 câu một lượt gọi rồi tách lại (né giới hạn lượt/phút)
+    direction_suggest: bool = True       # dịch xong, AI gợi ý cảm xúc / kiểu nói từng câu (1 lượt gọi thêm)
     tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
     tts_fade_out_ms: int = 25
     tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên

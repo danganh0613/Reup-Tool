@@ -151,6 +151,9 @@ TOPICS: list[dict] = [
         ("h", "Làm thế nào?"),
         ("steps", [
             "Chọn «Nhận dạng» = Whisper (chạy ngay trên máy, không cần mạng sau lần đầu) hoặc Gemini (qua mạng, cần API key, không cần card màn hình).",
+            "Video tiếng Trung: chọn «SenseVoice» — đúng chữ và đúng nhịp nói hơn Whisper nhiều (lần đầu tải model ~0,9 GB). "
+            "Video Douyin có phụ đề in sẵn: chọn «OCR phụ đề in sẵn» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
+            "mốc thời gian lấy theo tiếng nói.",
             "Với Whisper, chọn Model: máy có card NVIDIA → «large-v3-turbo» (đúng nhất). Máy thường → «small». Lần đầu máy sẽ tải model, chờ vài phút.",
             "Ngôn ngữ để «auto» — máy tự nhận.",
             "Bấm «Tạo SRT từ Video trong hàng đợi». Xong sẽ thấy dòng «SRT: … cue». Bấm «Mở SRT» để xem chữ.",

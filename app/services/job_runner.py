@@ -88,6 +88,16 @@ class Pipeline:
                                     if self.state.settings.translate_provider == "Gemini" else "gemini-flash-latest",
                                     language=cfg.stt_language, work_dir=self.job_dir(item), on_progress=progress,
                                     log=log, cancel=cancel)
+        elif cfg.stt_engine.startswith("SenseVoice"):
+            from app.services.asr_funasr import transcribe as sensevoice_transcribe
+
+            res = sensevoice_transcribe(src, self.ffmpeg, language=cfg.stt_language, work_dir=self.job_dir(item),
+                                        on_progress=progress, log=log, cancel=cancel)
+        elif cfg.stt_engine.startswith("OCR"):
+            from app.services.ocr_hardsub import transcribe as ocr_transcribe
+
+            res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
+                                 log=log, cancel=cancel)
         else:
             from app.services.whisper_stt import transcribe
 
@@ -132,6 +142,17 @@ class Pipeline:
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")
+        if self.state.settings.direction_suggest and self.state.tts.enable_tts:
+            # gợi ý cảm xúc / kiểu nói cho từng câu (1 lượt gọi thêm) → bánh xe Đạo diễn âm thanh nạp sẵn
+            from app.services.direction import suggest
+
+            try:
+                items = suggest.suggest([c.plain for c in cues], [c.plain for c in out_cues],
+                                        settings=self.state.settings, log=log, cancel=cancel)
+                if items:
+                    suggest.save(out, items)
+            except Exception as exc:                   # noqa: BLE001 — phụ, không làm hỏng bước dịch
+                logger.warning("Không gợi ý được cảm xúc: %s", exc)
         return out_cues
 
     def translated_path(self, item: VideoItem) -> Path:
