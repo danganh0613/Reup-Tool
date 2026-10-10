@@ -27,8 +27,9 @@ BASE = "https://generativelanguage.googleapis.com/v1beta"
 CACHE_FILE = CACHE_DIR / "gemini_models.json"
 
 #: văn bản (dịch, viết kịch bản, STT cloud). «-latest» trước: không bao giờ bị gỡ.
-DEFAULT_TEXT = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-pro-latest", "gemini-3.1-flash-lite",
-                "gemini-flash-lite-latest"]
+#: «gemini-3.5-flash-lite»: gói miễn phí 500 lượt/ngày (Flash chỉ 20) — hợp để dịch phụ đề
+DEFAULT_TEXT = ["gemini-flash-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-pro-latest",
+                "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
 #: tạo ảnh (Nano Banana). Imagen 4 đã tắt.
 DEFAULT_IMAGE = ["gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"]
 #: tạo video (Veo 3.1). Veo 2 / 3.0 đã tắt.

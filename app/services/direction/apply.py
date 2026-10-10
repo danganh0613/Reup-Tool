@@ -68,11 +68,17 @@ class Director:
             return eng, vid, speed, pitch
         c = compiled_for(direction, faster=faster)
         if cfg.tts_provider.startswith("Gemini"):
-            from app.services.tts.gemini_tts import GeminiTTS
-
-            key = (cfg.gemini_tts_model, c.style_en, c.temperature)
+            live = cfg.tts_provider.startswith("Gemini Live")
+            key = ("live" if live else cfg.gemini_tts_model, c.style_en, c.temperature)
             g = self._gemini.get(key)
-            if g is None:
+            if g is None and live:               # Live: lời dặn nằm trong chỉ dẫn hệ thống của phiên
+                from app.services.tts.gemini_live import GeminiLiveTTS
+
+                g = self._gemini[key] = GeminiLiveTTS(self.settings.gemini_keys(), style=c.style_en,
+                                                      temperature=c.temperature)
+            elif g is None:
+                from app.services.tts.gemini_tts import GeminiTTS
+
                 g = self._gemini[key] = GeminiTTS(self.settings.gemini_keys(), model=cfg.gemini_tts_model,
                                                   style="Tự viết…", custom_style=c.style_en, temperature=c.temperature)
             self.styles[c.style_en] = self.styles.get(c.style_en, 0) + 1

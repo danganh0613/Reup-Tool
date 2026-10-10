@@ -38,7 +38,7 @@ GROQ_BATCH = 16
 def max_out(lines: int) -> int:
     """Số token trả ra tối đa cho một lô ``lines`` câu (JSON id + text)."""
     return 100 + 50 * max(1, lines)
-DEFAULT_MODELS = {"Gemini": "gemini-flash-latest", "Groq": groq_models.DEFAULT_TEXT[0], "DeepSeek": "deepseek-chat",
+DEFAULT_MODELS = {"Gemini": "gemini-3.5-flash-lite", "Groq": groq_models.DEFAULT_TEXT[0], "DeepSeek": "deepseek-chat",
                   "OpenAI": "gpt-4o-mini"}
 OPENAI_COMPAT = {"Groq": "https://api.groq.com/openai/v1/chat/completions",
                  "DeepSeek": "https://api.deepseek.com/chat/completions",
@@ -63,7 +63,8 @@ CONTEXT_LINES = 60                 # số câu gốc trước / sau lô gửi k�
 #: yêu cầu rút gọn câu dịch cho vừa thời lượng lồng tiếng (sau khi dịch, và khi giọng đọc vẫn tràn khung)
 SHORTEN_REQUEST = ("Shorten each line so it can be spoken within its voice-over time slot: stay within [max N chars], "
                    "keep the key meaning and the speaker's pronouns, natural spoken style, drop filler words and "
-                   "repetitions, add nothing new.")
+                   "repetitions, add nothing new. Never use abbreviations or symbols (write words in full — the line "
+                   "is read aloud by TTS), never cut a word or phrase off mid-way.")
 
 #: câu dịch còn sót chữ nguồn → yêu cầu dịch lại hết sang ngôn ngữ đích
 LEAK_REQUEST = ("The CURRENT translation still contains source-language (Chinese / Japanese / Korean) characters. "
@@ -117,7 +118,11 @@ def _keys(text: str) -> list[str]:
 
 
 #: model dự phòng cùng nhà cung cấp — dùng khi model chính quá tải (503) hoặc hết quota riêng của model đó
-ALT_MODELS = {"Gemini": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"],
+#: Gemini gói miễn phí (AI Studio › Rate limit, 10/2026): Flash Lite 3.5 / 3.1 = 15 lượt/phút · 500 lượt/ngày; các model
+#: Flash chỉ 5 / phút · 20 / ngày; Gemma 4 31B 30 / phút · 14.400 / ngày (16K token/phút). Dịch thử video mẫu: 3.5 Flash
+#: Lite 12 s / 4 lượt, đúng tên con vật hơn Groq qwen (双角犀鸟 → hồng hoàng, 钳嘴鹳 → cò nhạn)
+ALT_MODELS = {"Gemini": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.5-flash",
+                         "gemma-4-31b-it"],
               "Groq": ["qwen/qwen3.8-27b"], "DeepSeek": [], "OpenAI": ["gpt-4o-mini"]}
 #: model chỉ dùng khi mọi nhà cung cấp khác cũng hỏng — dịch thử Trung → Việt kém rõ (sai thành ngữ, tên con vật)
 LAST_RESORT = {"Groq": ["openai/gpt-oss-120b"]}
@@ -153,6 +158,8 @@ def _call_gemini(c: Candidate, prompt: str, timeout: float = 120, max_tokens: in
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{c.model}:generateContent"
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json"}}
+    if c.model.startswith("gemma"):              # Gemma không có chế độ JSON — lời nhắc đã đòi JSON, _load_json tự bóc
+        del body["generationConfig"]["responseMimeType"]
     r = requests.post(url, params={"key": c.key}, json=body, timeout=timeout)
     if r.status_code in (401, 402, 403, 429):
         raise _quota_error(r, "Gemini")

@@ -219,8 +219,12 @@ class TTSModule(BaseModule):
                                 "Service Account JSON trong Cài đặt.",
             "FPT.AI": "FPT.AI: giọng Việt 3 miền (Bắc / Trung / Nam), cần key console.fpt.ai trong Cài đặt.",
         }
-        if p.startswith("Gemini"):
-            hint_text = "Gemini TTS: 30 giọng đọc tiếng Việt tự nhiên, chỉnh phong cách & giọng miền bằng lời dặn."
+        if p.startswith("Gemini Live"):
+            hint_text = ("Gemini Live: cùng 30 giọng Gemini, gói miễn phí KHÔNG giới hạn lượt (Gemini TTS chỉ 10 lượt/ngày "
+                         "mỗi model). Đọc từng câu, vài câu song song; câu đọc sai tự đọc lại. Dùng key Gemini trong Cài đặt.")
+        elif p.startswith("Gemini"):
+            hint_text = ("Gemini TTS: 30 giọng đọc tiếng Việt tự nhiên, chỉnh phong cách & giọng miền bằng lời dặn. Gói miễn "
+                         "phí: 3 lượt/phút · 10 lượt/ngày mỗi model (máy tự gộp ~25 câu một lượt).")
         elif p.startswith("VieNeu"):
             hint_text = "VieNeu: 25 giọng tiếng Việt chạy local (Bắc / Trung / Nam), có clone giọng."
         else:
@@ -246,6 +250,11 @@ class TTSModule(BaseModule):
                 self.gemini_custom.pack(fill="x", pady=3, after=self.gemini_style)
         else:
             self.gemini_custom.pack_forget()
+        if self.state.tts.tts_provider.startswith("Gemini Live"):      # Live tự chọn model Live (không phải model TTS)
+            self.gemini_model.pack_forget()
+        elif not self.gemini_model.winfo_manager():
+            prev = self.gemini_custom if self.gemini_custom.winfo_manager() else self.gemini_style
+            self.gemini_model.pack(fill="x", pady=3, after=prev)
 
     def _gemini_style_changed(self, v: str) -> None:
         self.set_value(self.state.tts, "gemini_style", v, preview=False)

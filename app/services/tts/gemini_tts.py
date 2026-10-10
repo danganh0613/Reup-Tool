@@ -76,6 +76,12 @@ BATCH_PROMPT = ("[Lời dặn cách đọc — chỉ để định giọng, KHÔ
 _working_model: dict[str, str] = {}     # model chọn → model thật sự dùng được (sau khi tự thử model kế tiếp)
 #: (model, key) → hết lượt NGÀY tới thời điểm này (time.time()): không gọi lại key đó cho model đó tới lúc hồi
 _exhausted: dict[tuple[str, str], float] = {}
+#: gói miễn phí (AI Studio › Rate limit, 10/2026): mọi model TTS 3 lượt/phút · 10 lượt/ngày; 2.5 Pro TTS = 0 → không
+#: tự chuyển sang (chỉ dùng khi người dùng chọn — key có trả phí)
+NO_AUTO_FALLBACK = {"gemini-2.5-pro-preview-tts"}
+MINUTE_GAP = 60.0 / 3 + 1.0       # đã gặp 429 «giới hạn phút» với (model, key) → giữ nhịp ≤ 3 lượt/phút cho cặp đó
+_last_call: dict[tuple[str, str], float] = {}
+_paced: set[tuple[str, str]] = set()
 _lock = threading.Lock()
 
 
@@ -157,7 +163,7 @@ class GeminiTTS(TTSEngine):
     # ── Gọi API ───────────────────────────────────────────────────────────
     def _models(self) -> list[str]:
         first = _working_model.get(self.model, self.model)
-        return list(dict.fromkeys([first, self.model, *GEMINI_TTS_MODELS]))
+        return list(dict.fromkeys([first, self.model, *(m for m in GEMINI_TTS_MODELS if m not in NO_AUTO_FALLBACK)]))
 
     def _key(self) -> str:
         if not self.keys:
@@ -221,6 +227,11 @@ class GeminiTTS(TTSEngine):
                                    "ngày cho từng model, hồi lúc nửa đêm giờ Mỹ) — bật thanh toán cho key hoặc chọn "
                                    "nhà cung cấp khác. " + last[:120])
             key = alive[self._key_idx % len(alive)]
+            if (model, key) in _paced:                    # đã chạm giới hạn phút → đợi đủ nhịp, khỏi ăn thêm 429
+                gap = MINUTE_GAP - (time.time() - _last_call.get((model, key), 0.0))
+                if gap > 0:
+                    time.sleep(gap)
+            _last_call[(model, key)] = time.time()
             try:
                 r = requests.post(f"{BASE}/models/{model}:generateContent", headers={"x-goog-api-key": key},
                                   json=body, timeout=180)
@@ -251,6 +262,8 @@ class GeminiTTS(TTSEngine):
                         _exhausted[(model, key)] = time.time() + (delay if delay and delay > 60 else 6 * 3600)
                     logger.info("Gemini TTS: một key hết lượt hôm nay cho %s (còn %d key)", model, len(alive) - 1)
                     continue
+                with _lock:
+                    _paced.add((model, key))              # giới hạn phút → từ giờ giữ nhịp cho cặp này
             if r.status_code in (401, 403, 429):
                 # hết lượt / key lỗi → key kế tiếp; đã thử hết key thì đợi chút (giới hạn theo phút) rồi thử lại
                 tried_keys += 1

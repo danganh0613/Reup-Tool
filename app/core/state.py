@@ -61,8 +61,8 @@ POSITIONS = ["Trên trái", "Trên giữa", "Trên phải", "Giữa trái", "Ch�
 SAFE_ZONES = ["Toàn khung", "TikTok/Reels (né UI phải & dưới)"]
 KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → trái", "Trên → dưới"]
 
-TTS_PROVIDERS = ["Edge TTS", "Gemini TTS (Google AI)", "ElevenLabs", "Google Cloud TTS", "FPT.AI",
-                 "VieNeu (local, tiếng Việt)"]
+TTS_PROVIDERS = ["Edge TTS", "Gemini TTS (Google AI)", "Gemini Live (không giới hạn lượt)", "ElevenLabs",
+                 "Google Cloud TTS", "FPT.AI", "VieNeu (local, tiếng Việt)"]
 #: model Gemini TTS — model đầu không dùng được với key thì tự thử model kế tiếp
 # flash-lite trước: điểm tiếng Việt cao nhất trên Voice Arena, hợp lồng tiếng hàng loạt; flash cho cảnh cần diễn mạnh
 GEMINI_TTS_MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview",

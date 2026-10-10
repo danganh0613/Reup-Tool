@@ -109,6 +109,13 @@ def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
         from app.services.tts.vieneu import VieNeuTTS
 
         return VieNeuTTS(precision=settings.vieneu_precision)
+    if cfg.tts_provider.startswith("Gemini Live"):
+        from app.services.tts.gemini_live import GeminiLiveTTS
+        from app.services.tts.gemini_tts import style_prompt
+
+        temp = settings.gemini_tts_temperature
+        return GeminiLiveTTS(settings.gemini_keys(), style=style_prompt(cfg.gemini_style, cfg.gemini_style_custom),
+                             temperature=temp if temp > 0 else None)
     if cfg.tts_provider.startswith("Gemini"):
         from app.services.tts.gemini_tts import GeminiTTS
 
@@ -209,8 +216,10 @@ def speaker_configs(cfg: TTSConfig) -> dict[str, TTSConfig]:
             pitch = int(sv["pitch"]) if sv.get("pitch") is not None else None
         except (TypeError, ValueError):
             speed, pitch = 0.0, None
-        out[str(sv["name"])] = config_with_voice(cfg, str(sv.get("provider") or ""), str(sv["voice_id"]),
-                                                 str(sv.get("locale") or ""), speed, pitch)
+        prov = str(sv.get("provider") or "")
+        if prov.startswith("Gemini") and cfg.tts_provider.startswith("Gemini"):
+            prov = cfg.tts_provider          # cùng bộ giọng Gemini → đọc bằng engine đang chọn (Gemini TTS / Gemini Live)
+        out[str(sv["name"])] = config_with_voice(cfg, prov, str(sv["voice_id"]), str(sv.get("locale") or ""), speed, pitch)
     return out
 
 

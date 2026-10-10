@@ -202,7 +202,8 @@ TOPICS: list[dict] = [
             "«Đọc từ»: chọn «Sub đã dịch» (đọc tiếng Việt) hoặc «Sub gốc».",
             "Chọn «Nhà cung cấp»: Edge TTS miễn phí (HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ). "
             "Gemini TTS: 30 giọng rất tự nhiên, chọn «Phong cách» (review phim, kể chuyện, giọng miền Nam/Bắc…), dùng key Gemini; "
-            "máy tự gộp ~25 câu vào một lượt gọi rồi tách lại (né giới hạn lượt/phút của gói miễn phí). "
+            "máy tự gộp ~25 câu vào một lượt gọi rồi tách lại — gói miễn phí chỉ 3 lượt/phút · 10 lượt/ngày mỗi model (hết "
+            "model này máy tự sang model TTS kế). Gemini Live: cùng 30 giọng, gói miễn phí KHÔNG giới hạn lượt, đọc từng câu. "
             "VieNeu: 25 giọng Việt 3 miền chạy trên máy. FPT.AI: giọng Việt 3 miền. ElevenLabs: có thư viện giọng Việt "
             "🌐 cộng đồng chia sẻ. Google Cloud: 30 giọng Chirp3-HD.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
