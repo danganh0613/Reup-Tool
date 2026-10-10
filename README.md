@@ -78,7 +78,9 @@ presets/  cache/  models/  logs/  voices/(giọng clone)
 build.bat        # PyInstaller → dist/EditStudio/EditStudio.exe (kèm bin/ffmpeg, app/assets, presets)
 ```
 
-### macOS (chip Apple M1–M4 và Mac Intel)
+### macOS (chip Apple M1–M4)
+
+Mac chip Intel không còn được hỗ trợ (PyTorch / PaddlePaddle đã ngừng phát hành bản cho Mac Intel).
 
 Cùng một bộ mã nguồn; khác biệt theo hệ điều hành gom ở `app/core/platform.py` (mở file, phát WAV, cờ subprocess):
 
@@ -94,13 +96,13 @@ Cùng một bộ mã nguồn; khác biệt theo hệ điều hành gom ở `app/
 Workflow `.github/workflows/build.yml` build song song trên máy của GitHub Actions, chạy thử rồi đóng gói (kèm FFmpeg):
 
 - **Windows**: `EditStudio-<ver>-win64-Lite.zip` (không CUDA) — chạy thử `EditStudio.exe --selftest`.
-- **macOS**: `EditStudio-<ver>-macOS-arm64.dmg` (chip Apple, máy `macos-14`) và `EditStudio-<ver>-macOS-x86_64.dmg`
-  (Mac Intel, máy `macos-15-intel`) — chạy thử `--selftest`, mở giao diện 30 giây; phiên bản macOS tối thiểu được đo từ
-  các thư viện thật trong gói rồi ghi vào `Info.plist` và hướng dẫn trong DMG.
+- **macOS**: `EditStudio-<ver>-macOS-arm64.dmg` (chip Apple, máy `macos-14`) — chạy thử `--selftest`, mở giao diện
+  30 giây; phiên bản macOS tối thiểu được đo từ các thư viện thật trong gói rồi ghi vào `Info.plist` và hướng dẫn trong DMG.
 - Cả hai: kiểm tra FFmpeg có libass và phụ đề hiện chữ thật (`tools/ci_check_ffmpeg.py`).
 
-- Mỗi pull request / push lên `main`: tab **Actions** → lần chạy **Build** → mục **Artifacts** → tải ZIP / DMG (giữ 7 ngày).
-- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP + 2 DMG, tải lâu dài.
+- Pull request: chỉ dựng + chạy thử, không tải file lên (bộ nhớ Artifacts của tài khoản có hạn).
+- Push lên `main` / chạy tay: tab **Actions** → lần chạy **Build** → mục **Artifacts** → tải ZIP / DMG (giữ 2 ngày).
+- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP + DMG, tải lâu dài.
 - Chạy tay: **Actions** → **Build** → **Run workflow**.
 
 Windows: giải nén rồi chạy `EditStudio.exe` (hướng dẫn `DOC_TRUOC.txt`). macOS: mở DMG, kéo app vào Applications

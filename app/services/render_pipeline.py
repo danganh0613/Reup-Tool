@@ -577,7 +577,7 @@ def master_audio(ffmpeg: FFmpeg, src: Path, dst: Path, *, target: float | None, 
 # ── Encoder ───────────────────────────────────────────────────────────────
 
 if sys.platform == "darwin":
-    HW_BACKENDS: tuple[str, ...] = ("videotoolbox",)       # Apple Silicon / Mac Intel: bộ mã hóa phần cứng của macOS
+    HW_BACKENDS: tuple[str, ...] = ("videotoolbox",)       # chip Apple: bộ mã hóa phần cứng của macOS
 else:
     HW_BACKENDS = ("nvenc", "qsv", "amf")     # NVIDIA · Intel (kể cả iGPU) · AMD (kể cả APU)
 BACKEND_LABEL = {"nvenc": "NVENC (NVIDIA)", "qsv": "QSV (Intel)", "amf": "AMF (AMD)", "videotoolbox": "VideoToolbox (Apple)"}

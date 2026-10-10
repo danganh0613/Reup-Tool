@@ -1,6 +1,9 @@
-# Đóng gói Edit Studio cho Windows (ZIP) và macOS chip Apple + Intel (DMG) — build song song trên máy của GitHub.
-#   • Mỗi pull request / push lên main: file nằm ở mục «Artifacts» của lần chạy (giữ 7 ngày).
-#   • Đẩy tag v* (vd. v1.0.1): tạo GitHub Release kèm ZIP Windows + 2 DMG macOS (arm64, x86_64).
+# Đóng gói Edit Studio cho Windows (ZIP) và macOS chip Apple (DMG) — build song song trên máy của GitHub.
+# Bản macOS Intel đã ngừng phát triển (PyTorch / PaddlePaddle không còn bản cho Mac Intel).
+#   • Pull request: dựng + chạy thử đầy đủ nhưng KHÔNG tải file lên (bộ nhớ Artifacts của tài khoản có hạn — mỗi
+#     bản vài trăm MB, hết chỗ là cả lần chạy báo lỗi dù dựng thành công).
+#   • Push lên main / chạy tay: file nằm ở mục «Artifacts» của lần chạy (giữ 2 ngày; hết chỗ thì bỏ qua, không lỗi).
+#   • Đẩy tag v* (vd. v1.0.1): tạo GitHub Release kèm ZIP Windows + DMG macOS arm64 (tải lên bắt buộc thành công).
 #   • Chạy tay: tab Actions → Build → Run workflow.
 name: Build
 
@@ -118,13 +121,15 @@ jobs:
           "PKG_NAME=$name" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        continue-on-error: ${{ github.ref_type != 'tag' }}
         with:
           name: ${{ env.PKG_NAME }}
           path: |
             release/${{ env.PKG_NAME }}.zip
             release/SHA256-windows.txt
           compression-level: 0
-          retention-days: 7
+          retention-days: 2
 
   macos:
     name: macOS ${{ matrix.label }} (DMG)
@@ -135,7 +140,6 @@ jobs:
       matrix:
         include:
           - { label: "Apple Silicon", runner: macos-14, arch: arm64, ffarch: arm64 }
-          - { label: "Intel", runner: macos-15-intel, arch: x86_64, ffarch: amd64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -249,13 +253,15 @@ jobs:
           echo "PKG_NAME=$NAME" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        continue-on-error: ${{ github.ref_type != 'tag' }}
         with:
           name: ${{ env.PKG_NAME }}
           path: |
             release/${{ env.PKG_NAME }}.dmg
             release/SHA256-macos-${{ matrix.arch }}.txt
           compression-level: 0
-          retention-days: 7
+          retention-days: 2
 
   release:
     name: GitHub Release (tag v*)

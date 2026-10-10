@@ -10,20 +10,13 @@ from functools import lru_cache
 
 
 def _mac_chip() -> str | None:
-    """macOS: «Apple M2 Pro» (GPU nằm chung chip) hoặc tên card rời trên máy Intel."""
+    """macOS: «Apple M2 Pro» (GPU nằm chung chip)."""
     try:
         out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
                              timeout=5).stdout.strip()
-        if out.startswith("Apple"):
-            return out
-        out = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True,
-                             timeout=15).stdout
-        for line in out.splitlines():
-            if "Chipset Model:" in line:
-                return line.split(":", 1)[1].strip()
+        return out if out.startswith("Apple") else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 @lru_cache(maxsize=1)

@@ -75,7 +75,7 @@ exe = EXE(
     upx=False,
     console=False,
     icon=str(ROOT / "app" / "assets" / ("icon.icns" if MAC else "icon.ico")),
-    target_arch=None,          # build theo kiến trúc của máy build: arm64 (chip Apple) hoặc x86_64 (Mac Intel)
+    target_arch=None,          # build theo kiến trúc của máy build (macOS: arm64 — chip Apple; Mac Intel đã ngừng)
 )
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="EditStudio")
 if MAC:

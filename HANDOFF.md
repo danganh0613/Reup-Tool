@@ -5,7 +5,8 @@
 ## Trạng thái
 
 - **Nhánh làm việc:** `claude/macos-apple-silicon`, mở PR #2 (`danganh0613/Reup-Tool#2`), **chưa merge**.
-- **Commit mới nhất:** `31d0e81`. CI xanh: Windows ZIP, macOS Apple Silicon DMG, macOS Intel DMG.
+- **Commit mới nhất:** `31d0e81`. CI xanh: Windows ZIP, macOS Apple Silicon DMG. (Bản macOS Intel đã ngừng từ
+  2026-10-10 — PyTorch / PaddlePaddle không còn bản cho Mac Intel.)
 - **Máy local:** `F:\Project\Edit Studio` (Windows, PowerShell). Chạy app bằng `python main.py`.
 - **Bảo mật:** không đưa API key vào chat hay code. Key chỉ nhập trong app: ☰ Cài đặt.
 
@@ -39,7 +40,7 @@
 
 ## Những gì đã làm trên cloud (cũ → mới)
 
-1. **Hỗ trợ macOS** Apple Silicon + Intel (DMG) và CI build cả 3 nền tảng.
+1. **Hỗ trợ macOS** Apple Silicon (DMG) và CI build Windows + macOS.
 2. **Nhiều giọng:**
    - nhận diện ai nói câu nào (`app/services/diarize.py`);
    - mỗi người nói một giọng (`app/ui/widgets/speaker_panel.py`);

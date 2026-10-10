@@ -2,9 +2,8 @@ EDIT STUDIO — BẢN macOS (__ARCH__ · cần macOS __MACOS_MIN__ trở lên)
 ==================================================================
 
 CHỌN ĐÚNG BẢN
-  • Mac chip Apple (M1/M2/M3/M4): file …-macOS-arm64.dmg
-  • Mac chip Intel (đời 2020 trở về trước): file …-macOS-x86_64.dmg
-  Xem chip: menu Apple () → Giới thiệu về máy Mac này → dòng "Chip" (Apple M…) hoặc "Bộ xử lý" (Intel…).
+  • Chỉ dành cho Mac chip Apple (M1/M2/M3/M4): file …-macOS-arm64.dmg. Mac chip Intel không còn được hỗ trợ.
+  Xem chip: menu Apple () → Giới thiệu về máy Mac này → dòng "Chip" (Apple M…).
 
 CÀI ĐẶT
   1. Mở file .dmg vừa tải → kéo biểu tượng "Edit Studio" vào thư mục "Applications".
@@ -21,10 +20,8 @@ LẦN MỞ ĐẦU TIÊN: macOS BÁO "KHÔNG THỂ MỞ" / "KHÔNG XÁC MINH ĐƯ
 
 MÁY CẦN GÌ?
   • Không cần cài Python hay FFmpeg — đã có sẵn trong app.
-  • Render dùng bộ mã hóa phần cứng VideoToolbox của macOS (chip Apple, hoặc GPU Intel/AMD trên Mac Intel);
-    máy nào không dùng được thì tự chuyển sang CPU.
+  • Render dùng bộ mã hóa phần cứng VideoToolbox của chip Apple; không dùng được thì tự chuyển sang CPU.
   • Nhận dạng giọng nói (Whisper) chạy bằng CPU. Lần đầu tự tải model (cần Internet).
-    Mac Intel sẽ chậm hơn chip Apple đáng kể — nên chọn model nhỏ (small) hoặc dùng STT «Gemini (cloud)».
   • API key (Gemini, ElevenLabs, Google…): nhập trong Cài đặt.
 
 DỮ LIỆU CỦA BẠN NẰM Ở ĐÂU?
