@@ -515,12 +515,10 @@ class MainWindow(_Root):
             win.deiconify()
             win.lift()
             win.focus_force()
-            if tab == "shortcuts":
-                win._switch_tab(win.TAB_GUIDE)
-            elif tab == "model":
+            if tab == "model":
                 win.focus_model()
-            elif tab == "local":
-                win._switch_tab(win.TAB_SETTINGS)
+            elif tab:
+                win.show_page({"shortcuts": "guide"}.get(tab, tab))
             return
         self._settings_win = SettingsWindow(self, tab=tab)
 
@@ -533,7 +531,7 @@ class MainWindow(_Root):
         T.apply_theme(st.theme)
         self.rebuild_ui()
         self.log(f"Đã đổi giao diện: {T.THEMES[st.theme]['name']}.")
-        self.after(150, lambda: self.open_settings())
+        self.after(150, lambda: self.open_settings(tab="look"))    # mở lại đúng trang Giao diện
 
     def rebuild_ui(self) -> None:
         """Hủy mọi widget và dựng lại (dùng khi đổi theme). Job/preview state nằm trong AppState nên không mất gì."""

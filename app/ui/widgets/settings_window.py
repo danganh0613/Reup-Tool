@@ -55,8 +55,14 @@ GUIDE = [
 ]
 
 
+#: trang (khoá, tên, icon) — menu bên trái, mỗi lần hiện một trang
+PAGES = [("local", "AI trên máy", "gpu"), ("cloud", "AI dùng API key", "lock"), ("export", "Xuất video", "export"),
+         ("look", "Giao diện", "color"), ("storage", "Bộ nhớ & nâng cao", "folder"),
+         ("guide", "Phím tắt & hướng dẫn", "keyboard")]
+
+
 class SettingsWindow(ctk.CTkToplevel):
-    TAB_SETTINGS, TAB_GUIDE = "⚙ Cài đặt", "📖 Phím tắt & Hướng dẫn"
+    NAV_W = 224
 
     def __init__(self, window, tab: str | None = None) -> None:
         super().__init__(window)
@@ -64,40 +70,58 @@ class SettingsWindow(ctk.CTkToplevel):
         self.app_state = window.app_state
         st = self.app_state.settings
         self.title(f"Cài đặt — Edit Studio v{APP_VERSION}")
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{min(1700, sw - 60)}x{min(1000, sh - 100)}+30+30")
-        self.minsize(1100, 700)
+        w, h = min(1060, self.winfo_screenwidth() - 80), min(800, self.winfo_screenheight() - 120)
+        try:                                       # giữa cửa sổ chính
+            x = window.winfo_rootx() + max(0, (window.winfo_width() - w) // 2)
+            y = window.winfo_rooty() + max(0, (window.winfo_height() - h) // 3)
+        except Exception:                          # noqa: BLE001
+            x, y = 40, 40
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.minsize(900, 600)
         self.after(50, self.lift)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         self._nvidia = False
+        self.page = ""
 
-        top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
-        self.tabs = ctk.CTkSegmentedButton(top, values=[self.TAB_SETTINGS, self.TAB_GUIDE], command=self._switch_tab,
-                                           font=T.font(12, "bold"))
-        self.tabs.pack(side="left")
-        ctk.CTkLabel(top, text=f"v{APP_VERSION}", font=T.font(12, "bold"), fg_color=T.BG_CARD, corner_radius=6,
-                     width=90, height=30).pack(side="right")
+        # ── Menu trái ──
+        nav = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=0, width=self.NAV_W)
+        nav.grid(row=0, column=0, rowspan=2, sticky="nsw")
+        nav.pack_propagate(False)
+        ctk.CTkLabel(nav, text="Cài đặt", font=T.font(17, "bold"), anchor="w").pack(fill="x", padx=20, pady=(18, 12))
+        self.nav_items: dict[str, tuple] = {}
+        for key, label, ic in PAGES:
+            self._nav_item(nav, key, label, ic)
+        ctk.CTkLabel(nav, text=f"Edit Studio v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED,
+                     anchor="w").pack(side="bottom", fill="x", padx=20, pady=14)
 
-        self.page_settings = ctk.CTkFrame(self, fg_color="transparent")
-        self.page_guide: ctk.CTkScrollableFrame | None = None     # dựng khi mở tab hướng dẫn lần đầu (~150 widget)
-        self._build_settings(self.page_settings, st)
+        # ── Các trang (Phím tắt & hướng dẫn dựng khi mở lần đầu — ~150 widget) ──
+        self.pages: dict[str, ctk.CTkScrollableFrame] = {
+            k: ctk.CTkScrollableFrame(self, fg_color="transparent") for k, *_ in PAGES if k != "guide"}
+        self._build_local(self.pages["local"], st)
+        self._build_cloud(self.pages["cloud"], st)
+        self._build_export(self.pages["export"], st)
+        self._build_look(self.pages["look"], st)
+        self._build_storage(self.pages["storage"], st)
 
         foot = ctk.CTkFrame(self, fg_color="transparent")
-        foot.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 12))
-        ctk.CTkLabel(foot, text=" Bấm «Lưu tất cả» để áp dụng. Key chỉ lưu trên máy này (settings.json).",
+        foot.grid(row=1, column=1, sticky="ew", padx=(18, 16), pady=(6, 12))
+        ctk.CTkLabel(foot, text=" Bấm «Lưu tất cả» để áp dụng. Key chỉ lưu trên máy này.",
                      image=icon(EMOJI_ICONS["💡"], 14, dy=1), compound="left", font=T.font(11),
                      text_color=T.TEXT_MUTED).pack(side="left")
-        ctk.CTkButton(foot, text="Đóng", width=110, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
+        ctk.CTkButton(foot, text="Đóng", width=100, height=36, command=self._close, **T.secondary_button()).pack(side="right")
         button(foot, "Lưu tất cả", icon_name="save", variant="primary", command=self._save).pack(side="right", padx=8)
-        self._switch_tab(self.TAB_GUIDE if tab == "shortcuts" else self.TAB_SETTINGS)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self._badge("cloud", "" if st.gemini_keys() else "!")
+        self.show_page({"shortcuts": "guide", "model": "cloud"}.get(tab or "", tab or "local"))
+        self._initial = self._values()
+        self.after(200, self._scan_machine)
         if tab == "model":
             self.after(150, self.focus_model)
 
     def focus_model(self) -> None:
         """Từ nút «Chọn model…» (model đang chọn hết lượt / quá tải): chỉ đúng chỗ đổi model."""
-        self._switch_tab(self.TAB_SETTINGS)
+        self.show_page("cloud")
         self.models_status.configure(text="⬆ Model đang chọn hết lượt / quá tải — chọn model khác ở ô «Model» rồi bấm "
                                           "«Lưu tất cả».", text_color=T.WARNING)
         try:
@@ -105,25 +129,82 @@ class SettingsWindow(ctk.CTkToplevel):
         except Exception:                          # noqa: BLE001 — chỉ là đưa con trỏ tới, không quan trọng
             pass
 
-    def _switch_tab(self, name: str) -> None:
-        guide = name == self.TAB_GUIDE
-        self.tabs.set(name)
-        if guide and self.page_guide is None:
-            self.page_guide = ctk.CTkScrollableFrame(self, fg_color="transparent")
-            self._build_guide(self.page_guide)
-        self.page_settings.grid_forget()
-        if self.page_guide is not None:
-            self.page_guide.grid_forget()
-        (self.page_guide if guide else self.page_settings).grid(row=1, column=0, sticky="nsew", padx=14)
+    # ── Menu trái ────────────────────────────────────────────────────────
+    def _nav_item(self, nav, key: str, label: str, icon_name: str) -> None:
+        row = ctk.CTkFrame(nav, fg_color="transparent", corner_radius=T.RADIUS, height=40)
+        row.pack(fill="x", padx=10, pady=1)
+        row.pack_propagate(False)
+        ic = ctk.CTkLabel(row, text="", width=22, image=icon(icon_name, 16, T.TEXT_DIM, dy=1))
+        ic.pack(side="left", padx=(10, 8))
+        txt = ctk.CTkLabel(row, text=label, font=T.font(13), text_color=T.TEXT_DIM, anchor="w")
+        txt.pack(side="left", fill="x", expand=True)
+        badge = ctk.CTkLabel(row, text="", font=T.font(11, "bold"), text_color=T.WARNING, width=10)
+        badge.pack(side="right", padx=(0, 12))
+        for w in (row, ic, txt, badge):
+            w.bind("<Button-1>", lambda _e, k=key: self.show_page(k))
+            w.bind("<Enter>", lambda _e, k=key: self._nav_paint(k, hover=True))
+            w.bind("<Leave>", lambda _e, k=key: self._nav_paint(k))
+            try:
+                w.configure(cursor="hand2")
+            except Exception:                      # noqa: BLE001
+                pass
+        self.nav_items[key] = (row, ic, txt, badge, icon_name)
+
+    def _nav_paint(self, key: str, hover: bool = False) -> None:
+        row, ic, txt, _badge, name = self.nav_items[key]
+        on = key == self.page
+        row.configure(fg_color=T.ACCENT_SOFT if on else (T.BG_HOVER if hover else "transparent"))
+        txt.configure(text_color=T.ACCENT if on else (T.TEXT if hover else T.TEXT_DIM),
+                      font=T.font(13, "medium" if on else "normal"))
+        ic.configure(image=icon(name, 16, T.ACCENT if on else (T.TEXT if hover else T.TEXT_DIM), dy=1))
+
+    def _badge(self, key: str, text: str) -> None:
+        """Nhãn nhắc trên menu (vd số phần AI chưa cài, «!» khi chưa có key)."""
+        self.nav_items[key][3].configure(text=text)
+
+    def show_page(self, key: str) -> None:
+        key = key if key in self.nav_items else "local"
+        if key == "guide" and "guide" not in self.pages:
+            self.pages["guide"] = ctk.CTkScrollableFrame(self, fg_color="transparent")
+            self._build_guide(self.pages["guide"])
+        for k, p in self.pages.items():
+            if k != key:
+                p.grid_forget()
+        self.pages[key].grid(row=0, column=1, sticky="nsew", padx=(18, 12), pady=(14, 0))
+        self.page = key
+        for k in self.nav_items:
+            self._nav_paint(k)
+
+    # ── Đóng / thay đổi chưa lưu ─────────────────────────────────────────
+    def _values(self) -> tuple:
+        """Giá trị các ô cần «Lưu tất cả» (giao diện đổi là lưu ngay nên không tính) — đóng mà khác thì hỏi lưu."""
+        return (self.toast.get(), self.ffmpeg.get().strip(), self.ffprobe.get().strip(), self.vieneu.get(),
+                float(self.loudness.get()), self.waveform.get(), self.tr_model.get().strip(),
+                tuple(self.app_state.settings.split_keys(self._key_text())), self.glossary.get("1.0", "end").strip(),
+                self.out_var.get().strip())
+
+    def _close(self) -> None:
+        try:
+            dirty = self._values() != self._initial
+        except Exception:                          # noqa: BLE001 — cửa sổ đang huỷ dở
+            dirty = False
+        if dirty:
+            ans = messagebox.askyesnocancel("Cài đặt", "Lưu các thay đổi trước khi đóng?", parent=self)
+            if ans is None:
+                return
+            if ans:
+                self._save()
+                return
+        self.destroy()
 
     # ── Khung ────────────────────────────────────────────────────────────
     def _card(self, parent, title: str, *, sub: str = "", info: str = "") -> ctk.CTkFrame:
         """Thẻ có tiêu đề (``sub``: tên thành phần, chữ nhỏ; ``info``: giải thích dài trong ⓘ)."""
         card = ctk.CTkFrame(parent, fg_color=T.BG_CARD, corner_radius=10, border_width=1, border_color=T.BORDER_SOFT)
-        card.pack(fill="x", pady=6)
+        card.pack(fill="x", pady=5)
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=14, pady=(10, 0))
-        ctk.CTkLabel(head, text=title, font=T.font(13, "bold"), text_color=T.ACCENT, anchor="w").pack(side="left")
+        ctk.CTkLabel(head, text=title, font=T.font(13, "bold"), text_color=T.TEXT, anchor="w").pack(side="left")
         if sub:
             ctk.CTkLabel(head, text=sub, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(side="left", padx=(6, 0))
         if info:
@@ -132,10 +213,10 @@ class SettingsWindow(ctk.CTkToplevel):
         body.pack(fill="x", padx=12, pady=(4, 12))
         return body
 
-    def _col_title(self, parent, text: str, sub: str) -> None:
-        ctk.CTkLabel(parent, text=text, font=T.font(14, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=4, pady=(6, 0))
-        ctk.CTkLabel(parent, text=sub, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", justify="left",
-                     wraplength=440).pack(fill="x", padx=4, pady=(0, 2))
+    def _page_head(self, parent, title: str, sub: str) -> None:
+        ctk.CTkLabel(parent, text=title, font=T.font(18, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=4)
+        ctk.CTkLabel(parent, text=sub, font=T.font(12), text_color=T.TEXT_MUTED, anchor="w", justify="left",
+                     wraplength=760).pack(fill="x", padx=4, pady=(0, 6))
 
     @staticmethod
     def _status_row(body) -> tuple[StatusLabel, ctk.CTkFrame]:
@@ -146,21 +227,10 @@ class SettingsWindow(ctk.CTkToplevel):
         status.pack(side="left", fill="x", expand=True)
         return status, row
 
-    def _build_settings(self, page, st) -> None:
-        page.grid_columnconfigure((0, 1, 2), weight=1, uniform="col")
-        page.grid_rowconfigure(0, weight=1)
-        cols = [ctk.CTkScrollableFrame(page, fg_color="transparent") for _ in range(3)]
-        for i, c in enumerate(cols):
-            c.grid(row=0, column=i, sticky="nsew", padx=4)
-        self._build_local(cols[0], st)
-        self._build_cloud(cols[1], st)
-        self._build_general(cols[2], st)
-        self.after(200, self._scan_machine)
-
-    # ── Cột 1: AI trên máy ───────────────────────────────────────────────
+    # ── Trang: AI trên máy ───────────────────────────────────────────────
     def _build_local(self, c, st) -> None:
-        self._col_title(c, "🖥  AI trên máy", "Miễn phí, không giới hạn lượt, không cần mạng sau khi cài. Có GPU NVIDIA "
-                                             "thì nhanh hơn nhiều.")
+        self._page_head(c, "AI trên máy", "Miễn phí, không giới hạn lượt, không cần mạng sau khi cài. Có GPU NVIDIA thì "
+                                          "nhanh hơn nhiều.")
         b = self._card(c, "Máy này", info="Card đồ hoạ quyết định tốc độ của mọi phần AI trên máy. GPU NVIDIA cần thêm "
                                           "CUDA runtime (một lần) để Whisper chạy trên GPU.")
         self.gpu_status = StatusLabel(b, "Đang kiểm tra card đồ hoạ…")
@@ -187,6 +257,11 @@ class SettingsWindow(ctk.CTkToplevel):
                                 labels={"int8": "Nhanh", "fp32": "Cao (chậm hơn)"},
                                 info="Nhanh: đủ tốt cho hầu hết video. Cao: giọng mượt hơn một chút nhưng đọc chậm hơn.")
         self.vieneu.pack(fill="x", pady=(6, 0))
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 0))
+        button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron).pack(side="left")
+        info_icon(row, "Mở pronunciation.json: «chữ viết»: «cách đọc», vd \"ANC\": \"ây en xi\". Áp cho mọi giọng — lưu file "
+                       "rồi tạo lại giọng.").pack(side="left", padx=(6, 0))
 
         b = self._card(c, "Kiểm lỗi giọng đọc", sub="Whisper",
                        info="Máy nghe lại từng câu vừa lồng tiếng để bắt câu đọc sai, đọc thiếu rồi đọc lại; cũng dùng "
@@ -206,9 +281,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.small_status = StatusLabel(b, "")
         self.small_status.pack(fill="x")
 
-    # ── Cột 2: AI dùng API key ───────────────────────────────────────────
+    # ── Trang: AI dùng API key ───────────────────────────────────────────
     def _build_cloud(self, c, st) -> None:
-        self._col_title(c, "☁  AI dùng API key", "Cần mạng. Gói miễn phí có giới hạn lượt mỗi ngày.")
+        self._page_head(c, "AI dùng API key", "Cần mạng. Gói miễn phí có giới hạn lượt mỗi ngày.")
         b = self._card(c, "Gemini", info="Dùng để: dịch phụ đề (2 bước, sát nghĩa rồi tự nhiên), tách câu nhận diện quá "
                                          "dài, «Nhờ AI sửa», rút gọn câu đọc không kịp, viết kịch bản Dựng truyện. "
                                          "Gói miễn phí: Google có thể dùng chữ bạn gửi để cải thiện sản phẩm — đừng gửi "
@@ -279,43 +354,40 @@ class SettingsWindow(ctk.CTkToplevel):
         """Key thật (ô đang che thì lấy bản đã lưu, không lấy chữ đã che)."""
         return self.gemini_keys.get("1.0", "end").strip() if self._keys_shown else self._keys_real
 
-    # ── Cột 3: Chung ─────────────────────────────────────────────────────
-    def _build_general(self, c, st) -> None:
-        self._col_title(c, "⚙  Chung", "Thư mục xuất, âm thanh, giao diện, bộ nhớ tạm.")
-        b = self._card(c, "Xuất video", info="Bộ mã hoá GPU, chuẩn nén, tốc độ encode chỉnh ở tab «Video» (theo từng "
-                                             "mẫu / video).")
+    # ── Trang: Xuất video ────────────────────────────────────────────────
+    def _build_export(self, c, st) -> None:
+        self._page_head(c, "Xuất video", "Nơi lưu file và độ to âm thanh. Bộ mã hoá, chuẩn nén chỉnh ở mục «Video» (theo "
+                                         "từng mẫu / video).")
+        b = self._card(c, "Thư mục xuất")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x")
         self.out_var = ctk.StringVar(value=self.app_state.output_dir)
         ctk.CTkEntry(row, textvariable=self.out_var, height=32, font=T.font(12)).pack(side="left", fill="x", expand=True)
         ctk.CTkButton(row, text="Chọn", width=60, height=32, command=self._browse_out, **T.secondary_button()).pack(side="left", padx=4)
-        ctk.CTkButton(row, text="Mở", width=50, height=32, command=self._open_out, **T.primary_button()).pack(side="left")
+        ctk.CTkButton(row, text="Mở", width=50, height=32, command=self._open_out, **T.secondary_button()).pack(side="left")
+        b = self._card(c, "Âm thanh & thông báo")
         self.loudness = SliderRow(b, "Độ to file xuất", from_=-23, to=-9, step=1, value=st.loudness_target, suffix=" LUFS",
-                                  info="Dùng khi bật «Chuẩn hoá âm lượng» ở tab «Video»: đo độ to cả bài rồi chỉnh đúng "
+                                  info="Dùng khi bật «Chuẩn hoá âm lượng» ở mục «Video»: đo độ to cả bài rồi chỉnh đúng "
                                        "một lần, đỉnh luôn ≤ −1 dBTP. TikTok · Facebook · YouTube: −14. Truyền hình: −23.")
-        self.loudness.pack(fill="x", pady=(6, 3))
+        self.loudness.pack(fill="x", pady=(2, 3))
         self.toast = SwitchRow(b, "Báo khi xuất xong", value=st.windows_toast,
                                info="Hiện thông báo của Windows / macOS khi render xong.")
         self.toast.pack(fill="x", pady=3)
 
-        b = self._card(c, "Giọng đọc")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x")
-        button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron).pack(side="left")
-        info_icon(row, "Mở pronunciation.json: «chữ viết»: «cách đọc», vd \"ANC\": \"ây en xi\". Áp cho mọi giọng — lưu file "
-                       "rồi tạo lại giọng.").pack(side="left", padx=(6, 0))
-
-        b = self._card(c, "Giao diện", info="Chọn một bộ màu — đổi ngay, không cần mở lại.")
+    # ── Trang: Giao diện ─────────────────────────────────────────────────
+    def _build_look(self, c, st) -> None:
+        self._page_head(c, "Giao diện", "Bấm một bộ màu là đổi ngay, không cần mở lại app.")
+        b = self._card(c, "Bộ màu")
         grid = ctk.CTkFrame(b, fg_color="transparent")
         grid.pack(fill="x", pady=(2, 6))
-        grid.grid_columnconfigure((0, 1, 2), weight=1)
+        grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="theme")
         self.theme_cards: dict[str, ctk.CTkFrame] = {}
         for i, (key, th) in enumerate(T.THEMES.items()):
             card = ctk.CTkFrame(grid, fg_color=T.BG_INPUT, corner_radius=T.RADIUS, border_width=2,
                                 border_color=T.ACCENT if key == T.THEME_NAME else T.BORDER_SOFT, cursor="hand2")
-            card.grid(row=i // 3, column=i % 3, sticky="ew", padx=4, pady=4)
+            card.grid(row=i // 3, column=i % 3, sticky="nsew", padx=4, pady=4)
             # ô xem trước: nền · panel · thẻ · chấm màu nhấn
-            sw = ctk.CTkFrame(card, fg_color=th["bg"], corner_radius=6, height=44)
+            sw = ctk.CTkFrame(card, fg_color=th["bg"], corner_radius=6, height=48)
             sw.pack(fill="x", padx=8, pady=(8, 4))
             sw.pack_propagate(False)
             ctk.CTkFrame(sw, fg_color=th["panel"], corner_radius=4, width=26).pack(side="left", fill="y", padx=(4, 3), pady=4)
@@ -323,17 +395,22 @@ class SettingsWindow(ctk.CTkToplevel):
             inner.pack(side="left", fill="both", expand=True, padx=(0, 4), pady=4)
             ctk.CTkFrame(inner, fg_color=th["accent"], corner_radius=6, width=34, height=12).place(relx=0.08, rely=0.3)
             ctk.CTkFrame(inner, fg_color=th["dim"], corner_radius=2, width=60, height=4).place(relx=0.5, rely=0.42)
-            ctk.CTkLabel(card, text=th["name"], font=T.font(12, "bold"), anchor="w").pack(fill="x", padx=10)
-            ctk.CTkLabel(card, text=th["desc"], font=T.font(10), text_color=T.TEXT_MUTED, anchor="w", justify="left",
-                         wraplength=150).pack(fill="x", padx=10, pady=(0, 8))
+            name = th["name"] + ("  ✓" if key == T.THEME_NAME else "")
+            ctk.CTkLabel(card, text=name, font=T.font(12, "bold"), anchor="w").pack(fill="x", padx=10)
+            ctk.CTkLabel(card, text=th["desc"], font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", justify="left",
+                         wraplength=220).pack(fill="x", padx=10, pady=(0, 8))
             for w in (card, sw, inner, *card.winfo_children()):
                 w.bind("<Button-1>", lambda _e, k=key: self._pick_theme(k))
             self.theme_cards[key] = card
+        b = self._card(c, "Khung xem trước")
         self.waveform = SwitchRow(b, "Dải sóng âm dưới thanh tua", value=st.show_waveform)
         self.waveform.pack(fill="x", pady=3)
 
+    # ── Trang: Bộ nhớ & nâng cao ─────────────────────────────────────────
+    def _build_storage(self, c, st) -> None:
+        self._page_head(c, "Bộ nhớ & nâng cao", "Dọn file tạm khi ổ đầy. Video, phụ đề, giọng đã xuất không bị xoá.")
         b = self._card(c, "Bộ nhớ tạm")
-        self.cache_label = ctk.CTkLabel(b, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w")
+        self.cache_label = ctk.CTkLabel(b, text="", font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.cache_label.pack(fill="x")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
@@ -342,7 +419,7 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(row, text="Xóa job & Project", width=130, height=32, command=self._clean_jobs, **T.danger_button()).pack(side="right")
         self._cache_sizes()
 
-        b = self._card(c, "Nâng cao", info="Chỉ cần khi máy không tự tìm thấy ffmpeg (để trống = dùng bản đi kèm).")
+        b = self._card(c, "Đường dẫn ffmpeg", info="Chỉ cần khi máy không tự tìm thấy ffmpeg (để trống = dùng bản đi kèm).")
         ffm, ffp = exe_name("ffmpeg"), exe_name("ffprobe")
         self.ffmpeg = EntryRow(b, ffm, value=st.ffmpeg_path, browse="exe", placeholder=f"để trống = bin/{ffm} hoặc PATH")
         self.ffprobe = EntryRow(b, ffp, value=st.ffprobe_path, browse="exe", placeholder=f"để trống = bin/{ffp} hoặc PATH")
@@ -351,22 +428,24 @@ class SettingsWindow(ctk.CTkToplevel):
 
     # ── Trang phím tắt & cẩm nang ────────────────────────────────────────
     def _build_guide(self, page) -> None:
-        page.grid_columnconfigure((0, 1), weight=1)
+        page.grid_columnconfigure((0, 1), weight=1, uniform="col")
         head = ctk.CTkFrame(page, fg_color=T.BG_CARD, corner_radius=10)
         head.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=6)
-        ctk.CTkLabel(head, text="ⓘ Trợ giúp, phím tắt & cẩm nang", font=T.font(15, "bold"), text_color=T.ACCENT, anchor="w").pack(fill="x", padx=14, pady=(10, 0))
+        ctk.CTkLabel(head, text="Phím tắt & hướng dẫn", font=T.font(18, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=14, pady=(10, 0))
         ctk.CTkLabel(head, text="Tra cứu nhanh phím tắt và các tính năng chính.",
                      font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(fill="x", padx=14, pady=(0, 6))
         button(head, "Mở Hướng dẫn sử dụng đầy đủ (từng bước, theo module)", icon_name="book", variant="primary", command=lambda: self.window.open_guide_window("start")).pack(anchor="w", padx=14, pady=(0, 12))
         for i, (title, rows) in enumerate(SHORTCUTS):
             card = ctk.CTkFrame(page, fg_color=T.BG_CARD, corner_radius=10)
             card.grid(row=1 + i // 2, column=i % 2, sticky="nsew", padx=6, pady=6)
-            ctk.CTkLabel(card, text="⌨ " + title, font=T.font(13, "bold"), text_color=T.ACCENT, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
+            ctk.CTkLabel(card, text=title, font=T.font(13, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
             for key, desc in rows:
                 row = ctk.CTkFrame(card, fg_color="transparent")
                 row.pack(fill="x", padx=12, pady=2)
-                ctk.CTkLabel(row, text=key, font=T.mono(11), fg_color=T.BG_ELEVATED, corner_radius=6, width=170, text_color=T.INFO).pack(side="left")
-                ctk.CTkLabel(row, text=desc, font=T.font(11), anchor="w", text_color=T.TEXT_DIM).pack(side="left", padx=10)
+                ctk.CTkLabel(row, text=key, font=T.mono(11), fg_color=T.BG_ELEVATED, corner_radius=6, width=140,
+                             text_color=T.INFO).pack(side="left", anchor="n")
+                ctk.CTkLabel(row, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=190,
+                             text_color=T.TEXT_DIM).pack(side="left", padx=10, fill="x", expand=True)
             ctk.CTkLabel(card, text="").pack(pady=2)
         base = 1 + (len(SHORTCUTS) + 1) // 2
         for i, (title, color, rows) in enumerate(GUIDE):
@@ -375,7 +454,7 @@ class SettingsWindow(ctk.CTkToplevel):
             ctk.CTkLabel(card, text=title, font=T.font(13, "bold"), text_color=color, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
             for name, desc in rows:
                 ctk.CTkLabel(card, text="• " + name, font=T.font(12, "bold"), anchor="w", text_color=T.TEXT).pack(fill="x", padx=12, pady=(4, 0))
-                ctk.CTkLabel(card, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=640, text_color=T.TEXT_DIM).pack(fill="x", padx=26)
+                ctk.CTkLabel(card, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=340, text_color=T.TEXT_DIM).pack(fill="x", padx=26)
             ctk.CTkLabel(card, text="").pack(pady=2)
 
     # ── Trạng thái AI trên máy ───────────────────────────────────────────
@@ -457,6 +536,8 @@ class SettingsWindow(ctk.CTkToplevel):
         uvr = "đã có" if vocal_remove.model_ready() else f"tự tải lần đầu (~{vocal_remove.MODEL_SIZE_MB} MB)"
         spk = "đã có" if diarize.MODEL_PATH.exists() else f"tự tải lần đầu (~{diarize.MODEL_SIZE_MB} MB)"
         self.small_status.info(f"Khử giọng gốc: {uvr} · Nhận ra người nói: {spk}.")
+        missing = sum(not ok for ok in (qwen_ok(), vieneu_ok(), bool(size), align_ok()))
+        self._badge("local", str(missing) if missing else "")          # số phần chưa cài, hiện trên menu trái
 
     def _after_install(self, what: str) -> Callable:
         def done(ok: bool, error: Exception | None) -> None:
@@ -600,6 +681,8 @@ class SettingsWindow(ctk.CTkToplevel):
         if out:
             self.app_state.output_dir = out
         self.app_state.save_settings()
+        self._initial = self._values()             # đã lưu → đóng không hỏi nữa
+        self._badge("cloud", "" if st.gemini_keys() else "!")
         if silent:
             return
         self.window.apply_settings()
