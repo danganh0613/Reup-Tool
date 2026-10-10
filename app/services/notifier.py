@@ -1,14 +1,13 @@
-"""Thông báo Windows (toast) khi xong việc — dùng PowerShell, không cần thư viện."""
+"""Thông báo khi xong việc: Windows toast (PowerShell) · macOS Notification Center (osascript) — không cần thư viện."""
 
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
-import sys
 import threading
 
 from app.config.paths import APP_NAME
+from app.core.platform import IS_MAC, IS_WIN, NO_WINDOW, beep
 
 logger = logging.getLogger(__name__)
 
@@ -30,24 +29,26 @@ def _escape(s: str) -> str:
              .replace('"', "&quot;").replace("$", "`$"))
 
 
+def _osa_quote(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def notify(title: str, body: str, *, enabled: bool = True) -> None:
     logger.info("Thông báo: %s — %s", title, body)
-    if not enabled or sys.platform != "win32":
+    if not enabled or not (IS_WIN or IS_MAC):
         return
 
     def run() -> None:
         try:
-            script = _PS.replace("{title}", _escape(title)).replace("{body}", _escape(body)).replace("{app}", APP_NAME)
-            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                           capture_output=True, timeout=15)
+            if IS_WIN:
+                script = _PS.replace("{title}", _escape(title)).replace("{body}", _escape(body)).replace("{app}", APP_NAME)
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                               creationflags=NO_WINDOW, capture_output=True, timeout=15)
+            else:
+                subprocess.run(["osascript", "-e", f"display notification {_osa_quote(body)} with title {_osa_quote(title)}"],
+                               capture_output=True, timeout=15)
         except Exception:
-            logger.debug("Toast thất bại", exc_info=True)
-        try:
-            import winsound
-
-            winsound.MessageBeep(winsound.MB_ICONASTERISK)
-        except Exception:
-            pass
+            logger.debug("Thông báo hệ thống thất bại", exc_info=True)
+        beep()
 
     threading.Thread(target=run, daemon=True).start()

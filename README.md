@@ -44,7 +44,7 @@ Rail **Tính Năng** (F1–F11): Video · Phụ đề · STT · SRT · TTS · Ch
 Xem trước: chip **Tỉ lệ · Độ phân giải · FPS · Vừa khung** ngay trên khung (21:9 · 16:9 · 4:3 · 1:1 · 3:4 · 4:5 · 9:16,
 đồng bộ với module Video) · công cụ V (kéo) · T (khung phụ đề) · B (vẽ vùng che) · ẩn Sub/Blur · zoom · phát/tua · sóng âm ·
 toàn màn hình. Chưa có video: kéo thả vào khung hoặc bấm vào khung để chọn file.
-Thanh tiến trình 5 bước: Chuẩn bị → Tạo TTS → Ghép timeline → Bake hình ảnh → Ghép MP4.
+Thanh trạng thái 1 dòng dưới cùng: video đang chạy, bước thật của video đó (vd. «Khử giọng gốc · bước 4/5»), %, thời gian còn lại, nút Thử lại / Mở thư mục khi xong.
 Space phát/dừng · J/K/L · ←/→ · , . từng khung · I/O và [ ] điểm cắt · M tắt tiếng · Ctrl+Z/Y hoàn tác khung/vùng ·
 Ctrl+S lưu · Ctrl+R render · Ctrl+E sửa SRT · Esc dừng.
 
@@ -77,6 +77,37 @@ presets/  cache/  models/  logs/  voices/(giọng clone)
 ```bash
 build.bat        # PyInstaller → dist/EditStudio/EditStudio.exe (kèm bin/ffmpeg, app/assets, presets)
 ```
+
+### macOS (chip Apple M1–M4)
+
+Mac chip Intel không còn được hỗ trợ (PyTorch / PaddlePaddle đã ngừng phát hành bản cho Mac Intel).
+
+Cùng một bộ mã nguồn; khác biệt theo hệ điều hành gom ở `app/core/platform.py` (mở file, phát WAV, cờ subprocess):
+
+- Âm thanh xem trước / nghe thử: `afplay` · thông báo: Notification Center · phím tắt: ⌘ (Ctrl vẫn dùng được).
+- Render GPU: **VideoToolbox** (`h264_videotoolbox` / `hevc_videotoolbox`); Whisper chạy CPU (không có CUDA).
+- Icon: `app/assets/fonts/EditStudioIcons.ttf` — bản rút gọn Fluent UI System Icons (Microsoft, MIT), dùng khi máy
+  không có font Segoe Fluent.
+- Bản `.app` đóng gói: dữ liệu người dùng ở `~/Library/Application Support/Edit Studio`; ffmpeg nằm trong gói.
+- Chạy mã nguồn: `pip install -r requirements.txt av` rồi `python3 main.py` (hoặc nhấp đúp `run.command`).
+
+### Bản ZIP / DMG tự build trên GitHub
+
+Workflow `.github/workflows/build.yml` build song song trên máy của GitHub Actions, chạy thử rồi đóng gói (kèm FFmpeg):
+
+- **Windows**: `EditStudio-<ver>-win64-Lite.zip` (không CUDA) — chạy thử `EditStudio.exe --selftest`.
+- **macOS**: `EditStudio-<ver>-macOS-arm64.dmg` (chip Apple, máy `macos-14`) — chạy thử `--selftest`, mở giao diện
+  30 giây; phiên bản macOS tối thiểu được đo từ các thư viện thật trong gói rồi ghi vào `Info.plist` và hướng dẫn trong DMG.
+- Cả hai: kiểm tra FFmpeg có libass và phụ đề hiện chữ thật (`tools/ci_check_ffmpeg.py`).
+
+- Không tự chạy theo pull request / push (repo riêng tư có hạn mức phút Actions mỗi tháng); bản cài dựng trên máy bằng
+  `build.bat`.
+- Chạy tay: tab **Actions** → **Build** → **Run workflow** → mục **Artifacts** → tải ZIP / DMG (giữ 2 ngày).
+- Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP + DMG, tải lâu dài.
+- Chạy tay: **Actions** → **Build** → **Run workflow**.
+
+Windows: giải nén rồi chạy `EditStudio.exe` (hướng dẫn `DOC_TRUOC.txt`). macOS: mở DMG, kéo app vào Applications
+(hướng dẫn mở lần đầu khi macOS chặn app chưa ký: `tools/DOC_MAC.txt`, có sẵn trong DMG).
 
 - Thư mục `dist/EditStudio` (~690 MB) copy đi máy khác chạy được; mỗi lần build lại PyInstaller **xoá và tạo mới**
   thư mục này, nên `output/`, `models/`, `settings.json` trong đó sẽ mất — giữ bản gốc ở nơi khác.

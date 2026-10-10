@@ -8,9 +8,10 @@ from dataclasses import replace
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.core.state import TTS_PROVIDERS
+from app.core.languages import LocaleLabels
+from app.core.state import TTS_LABELS, TTS_PROVIDERS, provider_or_default
 from app.services.tts.base import Voice
-from app.services.tts.generator import make_engine, preview_text, synthesize_cached
+from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list
 from app.ui.widgets.common import ButtonRow, OptionRow, StatusLabel
 
 VoiceSel = tuple[str, str, str]          # (provider, locale, voice_id)
@@ -29,9 +30,10 @@ class VoicePicker(ctk.CTkFrame):
         self._by_label: dict[str, Voice] = {}
         self._engine = None
         self._loading = False
+        self.auto = False          # True khi set_sel được gọi do máy tự chọn giọng (không phải người dùng bấm)
 
-        self.provider = OptionRow(self, "Engine", TTS_PROVIDERS, on_change=self._provider_changed)
-        self.language = OptionRow(self, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed)
+        self.provider = OptionRow(self, "Engine", TTS_PROVIDERS, labels=TTS_LABELS, on_change=self._provider_changed)
+        self.language = OptionRow(self, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(self, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         for r in (self.provider, self.language, self.voice):
             r.pack(fill="x", pady=2)
@@ -45,16 +47,16 @@ class VoicePicker(ctk.CTkFrame):
     def _cfg(self):
         provider, locale, vid = self.get_sel()
         cfg = replace(self.window.app_state.tts)
-        cfg.tts_provider = provider
-        cfg.edge_language = cfg.google_language = locale
-        cfg.edge_voice = cfg.google_voice = cfg.eleven_voice_id = cfg.vieneu_voice = vid
+        cfg.tts_provider = provider_or_default(provider)
+        cfg.edge_language = locale
+        cfg.set_voice(vid)
         cfg.tts_speed = self.get_speed()
         return cfg
 
     def load(self, force: bool = False) -> None:
         provider, _, _ = self.get_sel()
         self._loading = True
-        self.provider.set(provider)
+        self.provider.set(provider_or_default(provider))
         self._loading = False
         self.status.info("Đang tải danh sách giọng…")
         try:
@@ -80,7 +82,7 @@ class VoicePicker(ctk.CTkFrame):
         provider, locale, vid = self.get_sel()
         self._loading = True
         try:
-            if provider == "ElevenLabs" or provider.startswith("VieNeu"):
+            if not uses_language_list(provider):
                 self.language.pack_forget()
                 subset = self._voices
             else:
@@ -101,7 +103,11 @@ class VoicePicker(ctk.CTkFrame):
             cur = next((v.label for v in subset if v.id == vid), None)
             if cur is None and subset:
                 cur = subset[0].label
-                self.set_sel(provider, subset[0].locale, subset[0].id, subset[0].name)
+                self.auto = True
+                try:
+                    self.set_sel(provider, subset[0].locale, subset[0].id, subset[0].name)
+                finally:
+                    self.auto = False
             self.voice.set(cur or labels[0])
         finally:
             self._loading = False

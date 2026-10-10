@@ -64,7 +64,7 @@ class TrimModule(BaseModule):
         ta = self.tab_a
         self.enable = SwitchRow(ta, "Bật cắt đầu / cuối", on_change=s(cfg, "enable", preview=False))
         self.enable.pack(fill="x", pady=3)
-        hint(ta, "Áp dụng khi bấm Render MP4 thông thường. Phụ đề, giọng đọc và nhạc nền sẽ tự động khớp theo thời lượng còn lại.").pack(fill="x")
+        hint(ta, "Phụ đề, giọng và nhạc tự khớp phần còn lại.").pack(fill="x")
         box = ctk.CTkFrame(ta, fg_color=T.BG_ELEVATED, corner_radius=8)
         box.pack(fill="x", pady=6)
         self.head = TimeEntry(box, "Bỏ đầu (giây)", on_change=lambda v: self._set_simple("head", v),
@@ -77,12 +77,13 @@ class TrimModule(BaseModule):
         sec.pack(fill="x", pady=4)
         ButtonRow(sec.body, [("3s - 2s", lambda: self._quick(3, 2), None), ("5s - 5s", lambda: self._quick(5, 5), None),
                              ("1s - 1s", lambda: self._quick(1, 1), None), ("Đặt lại 0s", lambda: self._quick(0, 0), None)]).pack(fill="x")
-        hint(sec.body, "Mẹo: kéo thanh trượt video đến vị trí muốn cắt rồi bấm «⌖ Đang xem» để lấy chính xác số giây. "
-                       "Phím I / O cũng đặt điểm cắt đầu / cuối.").pack(fill="x", pady=(4, 0))
+        hint(sec.body, "Mẹo: tua tới chỗ muốn cắt rồi bấm «⌖ Đang xem» (hoặc phím I / O).").pack(fill="x", pady=(4, 0))
 
         # ── Nhiều đoạn ───────────────────────────────────────────────────
         tb = self.tab_b
-        self.mode = OptionRow(tb, "Chế độ", TRIM_MODES, on_change=s(cfg, "mode", preview=False))
+        self.mode = OptionRow(tb, "Chế độ", TRIM_MODES, on_change=s(cfg, "mode", preview=False),
+                              info="Ghép liền: nối các đoạn thành 1 video. Xuất từng file: mỗi đoạn một MP4 (_p1, _p2…). "
+                                   "Có đoạn thì bỏ qua cắt đầu / cuối.")
         self.mode.pack(fill="x", pady=3)
         ButtonRow(tb, [("＋ Thêm đoạn", self._add_segment, T.primary_button()),
                        ("＋ Từ mốc đang xem → hết", self._add_from_preview, None)]).pack(fill="x", pady=(0, 4))
@@ -90,8 +91,6 @@ class TrimModule(BaseModule):
         self.summary.pack(fill="x", pady=(0, 4))
         self.list_frame = ctk.CTkFrame(tb, fg_color="transparent")
         self.list_frame.pack(fill="x")
-        hint(tb, "Ghép liền: các đoạn nối thành 1 video. Xuất từng file: mỗi đoạn một MP4 (_p1, _p2…) — tiện tách "
-                 "video dài thành nhiều phần. Có đoạn thì bỏ qua cắt đầu/cuối.").pack(fill="x", pady=(6, 0))
         self._show_tab("Cắt đầu / cuối")
 
     def _show_tab(self, name: str) -> None:

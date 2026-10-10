@@ -158,6 +158,71 @@ def wrap_lines(text: str, line_chars: int = LINE_CHARS) -> str:
     return text[:best].strip() + "\n" + text[best + 1:].strip()
 
 
+def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05, lead: float = 0.3) -> list[Cue]:
+    """Câu hiện quá ngắn (phụ đề dời theo giọng: câu ngắn chỉ hiện ~0,5 s) → kéo dài tới ``min_dur`` giây,
+    nhưng không chồng sang câu sau (cách ≥ ``gap``). Câu sau sát quá thì cho hiện sớm hơn tối đa ``lead`` giây (không
+    chồng câu trước); vẫn thiếu thì mượn đuôi câu trước (câu trước vẫn ≥ ``min_dur``), sớm tổng cộng ≤ 2 × ``lead``."""
+    want = min_dur + 0.015                # dư 15 ms: ASS ghi mốc theo 1/100 s, làm tròn không được tụt dưới min_dur
+    tight = 0.02                          # khe tối thiểu khi phải mượn (3 câu ngắn liền nhau: khe 0,05 s không đủ chỗ)
+    out: list[Cue] = []
+    for i, c in enumerate(cues):
+        start, end = c.start, c.end
+        if out and out[-1].end + tight > start:  # câu trước đã mượn đầu câu này
+            start = out[-1].end + tight
+        if end - start < want:
+            limit = cues[i + 1].start - gap if i + 1 < len(cues) else float("inf")
+            end = max(end, min(start + want, limit))
+            if end - start < want:
+                floor = out[-1].end + gap if out else 0.0
+                start = min(start, max(end - want, start - lead, floor))
+            if end - start < want and out and start - c.start > -2 * lead:
+                # câu trước sát quá → mượn đuôi câu trước (câu trước vẫn ≥ min_dur) + thu khe còn ``tight``
+                prev = out[-1]
+                room = max(0.0, prev.end - prev.start - want) + max(0.0, start - prev.end - tight)
+                take = min(want - (end - start), room, start - (c.start - 2 * lead))
+                if take > 0.005:
+                    start -= take
+                    prev.end = min(prev.end, start - tight)
+            if end - start < want and i + 1 < len(cues):
+                # vẫn thiếu → mượn đầu câu sau (câu sau hiện muộn ≤ ``lead`` giây, vẫn ≥ min_dur) + thu khe còn ``tight``
+                nxt = cues[i + 1]
+                room = max(0.0, nxt.end - nxt.start - want) + max(0.0, nxt.start - end - tight)
+                take = min(want - (end - start), room, lead)
+                if take > 0.005:
+                    end += take
+        out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
+    _spread(out, [c.start for c in cues], want, tight, lead)
+    return out
+
+
+def _spread(out: list[Cue], orig: list[float], want: float, tight: float, lead: float) -> None:
+    """Còn câu < ``want`` kẹp trong chuỗi câu sát nhau không câu nào thừa để nhường («Trắng tinh 1,02 · Dễ thương 0,95 ·
+    Nuôi được… 1,01») → đẩy nguyên câu sau sang phải (nếu sau nó còn khe) / kéo nguyên câu trước sang trái, giữ độ dài,
+    mỗi câu lệch khỏi mốc ban đầu ≤ ``lead`` (muộn) / 2 × ``lead`` (sớm)."""
+    for _round in range(3):
+        for i, c in enumerate(out):
+            need = want - (c.end - c.start)
+            if need <= 1e-3:
+                continue
+            if i + 1 < len(out):
+                n = out[i + 1]
+                room = out[i + 2].start - tight - n.end if i + 2 < len(out) else need
+                s = max(0.0, min(need, room, orig[i + 1] + lead - n.start, n.start - tight - c.end + need))
+                if s > 1e-3:
+                    n.start += s
+                    n.end += s
+                    c.end = min(c.end + s, n.start - tight)
+                    need = want - (c.end - c.start)
+            if need > 1e-3 and i > 0:
+                p = out[i - 1]
+                room = p.start - (out[i - 2].end + tight) if i >= 2 else p.start
+                s = max(0.0, min(need, room, p.start - (orig[i - 1] - 2 * lead)))
+                if s > 1e-3:
+                    p.start -= s
+                    p.end -= s
+                    c.start = max(c.start - s, p.end + tight)
+
+
 def cue_at(cues: list[Cue], t: float) -> Cue | None:
     for c in cues:
         if c.start <= t <= c.end:

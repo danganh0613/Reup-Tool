@@ -44,8 +44,9 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     step("Môi trường")
     import platform
 
-    out.append(Check("Phiên bản", "ok", f"Edit Studio {APP_VERSION} · {'bản cài .exe' if _frozen() else 'bản mã nguồn'} · "
-                                        f"Windows {platform.release()} ({platform.machine()}) · Python {platform.python_version()}"))
+    os_name = f"macOS {platform.mac_ver()[0]}" if sys.platform == "darwin" else f"{platform.system()} {platform.release()}"
+    out.append(Check("Phiên bản", "ok", f"Edit Studio {APP_VERSION} · {'bản đóng gói' if _frozen() else 'bản mã nguồn'} · "
+                                        f"{os_name} ({platform.machine()}) · Python {platform.python_version()}"))
     try:
         free = shutil.disk_usage(ROOT).free / 2**30
         out.append(Check("Ổ đĩa", "ok" if free > 10 else "warn", f"Còn trống {free:,.1f} GB tại {ROOT}",
@@ -81,8 +82,18 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
             out.append(Check("Render GPU", "warn", f"{gpu} · không encoder GPU nào dùng được → render bằng CPU (chậm hơn, vẫn đúng)",
                              "Cập nhật driver card màn hình (NVIDIA cần driver ≥ 610)." if nvidia else "Máy không có card hỗ trợ — bình thường."))
 
-    # 4. Whisper (STT)
-    step("Whisper")
+    # 4. Nghe lời thoại (Qwen3-ASR) + Whisper kiểm lỗi giọng đọc
+    step("Nhận diện lời")
+    try:
+        from app.services.qwen_asr import INSTALL_GB, is_installed as qwen_installed
+
+        if qwen_installed():
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "ok", "Đã cài — chạy trên máy" + (f" ({gpu})" if nvidia else " (CPU, chậm)")))
+        else:
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", "Chưa cài → chỉ nhận diện được chữ in sẵn trên video",
+                             f"Cài đặt › AI trên máy › «Cài» (một lần, ~{INSTALL_GB} GB)."))
+    except Exception as exc:
+        out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", f"Không kiểm tra được: {exc}"))
     try:
         import faster_whisper  # noqa: F401
 
@@ -90,19 +101,16 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
 
         if nvidia:
             if cuda_ready():
-                out.append(Check("Whisper GPU", "ok", f"cuBLAS/cuDNN sẵn sàng — nhận dạng chạy trên {gpu}"))
+                out.append(Check("Whisper GPU", "ok", f"cuBLAS/cuDNN sẵn sàng — kiểm lỗi giọng đọc chạy trên {gpu}"))
             else:
-                out.append(Check("Whisper GPU", "warn", f"Có {gpu} nhưng thiếu CUDA runtime → nhận dạng chạy CPU (chậm 5–10 lần)",
-                                 "Mục STT → nút «Tải CUDA runtime» (~1.3 GB, một lần)" if _frozen()
-                                 else "Mục STT → nút «Cài CUDA runtime»"))
-        else:
-            out.append(Check("Whisper", "ok", "Không có GPU NVIDIA → nhận dạng bằng CPU (int8)"))
+                out.append(Check("Whisper GPU", "warn", f"Có {gpu} nhưng thiếu CUDA runtime → bỏ bước Whisper nghe lại giọng đọc",
+                                 "Cài đặt › AI trên máy › «Cài CUDA»"))
         models = sorted(re.sub(r"^models--.*?--faster-whisper-", "", p.name) for p in MODELS_DIR.glob("models--*faster-whisper-*"))
         if models:
             out.append(Check("Model Whisper", "ok", "Đã có trên máy: " + ", ".join(models)))
         else:
-            out.append(Check("Model Whisper", "warn", "Chưa tải model nào — lần nhận dạng đầu sẽ tự tải (cần Internet)",
-                             "Mục STT → nút «Tải trước model Whisper» để tải sẵn."))
+            out.append(Check("Model Whisper", "warn", "Chưa có → không nghe lại được câu lồng tiếng, không đọc liền câu",
+                             "Cài đặt › AI trên máy › «Tải» ở mục kiểm lỗi giọng đọc."))
     except Exception as exc:
         out.append(Check("Whisper", "bad", f"Không nạp được faster-whisper: {exc}", "Cài lại bộ cài."))
 
@@ -124,8 +132,8 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                              "Sẵn sàng, model đã tải" if has_model else "Có sẵn — lần dùng đầu sẽ tự tải model (~300 MB, cần Internet)",
                              "" if has_model else "Mục TTS → chọn VieNeu → «Nghe thử giọng» để tải."))
         else:
-            out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS / ElevenLabs / Google thay thế",
-                             "Bản .exe: cài lại bộ cài mới." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
+            out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS thay thế",
+                             "Bản đóng gói: cài lại bản mới nhất." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
     except Exception as exc:
         out.append(Check("VieNeu", "warn", f"Không kiểm tra được: {exc}"))
 
@@ -133,13 +141,8 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     step("API key")
     if settings is not None:
         g = len(settings.gemini_keys())
-        out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / STT cloud / dựng truyện được",
-                         "" if g else "Cài đặt → cột giữa «API keys Gemini» (miễn phí tại aistudio.google.com)."))
-        e = len(settings.split_keys(settings.elevenlabs_api_keys)) + bool(settings.elevenlabs_api_key)
-        gg = len(settings.google_keys())
-        out.append(Check("Key giọng cloud", "ok" if (e or gg) else "warn",
-                         f"ElevenLabs {e} key · Google {gg} key" if (e or gg) else "Chưa có — chỉ Edge TTS (miễn phí) và VieNeu dùng được",
-                         "" if (e or gg) else "Chỉ cần khi muốn giọng ElevenLabs/Google."))
+        out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / dựng truyện được",
+                         "" if g else "Cài đặt › AI dùng API key (miễn phí tại aistudio.google.com)."))
 
     # 7. Font icon
     step("Font")
@@ -158,16 +161,32 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     except Exception:
         out.append(Check("Internet", "warn", "Không kết nối được lúc này", "Không có mạng vẫn render/STT (đã có model)/VieNeu được."))
 
-    # 9. Demucs (tuỳ chọn)
+    # 9. Khử giọng nói gốc (AI, ONNX)
     try:
-        from app.services.demucs_sep import is_installed as demucs_ok
+        from app.services.vocal_remove import MODEL_SIZE_MB as NV_MB, model_ready
+        from app.services.vocal_remove import onnx_available as nv_onnx
 
-        if demucs_ok():
-            out.append(Check("Demucs (tách giọng/nhạc)", "ok", "Sẵn sàng"))
+        if not nv_onnx():
+            out.append(Check("Khử giọng gốc (AI)", "warn", "Thiếu onnxruntime / numpy — không khử được giọng gốc",
+                             "pip install onnxruntime numpy"))
+        elif model_ready():
+            out.append(Check("Khử giọng gốc (AI)", "ok", "Sẵn sàng"))
         else:
-            out.append(Check("Demucs (tách giọng/nhạc)", "warn", "Chưa có — tính năng tách nhạc nền tắt, còn lại bình thường",
-                             "Chỉ bản mã nguồn cài được (cần torch ~2 GB): mục Video → «Cài Demucs»." if not _frozen()
-                             else "Bản .exe không hỗ trợ (cần torch ~2 GB)."))
+            out.append(Check("Khử giọng gốc (AI)", "ok", f"Model (~{NV_MB} MB) tự tải lần đầu dùng"))
+    except Exception:
+        pass
+
+    # 10. Nhận diện người nói (lồng tiếng nhiều giọng)
+    try:
+        from app.services.diarize import MODEL_PATH, MODEL_SIZE_MB, onnx_available
+
+        if not onnx_available():
+            out.append(Check("Nhận diện người nói", "warn", "Thiếu onnxruntime — «Mỗi người nói một giọng» phải gán tay",
+                             "Chạy: pip install onnxruntime" if not _frozen() else "Bản đóng gói thiếu onnxruntime."))
+        elif MODEL_PATH.exists():
+            out.append(Check("Nhận diện người nói", "ok", "Sẵn sàng"))
+        else:
+            out.append(Check("Nhận diện người nói", "ok", f"Sẵn sàng (model ~{MODEL_SIZE_MB} MB tải ở lần dùng đầu)"))
     except Exception:
         pass
     return out

@@ -6,7 +6,11 @@ __pycache__/
 /models/
 /logs/
 /settings.json
+/pronunciation.json
+/audit_out/
 /build/
 /dist/
 
 release/
+/bin/ffmpeg
+/bin/ffprobe

@@ -11,13 +11,15 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from app.config.paths import CONFIG_FILE, PRESETS_DIR, SETTINGS_FILE, VIDEOS_DIR
+from app.config.paths import CONFIG_FILE, SETTINGS_FILE, VIDEOS_DIR
+from app.services.gemini_models import migrate_model
 
 logger = logging.getLogger(__name__)
 
@@ -28,27 +30,28 @@ RATIO_VALUES: dict[str, float | None] = {"Giữ nguyên": None, "21:9 (Điện �
 FIT_MODES = ["Cắt vừa khung", "Thêm viền đen", "Nền mờ (blur)"]
 RESOLUTIONS = ["Giữ nguyên", "720p", "1080p", "1440p", "4K"]
 FPS_OPTIONS = ["Giữ nguyên", "24", "25", "30", "50", "60"]
-GPU_BACKENDS = ["auto", "nvenc", "qsv", "amf", "cpu"]
+# macOS chỉ có VideoToolbox; cấu hình mang từ máy Windows sang (nvenc…) vẫn chạy: không dùng được thì tự dò tiếp rồi về CPU
+GPU_BACKENDS = ["auto", "videotoolbox", "cpu"] if sys.platform == "darwin" else ["auto", "nvenc", "qsv", "amf", "cpu"]
 VIDEO_CODECS = ["H.264 / AVC", "H.265 / HEVC", "AV1"]
 ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 
+#: phông phụ đề mặc định kiểu TikTok: chữ đậm đủ dấu tiếng Việt (Arial Black / Impact thiếu dấu) — Segoe UI Black có sẵn
+#: trên Windows (đã là nét đậm, không bật «Đậm» kẻo libass tô đậm thêm); máy khác dùng Arial đậm
+SUB_FONT_DEFAULT, SUB_BOLD_DEFAULT = ("Segoe UI Black", False) if sys.platform == "win32" else ("Arial", True)
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
-STT_ENGINES = ["Whisper (local)", "Gemini (cloud)"]
+#: lấy lời thoại từ: "asr" = AI nghe giọng nói (Qwen3-ASR, chạy trên máy) · "ocr" = đọc phụ đề in sẵn trên video
+#: (Douyin…) — đúng từng chữ, kể cả tên riêng
+STT_ENGINES = ["asr", "ocr"]
+STT_LABELS = {"asr": "Giọng nói trong video", "ocr": "Chữ in sẵn trên video"}
 TEXT_EFFECTS = ["Không có (Khuyên dùng)", "Viền đậm", "Bóng đổ", "Viền + bóng", "Phát sáng (glow)"]
 SUB_BG_STYLES = ["Không nền", "Hộp mờ bo góc", "Hộp đen", "Dải ngang toàn khung", "Bóng mềm"]
-TRANSLATE_PROVIDERS = ["Gemini", "Groq", "DeepSeek", "OpenAI"]
 TRIM_MODES = ["Ghép các đoạn thành 1 video", "Xuất mỗi đoạn thành 1 file"]
 COLOR_PRESETS = ["Mặc định", "Ấm áp", "Điện ảnh", "Tươi sáng", "Cổ điển", "Lạnh"]
-STT_MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
-STT_DEVICES = ["auto", "cpu", "cuda"]
 STT_LANGUAGES = ["auto", "vi", "en", "zh", "ja", "ko", "fr", "de", "es", "th", "id", "ru"]
 SRT_MODES = ["Sub gốc", "Sub đã dịch", "Song ngữ (dịch trên, gốc dưới)"]
 SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
-AI_ENGINES = ["Gemini"]
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash",
-                 "gemini-flash-lite-latest", "gemini-pro-latest"]
 
 TEXTURE_BLENDS = ["screen", "overlay", "softlight", "multiply", "lighten", "addition"]
 BLUR_STYLES = ["Mờ (Gaussian)", "Ô vuông (pixelate)", "Che kín (màu đen)"]
@@ -58,9 +61,23 @@ POSITIONS = ["Trên trái", "Trên giữa", "Trên phải", "Giữa trái", "Ch�
 SAFE_ZONES = ["Toàn khung", "TikTok/Reels (né UI phải & dưới)"]
 KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → trái", "Trên → dưới"]
 
-TTS_PROVIDERS = ["Edge TTS", "ElevenLabs", "Google Cloud TTS", "VieNeu (local, tiếng Việt)"]
+VIENEU = "VieNeu (local, tiếng Việt)"
+#: VieNeu (chạy trên máy, miễn phí) mặc định · Edge TTS (cần mạng) — cũng là giọng dự phòng khi VieNeu đọc lỗi
+TTS_PROVIDERS = [VIENEU, "Edge TTS"]
+TTS_LABELS = {VIENEU: "VieNeu — giọng Việt, chạy trên máy", "Edge TTS": "Edge TTS — cần mạng, nhiều thứ tiếng"}
+#: engine đã gỡ — cấu hình cũ còn ghi thì tự chuyển sang VieNeu
+RETIRED_TTS = ("Gemini TTS (Google AI)", "Gemini Live (không giới hạn lượt)", "ElevenLabs", "Google Cloud TTS", "FPT.AI")
+
+
+def provider_or_default(provider: str) -> str:
+    """Engine đã gỡ (nhân vật Dựng truyện, mẫu cũ…) → VieNeu."""
+    return provider if provider in TTS_PROVIDERS else VIENEU
+
+
+#: giọng VieNeu thay cho giọng Gemini cũ theo giới tính
+VIENEU_BY_GENDER = {"Female": "Trúc Ly", "Male": "Thanh Bình"}
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
-ELEVEN_MODELS = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
+SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 
 
 # ── Dataclass cấu hình ───────────────────────────────────────────────────
@@ -87,34 +104,38 @@ class VideoConfig:
     adaptive_ducking: bool = True
     normalize_audio: bool = True
     output_suffix: str = "_edit"
+    output_name: str = ""              # mẫu tên file: {ten} {hauto} {mau} {ngay} {gio} {stt} — trống = {ten}{hauto}
+    output_subdir: str = ""            # thư mục con trong thư mục xuất (nhận cùng các mã trên)
     loop_to_voice: bool = False        # lặp video cho đủ thời lượng giọng đọc
     gop_size: int = 0                  # khoảng keyframe (0 = mặc định encoder)
-    demucs_enable: bool = False        # tách giọng gốc bằng Demucs (cần cài thêm)
+    demucs_enable: bool = False        # khử giọng nói gốc bằng AI (MDX-Net ONNX), giữ nhạc nền + tiếng động
+
+    def __post_init__(self) -> None:
+        if self.vocal_filter:              # cấu hình cũ: «lọc vocal» (L−R, kém) → chuyển sang khử giọng AI
+            self.vocal_filter = False
+            self.demucs_enable = True
 
 
 @dataclass
 class SubtitleConfig:
     enable_subtitle: bool = True
     srt_source: str = SRT_SOURCES[0]
-    stt_model: str = "base"
     stt_language: str = "auto"
-    stt_device: str = "auto"
     translate_enable: bool = False
-    ai_engine: str = AI_ENGINES[0]
-    gemini_model: str = GEMINI_MODELS[0]
     translate_target: str = TRANSLATE_TARGETS[0]
     translate_style: str = ""          # ghi chú phong cách dịch (tuỳ chọn)
     srt_mode: str = SRT_MODES[0]
-    sub_font: str = "Arial"
-    sub_size: int = 36
-    sub_bold: bool = True
+    # mặc định kiểu phụ đề video viral TikTok (xem services/subtitle_presets.py): chữ đậm trắng viền đen dày + bóng nhẹ
+    sub_font: str = SUB_FONT_DEFAULT
+    sub_size: int = 66
+    sub_bold: bool = SUB_BOLD_DEFAULT
     sub_italic: bool = False
     sub_uppercase: bool = False
     sub_color: str = "#FFFFFF"
     sub_opacity: float = 100.0
-    sub_stroke_width: float = 2.0
+    sub_stroke_width: float = 5.0
     sub_stroke_color: str = "#000000"
-    sub_shadow: float = 0.0
+    sub_shadow: float = 2.0
     sub_bg_enable: bool = False
     sub_bg_color: str = "#000000"
     sub_bg_opacity: float = 60.0
@@ -126,20 +147,31 @@ class SubtitleConfig:
     sub_y: int = 85                    # %
     sub_delay: float = 0.0             # giây, âm = sớm hơn
     secondary_scale: float = 0.8       # cỡ dòng phụ khi Song ngữ
-    # Khung phụ đề (tỉ lệ 0..1 theo khung ra): chữ tự xuống dòng theo bề rộng khung, căn đáy khung
+    # Khung phụ đề (tỉ lệ 0..1 theo khung ra): chữ tự xuống dòng theo bề rộng khung, căn đáy khung — đáy ở 76% chiều
+    # cao: trên vùng tên kênh / chú thích / nút của TikTok · Reels · Shorts
     use_box: bool = True
-    box_x: float = 0.05
-    box_y: float = 0.74
-    box_w: float = 0.90
-    box_h: float = 0.14
+    box_x: float = 0.08
+    box_y: float = 0.68
+    box_w: float = 0.84
+    box_h: float = 0.08
+    follow_hardsub: bool = False       # đặt khung lên đúng chỗ chữ cứng đã dò & che (mỗi video một chỗ)
+    #: khối chữ căn giữa khung theo chiều dọc (máy tự đặt khi bám chỗ chữ cứng — câu 1 hay 2 dòng đều nằm giữa vùng
+    #: đã che); False = chữ bám đáy khung
+    box_center: bool = False
     text_effect: str = "Không có (Khuyên dùng)"
     bg_style: str = "Không nền"
-    karaoke: bool = False
+    karaoke: bool = False              # chữ đang đọc nổi lên (kiểu ở ``karaoke_mode``)
     karaoke_color: str = "#FFD400"
-    stt_engine: str = "Whisper (local)"
-    weak_pc: bool = False
-    ai_reflow: bool = False            # AI tối ưu câu + gộp timeline
+    #: pop = chữ đang đọc đổi màu + phóng nhẹ rồi trở lại (kiểu CapCut) · fill = tô màu dần (giữ màu) ·
+    #: reveal = chữ hiện dần đúng lúc được đọc
+    karaoke_mode: str = "pop"
+    stt_engine: str = STT_ENGINES[0]
     translate_source: str = "Tự nhận diện"
+
+    def migrate(self) -> None:
+        """Cấu hình cũ (Whisper / Gemini / SenseVoice / Qwen3-ASR ghi bằng tên dài) → «asr»; OCR → «ocr»."""
+        if self.stt_engine not in STT_ENGINES:
+            self.stt_engine = "ocr" if self.stt_engine.upper().startswith("OCR") else "asr"
 
 
 @dataclass
@@ -149,22 +181,47 @@ class TTSConfig:
     tts_source: str = TTS_SOURCES[0]
     edge_language: str = "vi-VN"
     edge_voice: str = "vi-VN-HoaiMyNeural"
-    eleven_voice_id: str = ""
-    eleven_voice_name: str = ""
-    eleven_model: str = ELEVEN_MODELS[0]
-    eleven_stability: float = 0.5
-    eleven_similarity: float = 0.75
-    eleven_style: float = 0.0
-    eleven_speaker_boost: bool = True
-    google_language: str = "vi-VN"
-    google_voice: str = "vi-VN-Neural2-A"
     vieneu_voice: str = "Minh Quân Pro"
     tts_speed: float = 1.0
     tts_pitch: int = 0                 # Hz, Edge only
-    max_tempo: float = 1.5             # tăng tốc tối đa để khớp thời lượng cue
+    #: khớp mềm (luôn bật): dời câu vào khoảng lặng, nén từ 1,10× tăng dần tới trần này, câu bị đẩy trễ đọc nhanh hơn
+    #: để đuổi kịp hình (đo: «đọc tự nhiên không nén» làm giọng trễ dồn tới 4,8 s với bản dịch câu dài)
+    max_tempo: float = 1.5
     min_gap: float = 0.08              # khoảng nghỉ tối thiểu giữa 2 cue (giây)
-    natural_sync: bool = False         # đọc tốc độ tự nhiên, dời phụ đề theo giọng (không tăng tốc)
-    soft_timing: bool = False          # dời câu vào khoảng lặng, nén tối đa 1.10×
+    multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
+    speaker_count: str = SPEAKER_COUNTS[0]
+    #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
+    speaker_voices: list = field(default_factory=list)
+
+    def set_voice(self, voice_id: str) -> None:
+        """Ghi cùng một mã giọng cho mọi nhà cung cấp (dùng khi đổi giọng theo nhân vật / người nói)."""
+        self.edge_voice = self.vieneu_voice = voice_id
+
+    def migrate(self, data: dict | None = None) -> bool:
+        """Cấu hình cũ dùng engine đã gỡ (Gemini TTS / Live, ElevenLabs, Google, FPT.AI) → VieNeu: giọng Gemini cũ đổi
+        theo giới tính (``data``: dict gốc — trường ``gemini_voice`` không còn trong TTSConfig), giọng trả phí của
+        người nói thì để trống cho máy tự gợi ý lại. True nếu có đổi."""
+        changed = False
+        if self.tts_provider in RETIRED_TTS:
+            if self.tts_provider.startswith("Gemini"):
+                self.vieneu_voice = vieneu_for_gemini(str((data or {}).get("gemini_voice") or ""))
+            self.tts_provider = VIENEU
+            changed = True
+        for sv in self.speaker_voices:
+            if isinstance(sv, dict) and sv.get("provider") in RETIRED_TTS:
+                v = vieneu_for_gemini(str(sv.get("voice_id") or "")) if str(sv["provider"]).startswith("Gemini") else ""
+                sv.update(provider=VIENEU, locale="vi-VN", voice_id=v, voice_name=v)
+                changed = True
+        return changed
+
+
+#: giọng nam của Gemini TTS cũ (engine đã gỡ) — để chuyển cấu hình cũ sang giọng VieNeu cùng giới tính
+_GEMINI_MALE = {"Puck", "Charon", "Fenrir", "Orus", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Algenib", "Rasalgethi",
+                "Alnilam", "Schedar", "Achird", "Zubenelgenubi", "Sadachbia", "Sadaltager"}
+
+
+def vieneu_for_gemini(voice: str) -> str:
+    return VIENEU_BY_GENDER["Male" if voice in _GEMINI_MALE else "Female"]
 
 
 @dataclass
@@ -173,6 +230,7 @@ class BlurConfig:
     #: mỗi vùng: {x, y, w, h (0..1 theo khung ra), strength, feather, opacity, style, start, end}
     regions: list = field(default_factory=list)
     active_index: int = 0
+    auto_detect: bool = False          # tự dò vùng chữ cứng của từng video và che thêm vùng đó
 
 
 @dataclass
@@ -273,8 +331,8 @@ STORY_RESOLUTIONS = ["720p", "1080p", "4K"]
 @dataclass
 class StoryConfig:
     text_model: str = "gemini-flash-latest"
-    image_model: str = "gemini-2.5-flash-image"
-    video_model: str = "veo-3.0-fast-generate-001"
+    image_model: str = "gemini-3.1-flash-image"
+    video_model: str = "veo-3.1-fast-generate-preview"
     video_duration: int = 8
     use_ai_video: bool = False
     ratio: str = STORY_RATIOS[0]
@@ -302,25 +360,16 @@ class Settings:
     """Cài đặt gắn với máy — lưu riêng ở ``settings.json``."""
     ffmpeg_path: str = ""
     ffprobe_path: str = ""
-    gemini_api_key: str = ""
-    elevenlabs_api_key: str = ""
-    google_api_key: str = ""
     appearance_mode: str = "dark"      # dark | oled
     accent: str = "lime"
     theme: str = "studio"             # studio · midnight · graphite · orchid · oled
     output_dir: str = ""
     windows_toast: bool = True
-    tts_workers: int = 4
-    whisper_compute: str = "auto"      # auto | int8 | float16 | float32
     vieneu_precision: str = "int8"     # int8 (nhanh) | fp32 (chất lượng)
-    translate_provider: str = "Gemini"
+    #: model Gemini dùng để dịch / tách câu / sửa phụ đề — hết lượt hay quá tải thì dừng và báo, không tự đổi model
     translate_model: str = "gemini-flash-latest"
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
-    groq_api_key: str = ""
-    deepseek_api_key: str = ""
-    openai_api_key: str = ""
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
-    elevenlabs_api_keys: str = ""      # nhiều key, mỗi dòng một key
 
     @staticmethod
     def split_keys(text: str) -> list[str]:
@@ -329,22 +378,14 @@ class Settings:
         return list(dict.fromkeys(k.strip() for k in raw.splitlines() if k.strip()))
 
     def gemini_keys(self) -> list[str]:
-        """Key Gemini theo thứ tự ưu tiên: ô nhiều key → ô key đơn → các Google API key (cùng loại AIza…, dùng chung)."""
-        out = self.split_keys(self.gemini_api_keys)
-        for k in [self.gemini_api_key, *self.split_keys(self.google_api_key)]:
-            k = (k or "").strip()
-            if k and k not in out:
-                out.append(k)
-        return out
-
-    def google_keys(self) -> list[str]:
-        """Google Cloud API key (TTS): mỗi dòng một key, xoay vòng khi hết hạn mức."""
-        return self.split_keys(self.google_api_key)
-    google_sa_json: str = ""           # đường dẫn service account JSON (thay cho API key)
+        return self.split_keys(self.gemini_api_keys)
     show_waveform: bool = True
     show_guide_on_start: bool = True     # mở Hướng dẫn ở lần chạy đầu (tắt trong cửa sổ hướng dẫn)
-    ffmpeg_fast: bool = False
-    gpu_encoder: str = "auto"
+    # hậu kỳ từng câu lồng tiếng (kiểm lỗi + đọc lại, đọc liền, AI rút gọn câu tràn, dự phòng Edge: luôn bật)
+    tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
+    tts_fade_out_ms: int = 25
+    tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên
+    loudness_target: float = -14.0       # độ to file xuất (LUFS) khi bật «Chuẩn hoá âm lượng»: TikTok/FB/YouTube −14
 
 
 @dataclass
@@ -362,6 +403,11 @@ class VideoItem:
     fps: float = 0.0
     has_audio: bool = True
     output_path: str | None = None
+    template: str = ""                     # mẫu đã áp riêng cho video này (chỉ để hiển thị)
+    #: quy trình duyệt: "" (chưa chuẩn bị) · "pending" (chờ duyệt) · "approved" (đã duyệt) · "skipped" (bỏ qua)
+    review: str = ""
+    #: cấu hình riêng (các phần của mẫu) — None = dùng cấu hình chung đang mở
+    config: dict | None = None
 
     @property
     def name(self) -> str:
@@ -372,8 +418,29 @@ class VideoItem:
         return Path(self.path).stem
 
     def persist_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "srt_path": self.srt_path,
-                "srt_translated_path": self.srt_translated_path, "voice_path": self.voice_path}
+        d = {"path": self.path, "srt_path": self.srt_path,
+             "srt_translated_path": self.srt_translated_path, "voice_path": self.voice_path}
+        if self.config is not None:
+            d["config"], d["template"] = self.config, self.template
+        if self.review:
+            d["review"] = self.review
+        return d
+
+
+#: các phần cấu hình thuộc về «mẫu» / cấu hình riêng của từng video (không gồm Dựng Truyện, thư mục xuất, settings máy)
+TEMPLATE_SECTIONS: dict[str, str] = {
+    "video": "Khung hình, tốc độ & âm lượng",
+    "subtitle": "Phụ đề, nhận diện giọng & dịch",
+    "tts": "Lồng tiếng (giọng đọc)",
+    "blur": "Che mờ",
+    "bgm": "Nhạc nền",
+    "brand": "Logo, chữ & watermark",
+    "trim": "Cắt đầu / cuối",
+    "color": "Màu, hiệu ứng & chống trùng",
+}
+_SECTION_CLASSES: dict[str, type] = {}
+#: thông số gắn với máy (GPU…) — áp mẫu không đổi
+MACHINE_FIELDS = {"video": ("use_gpu", "gpu_backend", "video_codec")}
 
 
 # ── Tiện ích chuyển đổi ──────────────────────────────────────────────────
@@ -402,11 +469,22 @@ def _from_dict(cls, data: dict[str, Any] | None):
         except (TypeError, ValueError):
             continue
         setattr(obj, f.name, value)
+    if isinstance(obj, TTSConfig):
+        obj.migrate(data)             # cấu hình / mẫu / cấu hình riêng từng video còn ghi engine đã gỡ
+    elif isinstance(obj, SubtitleConfig):
+        obj.migrate()
     return obj
 
 
+_SECTION_CLASSES.update(video=VideoConfig, subtitle=SubtitleConfig, tts=TTSConfig, blur=BlurConfig, bgm=BGMConfig,
+                        brand=BrandConfig, trim=TrimConfig, color=ColorConfig)
+
+
 class AppState:
-    """Nguồn sự thật duy nhất cho UI và pipeline."""
+    """Nguồn sự thật duy nhất cho UI và pipeline.
+
+    Cấu hình đang hiển thị (``self.video``…) là của video đang chọn: video có cấu hình riêng (``item.config``) thì
+    nạp cấu hình đó, cấu hình chung được cất ở ``_shared`` và trả lại khi chọn video không có cấu hình riêng."""
 
     CONFIG_VERSION = 1
 
@@ -421,10 +499,17 @@ class AppState:
         self.color = ColorConfig()
         self.story = StoryConfig()
         self.settings = Settings()
+        self._settings_extra: dict[str, Any] = {}       # khoá lạ trong settings.json (tính năng đã gỡ) — ghi lại y nguyên
         self.videos: list[VideoItem] = []
         self.active_index: int = -1
         self.output_dir: str = str(VIDEOS_DIR)
         self.ui: dict[str, Any] = {"active_module": "video"}
+        self.template_name: str = ""                    # mẫu đã áp vào cấu hình chung
+        self._shared: dict[str, Any] | None = None      # cấu hình chung khi đang chọn video có cấu hình riêng
+        # Đang duyệt: chỉnh gì cũng chỉ cho video đang chọn → giữ bản cấu hình chung trước lần chỉnh đầu tiên
+        self.review_scope = False
+        self._pristine: dict[str, Any] | None = None
+        self.last_change_auto = False       # lần config_changed gần nhất do máy tự điền?
 
         self._listeners: dict[str, list[Callable[..., None]]] = {}
         self._dirty_timer: threading.Timer | None = None
@@ -442,6 +527,8 @@ class AppState:
             pass
 
     def emit(self, event: str, *args: Any) -> None:
+        if event in ("config_loaded", "active_changed", "videos_changed"):
+            self._snap_pristine()             # áp mẫu / đổi video / nạp cấu hình → mốc «chưa chỉnh» mới
         for cb in list(self._listeners.get(event, [])):
             try:
                 cb(*args)
@@ -467,37 +554,175 @@ class AppState:
             existing.add(p.lower())
             added.append(item)
         if added:
-            if self.active_index < 0:
-                self.active_index = 0
+            first = self.active_index < 0
+            if first:
+                self._activate(0, None)
             self.emit("videos_changed")
+            if first:                       # hàng đợi đang trống → video đầu tiên thành video đang xem
+                self.emit("active_changed")
             self.mark_dirty()
         return added
 
     def remove_video(self, index: int) -> None:
         if not (0 <= index < len(self.videos)):
             return
+        prev = self.active
         del self.videos[index]
-        if self.active_index >= len(self.videos):
-            self.active_index = len(self.videos) - 1
+        new = self.active_index
+        if index < new:
+            new -= 1
+        new = min(new, len(self.videos) - 1)
+        self._activate(new, prev)
         self.emit("videos_changed")
         self.emit("active_changed")
         self.mark_dirty()
 
     def clear_videos(self) -> None:
+        prev = self.active
         self.videos.clear()
-        self.active_index = -1
+        self._activate(-1, prev)
         self.emit("videos_changed")
         self.emit("active_changed")
         self.mark_dirty()
 
     def set_active(self, index: int) -> None:
         if index != self.active_index and 0 <= index < len(self.videos):
-            self.active_index = index
+            self._activate(index, self.active)
             self.emit("active_changed")
 
+    # ── Cấu hình riêng từng video ────────────────────────────────────────
+    def sections_dict(self) -> dict[str, Any]:
+        """Bản sao các phần cấu hình đang hiển thị."""
+        return {k: dataclasses.asdict(getattr(self, k)) for k in TEMPLATE_SECTIONS}
+
+    def apply_sections(self, data: dict[str, Any], only: list[str] | tuple[str, ...] | None = None,
+                       keep_machine: bool = False) -> None:
+        for k in only or TEMPLATE_SECTIONS:
+            if k not in TEMPLATE_SECTIONS or not isinstance(data.get(k), dict):
+                continue
+            new = _from_dict(_SECTION_CLASSES[k], data[k])
+            if keep_machine:
+                for f in MACHINE_FIELDS.get(k, ()):
+                    setattr(new, f, getattr(getattr(self, k), f))
+            setattr(self, k, new)
+
+    def _activate(self, index: int, prev: VideoItem | None) -> bool:
+        """Đổi video đang chọn + đổi cấu hình hiển thị theo video (riêng / chung). Trả về True nếu cấu hình đã đổi."""
+        if prev is not None and prev.config is not None and prev in self.videos:
+            prev.config = self.sections_dict()              # lưu chỉnh sửa của video vừa rời
+        self.active_index = index
+        new = self.active
+        changed = False
+        if new is not None and new.config is not None:
+            if self._shared is None:
+                self._shared = self.sections_dict()        # cất cấu hình chung
+            self.apply_sections(new.config)
+            changed = True
+        elif self._shared is not None:
+            self.apply_sections(self._shared)
+            self._shared = None
+            changed = True
+        if changed:
+            self.emit("config_loaded")
+        return changed
+
+    def shared_sections(self) -> dict[str, Any]:
+        """Cấu hình chung (cho video không có cấu hình riêng)."""
+        return self._shared if self._shared is not None else self.sections_dict()
+
+    def effective_sections(self, item: VideoItem) -> dict[str, Any]:
+        """Cấu hình thật sự dùng để render ``item``."""
+        if item.config is not None:
+            return self.sections_dict() if item is self.active else item.config
+        return self.shared_sections()
+
+    def make_own(self, item: VideoItem, sections: dict[str, Any] | None = None, template: str = "") -> None:
+        """Cho ``item`` cấu hình riêng (mặc định: chép cấu hình đang hiển thị; ``sections``: các phần muốn đè)."""
+        import copy
+
+        cfg = copy.deepcopy(self.effective_sections(item))
+        for k, v in (sections or {}).items():
+            if k in TEMPLATE_SECTIONS and isinstance(v, dict):
+                merged = dict(v)
+                for f in MACHINE_FIELDS.get(k, ()):
+                    merged[f] = cfg.get(k, {}).get(f, merged.get(f))
+                cfg[k] = merged
+        if item is self.active and item.config is None and self._shared is None:
+            self._shared = self.sections_dict()
+        item.config = cfg
+        item.template = template or item.template
+        if item is self.active:
+            self.apply_sections(cfg)
+            self.emit("config_loaded")
+        self.mark_dirty()
+
+    def drop_own(self, item: VideoItem) -> None:
+        """Bỏ cấu hình riêng → video dùng lại cấu hình chung."""
+        if item.config is None:
+            return
+        item.config, item.template = None, ""
+        if item is self.active and self._shared is not None:
+            self.apply_sections(self._shared)
+            self._shared = None
+            self.emit("config_loaded")
+        self.mark_dirty()
+
+    def state_for(self, item: VideoItem) -> AppState:
+        """Bản sao trạng thái để render ``item`` theo đúng cấu hình của nó (an toàn khi UI đổi cấu hình lúc đang chạy)."""
+        import copy
+
+        clone = copy.copy(self)
+        clone._listeners = {}
+        clone._save_scheduler = None
+        clone._dirty_timer = None
+        clone._shared = None
+        clone.apply_sections(copy.deepcopy(self.effective_sections(item)))
+        clone.story = copy.deepcopy(self.story)
+        return clone
+
+    # ── Chỉnh riêng khi duyệt ─────────────────────────────────────────────
+    def set_review_scope(self, on: bool) -> None:
+        self.review_scope = bool(on)
+        self._snap_pristine()
+
+    def _snap_pristine(self) -> None:
+        a = self.active
+        self._pristine = self.sections_dict() if (self.review_scope and a is not None and a.config is None) else None
+
+    def _scope_edit(self) -> None:
+        """Lần chỉnh đầu tiên trên video đang duyệt (đang theo cấu hình chung) → tách thành cấu hình riêng của video
+        đó; cấu hình chung (cho các video khác) trở về như trước lần chỉnh."""
+        a = self.active
+        if not self.review_scope or self._pristine is None or a is None or a.config is not None:
+            return
+        cur = self.sections_dict()
+        if cur == self._pristine:
+            return
+        a.config = cur
+        a.template = a.template or self.template_name
+        self._shared, self._pristine = self._pristine, None
+        self.emit("scoped", a)
+
+    def apply_to_all(self, item: VideoItem) -> None:
+        """Nút «Áp cho tất cả»: cấu hình riêng của ``item`` (đang chọn) thành cấu hình chung, bỏ «riêng» của nó.
+        Video khác đã chỉnh riêng giữ nguyên."""
+        if item is not self.active or item.config is None:
+            return
+        item.config, item.template = None, ""
+        self._shared = None                   # cấu hình đang hiển thị (của item) giờ là cấu hình chung
+        self.emit("config_loaded")
+        self.mark_dirty()
+
     # ── Cấu hình ──────────────────────────────────────────────────────────
-    def config_changed(self, section: str = "") -> None:
-        """Module UI gọi sau khi ghi một giá trị vào cấu hình."""
+    def config_changed(self, section: str = "", auto: bool = False) -> None:
+        """Module UI gọi sau khi ghi một giá trị vào cấu hình. ``auto``: máy tự điền (vd. gợi ý giọng cho người nói)
+        chứ không phải người dùng sửa → không tách video thành «chỉnh riêng», mốc «chưa chỉnh» nhận luôn giá trị mới."""
+        self.last_change_auto = auto
+        if auto:
+            if self._pristine is not None:
+                self._snap_pristine()
+        else:
+            self._scope_edit()
         self.emit("config_changed", section)
         self.mark_dirty()
 
@@ -518,17 +743,14 @@ class AppState:
             self._dirty_timer.start()
 
     def to_config_dict(self) -> dict[str, Any]:
+        act = self.active
+        if act is not None and act.config is not None:
+            act.config = self.sections_dict()               # cấu hình riêng của video đang chọn = cái đang hiển thị
         return {
             "_meta": {"app": "edit_studio", "version": self.CONFIG_VERSION},
-            "video": dataclasses.asdict(self.video),
-            "subtitle": dataclasses.asdict(self.subtitle),
-            "tts": dataclasses.asdict(self.tts),
-            "blur": dataclasses.asdict(self.blur),
-            "bgm": dataclasses.asdict(self.bgm),
-            "brand": dataclasses.asdict(self.brand),
-            "trim": dataclasses.asdict(self.trim),
-            "color": dataclasses.asdict(self.color),
+            **self.shared_sections(),                       # cấu hình chung (không phải của video đang chọn)
             "story": dataclasses.asdict(self.story),
+            "template": self.template_name,
             "videos": [v.persist_dict() for v in self.videos],
             "active_index": self.active_index,
             "output_dir": self.output_dir,
@@ -545,7 +767,17 @@ class AppState:
         self.trim = _from_dict(TrimConfig, data.get("trim"))
         self.color = _from_dict(ColorConfig, data.get("color"))
         self.story = _from_dict(StoryConfig, data.get("story"))
+        # cấu hình cũ còn ghi model Google đã tắt (2.5 Flash, Imagen 4, Veo 3.0…) → tự đổi sang model thay thế
+        for obj, attr in ((self.story, "text_model"), (self.story, "image_model"), (self.story, "video_model")):
+            setattr(obj, attr, migrate_model(getattr(obj, attr)))
+        if self.story.provider in RETIRED_TTS:
+            self.story.provider = VIENEU
+            # giọng Gemini nam → giọng nam VieNeu; còn lại (cả giọng trả phí) → giọng nữ
+            self.story.voice_id = self.story.voice_name = vieneu_for_gemini(self.story.voice_id)
+            self.story.voice_language = "vi-VN"
         if include_videos:
+            self._shared = None
+            self.template_name = str(data.get("template") or "")
             self.videos = []
             for row in data.get("videos", []) or []:
                 if not isinstance(row, dict) or not row.get("path"):
@@ -558,9 +790,16 @@ class AppState:
                     srt_translated_path=row.get("srt_translated_path")
                     if row.get("srt_translated_path") and Path(row["srt_translated_path"]).exists() else None,
                     voice_path=row.get("voice_path") if row.get("voice_path") and Path(row["voice_path"]).exists() else None,
+                    config=row.get("config") if isinstance(row.get("config"), dict) else None,
+                    template=str(row.get("template") or ""),
+                    review=str(row.get("review") or ""),
                 ))
+            for it in self.videos:                      # trạng thái hiển thị theo bước duyệt đã lưu
+                it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review, it.status)
             idx = data.get("active_index", 0)
-            self.active_index = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
+            idx = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
+            self.active_index = -1
+            self._activate(idx, None)                   # video đang chọn có cấu hình riêng → nạp cấu hình đó
         out = data.get("output_dir")
         if isinstance(out, str) and out:
             self.output_dir = out
@@ -592,42 +831,29 @@ class AppState:
             logger.exception("Cấu hình hỏng, dùng mặc định: %s", target)
             return False
 
-    # ── Preset ────────────────────────────────────────────────────────────
-    def list_presets(self) -> list[str]:
-        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-        return sorted(p.stem for p in PRESETS_DIR.glob("*.json"))
-
-    def save_preset(self, name: str) -> Path:
-        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-        safe = "".join(c for c in name if c not in '\\/:*?"<>|').strip() or "preset"
-        target = PRESETS_DIR / f"{safe}.json"
-        data = self.to_config_dict()
-        data.pop("videos", None)
-        data.pop("active_index", None)
-        target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return target
-
-    def load_preset(self, name: str) -> bool:
-        target = PRESETS_DIR / f"{name}.json"
-        if not target.exists():
-            return False
-        data = json.loads(target.read_text(encoding="utf-8"))
-        self.apply_config_dict(data, include_videos=False)
-        self.emit("config_loaded")
-        self.mark_dirty()
-        return True
-
     # ── Settings máy ──────────────────────────────────────────────────────
     def load_settings(self) -> None:
         if SETTINGS_FILE.exists():
             try:
-                self.settings = _from_dict(Settings, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                self.settings = _from_dict(Settings, data)
+                if isinstance(data, dict):
+                    # key / cài đặt của tính năng đã gỡ (Groq, ElevenLabs…) giữ nguyên trong file, không xoá
+                    known = {f.name for f in fields(Settings)}
+                    self._settings_extra = {k: v for k, v in data.items() if k not in known}
+                    if data.get("translate_provider", "Gemini") != "Gemini":   # model của nhà cung cấp khác → Gemini
+                        self.settings.translate_model = Settings.translate_model
+                    # một ô key Gemini: chuyển key ở ô key đơn cũ + ô «Google API keys» (vẫn được dùng làm key Gemini)
+                    moved = [self._settings_extra.pop(k, "") for k in ("gemini_api_key", "google_api_key")]
+                    keys = Settings.split_keys("\n".join([self.settings.gemini_api_keys, *(str(v or "") for v in moved)]))
+                    self.settings.gemini_api_keys = "\n".join(keys)
+                self.settings.translate_model = migrate_model(self.settings.translate_model)
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
 
     def save_settings(self) -> None:
         try:
-            SETTINGS_FILE.write_text(json.dumps(dataclasses.asdict(self.settings), ensure_ascii=False, indent=2),
-                                     encoding="utf-8")
+            data = {**self._settings_extra, **dataclasses.asdict(self.settings)}
+            SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             logger.exception("Không lưu được settings.json")

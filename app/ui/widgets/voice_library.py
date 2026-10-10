@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from tkinter import messagebox
@@ -14,6 +13,9 @@ from app.config import theme as T
 from app.ui.widgets.ui import button
 from app.config.paths import VOICE_DIR
 from app.services.srt_utils import format_ts
+from app.core.platform import open_path
+
+SIDE_FILES = (".json", ".srt", ".cues.csv", ".words.json")    # file đi kèm track: ghi chú · phụ đề dời · báo cáo · mốc chữ
 
 
 def list_voices() -> list[dict]:
@@ -67,7 +69,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         ctk.CTkButton(foot, text="Đóng", width=90, height=32, command=self.destroy, **T.secondary_button()).pack(side="right")
         self.use_btn = ctk.CTkButton(foot, text="Dùng voice này", width=130, height=32, command=self._use, **T.primary_button())
         self.use_btn.pack(side="right", padx=6)
-        ctk.CTkButton(foot, text="Mở thư mục", width=100, height=32, command=lambda: os.startfile(str(VOICE_DIR)), **T.secondary_button()).pack(side="right", padx=6)
+        ctk.CTkButton(foot, text="Mở thư mục", width=100, height=32, command=lambda: open_path(str(VOICE_DIR)), **T.secondary_button()).pack(side="right", padx=6)
         button(foot, "Nghe", icon_name="play", size="sm", command=self._play).pack(side="right", padx=6)
         ctk.CTkButton(foot, text="Xóa tất cả…", width=100, height=32, command=self._delete_all, **T.danger_button()).pack(side="right", padx=6)
         button(foot, "Xóa voice", icon_name="trash", variant="destructive", size="sm", command=self._delete).pack(side="right", padx=6)
@@ -128,7 +130,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
             return
         p = self.selected["path"]
         if messagebox.askyesno("Xóa voice", f"Xoá {p.name}?"):
-            for f in (p, p.with_suffix(".json"), p.with_suffix(".srt")):
+            for f in (p, *(p.with_suffix(x) for x in SIDE_FILES)):
                 try:
                     f.unlink()
                 except OSError:
@@ -139,7 +141,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
     def _delete_all(self) -> None:
         if messagebox.askyesno("Xóa tất cả", "Xoá toàn bộ voice đã tạo trong output/voice?"):
             for it in list_voices():
-                for f in (it["path"], it["path"].with_suffix(".json"), it["path"].with_suffix(".srt")):
+                for f in (it["path"], *(it["path"].with_suffix(x) for x in SIDE_FILES)):
                     try:
                         f.unlink()
                     except OSError:

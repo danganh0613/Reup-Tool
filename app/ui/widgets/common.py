@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import filedialog
@@ -9,37 +10,99 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.ui.widgets.ui import Popover, Select, button
+from app.ui.widgets.ui import Popover, Select, Tooltip, button
+
+
+def info_icon(master, text: str) -> ctk.CTkLabel:
+    """Dấu «ⓘ» nhỏ cạnh nhãn: rê chuột vào xem giải thích dài — nhãn giữ ngắn gọn."""
+    lbl = ctk.CTkLabel(master, text="ⓘ", font=T.font(13), text_color=T.TEXT_MUTED, width=16, cursor="hand2")
+    Tooltip(lbl, text, delay=150, wrap=60, click=True)
+    return lbl
+
+
+def row_label(master, text: str, info: str = "", width: int = 120):
+    """Nhãn cột trái của một hàng (rộng cố định để các hàng thẳng cột); ``info`` → thêm ⓘ ngay sau nhãn."""
+    if not info:
+        return ctk.CTkLabel(master, text=text, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=width)
+    cell = ctk.CTkFrame(master, fg_color="transparent", width=width, height=30)
+    cell.pack_propagate(False)
+    ctk.CTkLabel(cell, text=text, font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+    info_icon(cell, info).pack(side="left", padx=(3, 0))
+    return cell
 
 
 class Section(ctk.CTkFrame):
-    """Khối có tiêu đề; nội dung đặt vào ``self.body``."""
+    """Khối có tiêu đề; nội dung đặt vào ``self.body``. ``collapsed`` (True / False) → bấm tiêu đề để mở / thu gọn
+    (phần ít dùng giấu đi cho gọn); ``on_open`` gọi lần đầu mở (dựng nội dung nặng khi cần)."""
 
-    def __init__(self, master, title: str, *, subtitle: str = "") -> None:
+    def __init__(self, master, title: str, *, subtitle: str = "", info: str = "", collapsed: bool | None = None,
+                 on_open: Callable[[], None] | None = None) -> None:
         super().__init__(master, fg_color=T.BG_CARD, corner_radius=T.RADIUS_CARD, border_width=0)
         self.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
+        self.head = head
         ctk.CTkLabel(head, text=title, font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
-        if subtitle:
-            ctk.CTkLabel(head, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(
-                side="left", padx=(8, 0))
+        if info:
+            info_icon(head, info).pack(side="left", padx=(4, 0))
+        self.subtitle = ctk.CTkLabel(head, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w")
+        if subtitle or collapsed is not None:
+            self.subtitle.pack(side="left", padx=(8, 0))
         self.body = ctk.CTkFrame(self, fg_color="transparent")
-        self.body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
         self.body.grid_columnconfigure(0, weight=1)
+        self._on_open, self._opened_once = on_open, False
+        self.collapsible = collapsed is not None
+        self.is_open = not collapsed
+        if self.collapsible:
+            self.chevron = ctk.CTkLabel(head, text="", font=T.font(13), text_color=T.TEXT_DIM, width=20)
+            self.chevron.pack(side="right")
+            for w in (head, *head.winfo_children()):
+                try:
+                    is_info = w.cget("text") == "ⓘ"           # bấm ⓘ = xem giải thích, không đóng / mở khối
+                except (ValueError, tk.TclError):
+                    is_info = False
+                if is_info:
+                    continue
+                w.bind("<Button-1>", lambda _e: self.toggle(), add="+")
+                try:
+                    w.configure(cursor="hand2")
+                except (tk.TclError, ValueError):
+                    pass
+        self.set_open(self.is_open)
+
+    def set_open(self, on: bool) -> None:
+        self.is_open = bool(on)
+        if self.is_open:
+            if not self._opened_once:
+                self._opened_once = True
+                if self._on_open:
+                    self._on_open()
+            self.body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        else:
+            self.body.grid_forget()
+            self.head.grid_configure(pady=(12, 12))
+        if self.is_open:
+            self.head.grid_configure(pady=(12, 4))
+        if self.collapsible:
+            self.chevron.configure(text="▴" if self.is_open else "▾")
+
+    def toggle(self) -> None:
+        self.set_open(not self.is_open)
+
+    def set_subtitle(self, text: str) -> None:
+        self.subtitle.configure(text=text)
 
 
 class SliderRow(ctk.CTkFrame):
     def __init__(self, master, label: str, *, from_: float, to: float, step: float = 1, value: float = 0,
                  fmt: str = "{:.0f}", suffix: str = "", on_change: Callable[[float], None] | None = None,
-                 on_release: Callable[[float], None] | None = None) -> None:
+                 on_release: Callable[[float], None] | None = None, info: str = "") -> None:
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
         self.fmt, self.suffix, self.step = fmt, suffix, step
         self.on_change, self.on_release = on_change, on_release
         self._value = value
-        ctk.CTkLabel(self, text=label, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
-            row=0, column=0, sticky="w")
+        row_label(self, label, info).grid(row=0, column=0, sticky="w")
         steps = int(round((to - from_) / step)) if step else None
         self.slider = ctk.CTkSlider(self, from_=from_, to=to, number_of_steps=steps, command=self._slid, height=16)
         self.slider.grid(row=0, column=1, sticky="ew", padx=6)
@@ -81,6 +144,8 @@ class SliderRow(ctk.CTkFrame):
             self.on_release(v)
 
     def set(self, v: float) -> None:
+        if v == self._value and self.var.get() == self._text(v) and abs(self.slider.get() - v) < 1e-9:
+            return                                # CTkSlider.set vẽ lại cả thanh dù giá trị không đổi
         self._value = v
         self.slider.set(v)
         self.var.set(self._text(v))
@@ -91,17 +156,18 @@ class SliderRow(ctk.CTkFrame):
 
 class OptionRow(ctk.CTkFrame):
     def __init__(self, master, label: str, values: list[str], *, value: str | None = None,
-                 on_change: Callable[[str], None] | None = None, width: int = 200) -> None:
+                 on_change: Callable[[str], None] | None = None, width: int = 200,
+                 labels: dict[str, str] | None = None, info: str = "") -> None:
+        """``labels``: tên hiển thị cho từng giá trị (giá trị lưu vẫn là mã, vd. "vi" → "Tiếng Việt")."""
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(self, text=label, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
-            row=0, column=0, sticky="w")
-        self.menu = Select(self, values or [""], value=value, command=on_change, width=width, height=34)
+        row_label(self, label, info).grid(row=0, column=0, sticky="w")
+        self.menu = Select(self, values or [""], value=value, command=on_change, width=width, height=34, labels=labels)
         self.var = self.menu.var
         self.menu.grid(row=0, column=1, sticky="ew")
 
     def set(self, v: str) -> None:
-        self.var.set(v)
+        self.menu.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -134,7 +200,7 @@ class ComboRow(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        self.combo.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -145,13 +211,15 @@ class ComboRow(ctk.CTkFrame):
 
 class SwitchRow(ctk.CTkFrame):
     def __init__(self, master, label: str, *, value: bool = False, on_change: Callable[[bool], None] | None = None,
-                 hint: str = "") -> None:
+                 hint: str = "", info: str = "") -> None:
         super().__init__(master, fg_color="transparent")
         self.var = tk.BooleanVar(value=value)
         self.on_change = on_change
         self.switch = ctk.CTkSwitch(self, text=label, variable=self.var, command=self._toggled, font=T.font(12),
                                     onvalue=True, offvalue=False)
         self.switch.pack(side="left")
+        if info:
+            info_icon(self, info).pack(side="left", padx=(4, 0))
         if hint:
             ctk.CTkLabel(self, text=hint, font=T.font(11), text_color=T.TEXT_MUTED).pack(side="left", padx=(8, 0))
 
@@ -160,7 +228,8 @@ class SwitchRow(ctk.CTkFrame):
             self.on_change(bool(self.var.get()))
 
     def set(self, v: bool) -> None:
-        self.var.set(bool(v))
+        if bool(v) != bool(self.var.get()):       # CTkSwitch vẽ lại cả công tắc mỗi lần gán, kể cả gán trùng
+            self.var.set(bool(v))
 
     def get(self) -> bool:
         return bool(self.var.get())
@@ -200,7 +269,9 @@ class EntryRow(ctk.CTkFrame):
         if self.browse_mode == "dir":
             p = filedialog.askdirectory()
         elif self.browse_mode == "exe":
-            p = filedialog.askopenfilename(filetypes=[("Chương trình", "*.exe"), ("Tất cả", "*.*")])
+            # macOS/Linux: chương trình không có đuôi .exe → không lọc
+            p = filedialog.askopenfilename(filetypes=[("Chương trình", "*.exe"), ("Tất cả", "*.*")]) if sys.platform == "win32" \
+                else filedialog.askopenfilename()
         else:
             p = filedialog.askopenfilename()
         if p:
@@ -209,7 +280,8 @@ class EntryRow(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        if self.var.get() != v:
+            self.var.set(v)
 
     def get(self) -> str:
         return self.var.get()
@@ -263,6 +335,8 @@ class ColorRow(ctk.CTkFrame):
         self._picker = ColorPicker(self.swatch, self._last, on_change=self._apply)
 
     def set(self, v: str) -> None:
+        if v.upper() == self._last and self.var.get() == self._last:
+            return
         self._last = v.upper()
         self.var.set(self._last)
         self.swatch.configure(fg_color=self._last, hover_color=self._last)
@@ -282,7 +356,7 @@ class ButtonRow(ctk.CTkFrame):
             self.grid_columnconfigure(i, weight=1)
             label, ic = split_icon(text)
             st = dict(style or T.secondary_button())
-            variant = "primary" if st.get("fg_color") == T.ACCENT else "destructive" if st.get("fg_color") in (T.DANGER, T.DANGER_SOFT) \
+            variant = "primary" if st.get("fg_color") == T.ACCENT else "destructive" if st.get("fg_color") in (T.DANGER, T.DANGER_BG, T.DANGER_SOFT) \
                 else "ghost" if st.get("fg_color") == "transparent" else "secondary"
             b = button(self, label.strip() if ic else text, icon_name=ic, variant=variant, size="sm", command=cmd, width=10)
             b.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 3, 0))
@@ -354,7 +428,8 @@ class TimeEntry(ctk.CTkFrame):
 
     def set(self, v: str) -> None:
         self._last = v
-        self.var.set(v)
+        if self.var.get() != v:
+            self.var.set(v)
 
     def get(self) -> str:
         return self.var.get().strip()

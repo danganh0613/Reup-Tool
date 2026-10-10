@@ -5,3 +5,13 @@ faster-whisper>=1.1
 requests>=2.31
 tkinterdnd2>=0.4
 packaging
+onnxruntime>=1.14          # nhận diện người nói (lồng tiếng nhiều giọng); faster-whisper cũng cần
+numpy
+# ── Tuỳ chọn: nhận diện tiếng Trung + đọc phụ đề in sẵn (mục Nhận dạng → SenseVoice / OCR). Nặng (~1 GB) ──
+funasr>=1.4                # SenseVoice-Small (cần torch; bản PyPI trên Windows là CPU)
+modelscope>=1.40
+torch>=2.6
+torchaudio>=2.6
+paddlepaddle>=3.3          # PaddleOCR — Windows CPU phải tắt oneDNN (code đã đặt enable_mkldnn=False)
+paddleocr>=3.7
+opencc-python-reimplemented>=0.1.7   # chữ phồn thể → giản thể cho OCR

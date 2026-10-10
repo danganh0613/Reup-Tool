@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tkinter import filedialog
 from typing import TYPE_CHECKING
@@ -10,16 +9,18 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.ui.widgets.ui import button
+from app.ui.widgets.ui import Tooltip, button
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts
+from app.core.platform import open_path
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
 _UNSET = object()
-_STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING}
+_STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
+                 "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED}
 
 
 class QueueRow(ctk.CTkFrame):
@@ -39,9 +40,13 @@ class QueueRow(ctk.CTkFrame):
         self.bar = ctk.CTkProgressBar(self, width=110, height=8)
         self.bar.grid(row=1, column=2, padx=8, pady=(0, 6), sticky="e")
         self.bar.set(0)
+        # video lỗi / đã huỷ: thử lại ngay tại đây (chuẩn bị hoặc render tuỳ chế độ), rê chuột xem lỗi đầy đủ
+        self.retry_btn = button(self, "", icon_name="refresh", variant="ghost", size="sm", command=self._retry,
+                                icon_color=T.ACCENT, width=28, tip="Thử lại video này")
         self.remove_btn = button(self, "", icon_name="close", variant="ghost", size="sm", command=self._remove, icon_color=T.TEXT_DIM, width=28,
                                  tip="Bỏ video này khỏi hàng đợi")
-        self.remove_btn.grid(row=0, column=3, rowspan=2, padx=(0, 8))
+        self.remove_btn.grid(row=0, column=4, rowspan=2, padx=(0, 8))
+        self.err_tip = Tooltip(self.info, "")
         for w in (self, self.num, self.name, self.info, self.status):
             w.bind("<Button-1>", lambda _e: self.panel.state.set_active(self.index))
             w.bind("<Double-Button-1>", lambda _e: self._open_output())
@@ -51,10 +56,13 @@ class QueueRow(ctk.CTkFrame):
     def _remove(self) -> None:
         self.panel.state.remove_video(self.index)
 
+    def _retry(self) -> None:
+        self.panel.window.retry_item(self.item)
+
     def _open_output(self) -> None:
         p = self.item.output_path or self.item.path
         if p and Path(p).exists():
-            os.startfile(p)
+            open_path(p)
 
     def _put(self, key: str, value: object, apply) -> None:
         if self._shown.get(key, _UNSET) != value:
@@ -82,12 +90,22 @@ class QueueRow(ctk.CTkFrame):
             flags.append("Dịch")
         if it.voice_path:
             flags.append("Giọng")
+        if it.config is not None:
+            flags.append("✎ Riêng")
         if flags:
             parts.append(" · ".join(flags))
         if it.message and it.status in ("Đang xử lý", "Lỗi"):
             parts.append(it.message)
         self._put("info", "  |  ".join(parts) if parts else "Chưa đọc thông tin", lambda v: self.info.configure(text=v))
         self._put("status", it.status, lambda v: self.status.configure(text=v, text_color=_STATUS_COLOR.get(v, T.TEXT)))
+        failed = it.status in ("Lỗi", "Đã huỷ")
+        self._put("retry", failed, lambda v: self.retry_btn.grid(row=0, column=3, rowspan=2) if v else self.retry_btn.grid_remove())
+        if it.status == "Lỗi" and it.message:
+            import textwrap
+
+            self.err_tip.set_text("\n".join(textwrap.wrap(f"Lỗi: {it.message}", 70)[:8]) + "\n\nBấm ↻ để thử lại.")
+        else:
+            self.err_tip.set_text("")
         self._put("progress", round(max(0.0, min(1.0, it.progress)), 3), self.bar.set)
         active = self.panel.state.active_index == self.index
         self._put("active", active, lambda v: self.configure(border_color=T.ACCENT if v else T.BORDER_SOFT,

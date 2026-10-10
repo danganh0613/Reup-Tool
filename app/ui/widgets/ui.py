@@ -34,8 +34,89 @@ def _variant(name: str) -> dict:
     if name == "ghost":
         return {"fg_color": "transparent", "hover_color": T.BG_HOVER, "text_color": T.TEXT, "border_width": 0}
     if name == "destructive":
-        return {"fg_color": T.DANGER, "hover_color": T.DANGER_HOVER, "text_color": "#FFFFFF", "border_width": 0}
+        return {"fg_color": T.DANGER_BG, "hover_color": T.DANGER_BG_HOVER, "text_color": "#FFFFFF", "border_width": 0}
     return {"fg_color": T.BG_ELEVATED, "hover_color": T.BG_HOVER, "text_color": T.TEXT, "border_width": 0}
+
+
+# ── Nút nền màu khi bị khoá (state="disabled") ───────────────────────────
+# CTk giữ nguyên nền sáng nhưng đổi chữ sang xám → nút «Dừng» đỏ chữ xám, nút chính xanh chữ xám trông như lỗi.
+# Ở đây: nút nền màu (chính / xoá-dừng) khi khoá → nền dịu đi (màu «soft» cùng tông), chữ + icon vẫn rõ, cùng một
+# kiểu cho mọi nút trong app (kể cả nút tạo thẳng bằng CTkButton với T.primary_button() / T.danger_button()).
+def _disabled_look(fg) -> tuple[str, str] | None:
+    """(nền, chữ) khi khoá cho nút nền ``fg``; None = nút không nền màu (giữ kiểu mặc định của CTk)."""
+    c = (fg[-1] if isinstance(fg, (list, tuple)) else fg or "")
+    c = str(c).upper()
+    if c == str(T.ACCENT).upper():
+        return T.ACCENT_SOFT, T.ACCENT
+    if c in (str(T.DANGER).upper(), str(T.DANGER_HOVER).upper(), str(T.DANGER_BG).upper(), str(T.DANGER_BG_HOVER).upper()):
+        return T.DANGER_SOFT, "#FFFFFF"
+    return None
+
+
+def _sync_state(b: ctk.CTkButton) -> None:
+    on = getattr(b, "_es_on", None)
+    if on is None:
+        fg = b.cget("fg_color")
+        look = _disabled_look(fg)
+        on = b._es_on = (fg, look) if look else False
+    disabled = str(b.cget("state")) == "disabled"
+    kw: dict = {}                                # gom thay đổi → một lần configure (mỗi lần CTk vẽ lại cả nút)
+    if on:
+        fg, (soft_fg, soft_text) = on
+        want = soft_fg if disabled else fg
+        if b.cget("fg_color") != want:
+            kw["fg_color"] = want
+        if b.cget("text_color_disabled") != soft_text:
+            kw["text_color_disabled"] = soft_text
+    else:                                        # nút xám / trong suốt: icon mờ cùng chữ
+        dis = b.cget("text_color_disabled")
+        soft_text = dis[-1] if isinstance(dis, (list, tuple)) else dis
+        if not str(soft_text).startswith("#"):          # tên màu Tk (vd. «gray60») → hex cho bộ vẽ icon
+            try:
+                r, g, bl = (v >> 8 for v in b.winfo_rgb(soft_text))
+                soft_text = f"#{r:02X}{g:02X}{bl:02X}"
+            except Exception:
+                soft_text = T.TEXT_MUTED
+    ic = getattr(b, "_es_icon", None)
+    if ic and ic[0]:
+        name, isz, color = ic[0], ic[1], ic[2]
+        img = icon(name, isz, soft_text if disabled else color, dy=ICON_DY if str(b.cget("text")).strip() else 0)
+        if img is not b.__dict__.get("_image"):        # icon() dùng chung ảnh → cùng tham số là cùng đối tượng
+            kw["image"] = img
+    if kw:
+        _ORIG_CONFIGURE(b, **kw)
+
+
+_ORIG_INIT = ctk.CTkButton.__init__
+_ORIG_CONFIGURE = ctk.CTkButton.configure
+
+
+def _btn_init(self, *a, **kw) -> None:
+    look = _disabled_look(kw.get("fg_color"))
+    if look and "text_color_disabled" not in kw:
+        kw["text_color_disabled"] = look[1]
+    _ORIG_INIT(self, *a, **kw)
+    self._es_on = None
+    _sync_state(self)
+
+
+def _btn_configure(self, require_redraw: bool = False, **kw) -> None:
+    if "fg_color" in kw:
+        self._es_on = None                       # đổi màu nền → tính lại kiểu khi khoá theo màu mới
+    ic = getattr(self, "_es_icon", None)
+    if ic and ic[0] and "text_color" in kw and ic[2] == self.cget("text_color"):
+        # icon theo màu chữ (vd nút công cụ: chọn → nền màu nhấn chữ tối) → đổi màu chữ thì icon đổi theo, không vẽ lại
+        # icon bằng màu cũ (chữ tối mà icon trắng trên nền màu nhấn)
+        self._es_icon = (ic[0], ic[1], kw["text_color"], *ic[3:])
+    _ORIG_CONFIGURE(self, require_redraw, **kw)
+    if ("state" in kw or "fg_color" in kw) and hasattr(self, "_es_on"):
+        _sync_state(self)
+
+
+if not getattr(ctk.CTkButton, "_es_patched", False):
+    ctk.CTkButton.__init__ = _btn_init
+    ctk.CTkButton.configure = _btn_configure
+    ctk.CTkButton._es_patched = True
 
 
 def _scale(w) -> float:
@@ -81,6 +162,8 @@ def button(master, text: str = "", *, icon_name: str | None = None, variant: str
     b = ctk.CTkButton(master, text=text, image=img, compound="left", height=h, width=width, corner_radius=T.RADIUS,
                       font=font, command=command, **style, **kw)
     b._es_icon = (icon_name, isz, icon_color or style["text_color"], size, font)   # để relabel() vẽ lại icon/đo chữ đúng
+    if str(b.cget("state")) == "disabled":
+        _sync_state(b)                           # icon theo màu chữ khi khoá
     if tip:
         b.tooltip = Tooltip(b, tip)
     return b
@@ -95,6 +178,24 @@ def relabel(b: ctk.CTkButton, text: str, *, width: int | None = None) -> None:
         kw["image"] = icon(name, isz, color, dy=ICON_DY if text else 0)
     kw["width"] = width if width is not None else button_width(b.master, text, size=size, icon=bool(name), font=font)
     b.configure(**kw)
+    if str(b.cget("state")) == "disabled":
+        _sync_state(b)
+
+
+def set_variant(b: ctk.CTkButton, variant: str) -> None:
+    """Đổi kiểu nút tạo bằng ``button()`` theo ngữ cảnh (vd nút chính ↔ nút thường: mỗi màn hình chỉ một nút chính)."""
+    if getattr(b, "_es_variant", None) == variant:
+        return
+    b._es_variant = variant
+    style = _variant(variant)
+    name, isz, _color, size, _font = getattr(b, "_es_icon", (None, 16, T.TEXT, "md", None))
+    font = T.font(SIZES.get(size, SIZES["md"])[1], "medium" if variant == "primary" else "normal")
+    b._es_icon = (name, isz, style["text_color"], size, font)
+    kw = {**style, "font": font}
+    look = _disabled_look(style["fg_color"])
+    if look:
+        kw["text_color_disabled"] = look[1]
+    b.configure(**kw)                            # đổi nền → _sync_state vẽ lại icon theo màu chữ mới
 
 
 def button_icon(name: str, *, size: str = "md", color: str | None = None, with_text: bool = True) -> ctk.CTkImage | None:
@@ -116,9 +217,11 @@ class Tooltip:
     DELAY = 450
     _open: Tooltip | None = None          # chỉ một tooltip hiện tại một thời điểm
 
-    def __init__(self, widget, text: str, *, delay: int | None = None) -> None:
+    def __init__(self, widget, text: str, *, delay: int | None = None, wrap: int = 0, click: bool = False) -> None:
         self.w, self.text = widget, text
         self.delay = self.DELAY if delay is None else delay
+        self.wrap = wrap                  # > 0: tự xuống dòng ~``wrap`` ký tự, căn trái (giải thích dài của nút ⓘ)
+        self.click = click                # bấm cũng hiện (không chỉ rê chuột) — cho nút ⓘ
         self._after: str | None = None
         self._hide_after: str | None = None
         self._tip: tk.Toplevel | None = None
@@ -149,6 +252,9 @@ class Tooltip:
 
     def _press(self, _e=None) -> None:
         self._cancel()
+        if self.click and self._tip is None:
+            self._show()
+            return
         self.hide()
 
     def _cancel(self) -> None:
@@ -186,7 +292,12 @@ class Tooltip:
             key = T.BG
         font = tkfont.Font(family=T.UI_FONT, size=-round(12 * k))
         pad_x, pad_y, r = round(10 * k), round(6 * k), round(6 * k)
-        lines = self.text.split("\n")
+        text = self.text
+        if self.wrap:
+            import textwrap
+
+            text = "\n".join(textwrap.fill(p, self.wrap) if p else "" for p in text.split("\n"))
+        lines = text.split("\n")
         tw = max(font.measure(ln) for ln in lines) + 2 * pad_x
         th = font.metrics("linespace") * len(lines) + 2 * pad_y
         cv = tk.Canvas(tip, width=tw, height=th, bg=key, highlightthickness=0, bd=0)
@@ -196,7 +307,10 @@ class Tooltip:
         cv.create_rectangle(0, r, tw, th - r, fill=bg, outline="")
         for ox, oy in ((0, 0), (tw - 2 * r, 0), (0, th - 2 * r), (tw - 2 * r, th - 2 * r)):
             cv.create_oval(ox, oy, ox + 2 * r, oy + 2 * r, fill=bg, outline="")
-        cv.create_text(tw / 2, th / 2, text=self.text, fill=fg, font=font, justify="center")
+        if self.wrap:
+            cv.create_text(pad_x, th / 2, text=text, fill=fg, font=font, justify="left", anchor="w")
+        else:
+            cv.create_text(tw / 2, th / 2, text=text, fill=fg, font=font, justify="center")
         # đặt dưới widget, căn giữa; hết chỗ thì đặt phía trên; kẹp trong màn hình
         x = self.w.winfo_rootx() + (self.w.winfo_width() - tw) // 2
         y = self.w.winfo_rooty() + self.w.winfo_height() + round(6 * k)
@@ -431,7 +545,8 @@ class Select(ctk.CTkFrame):
         return self.var.get()
 
     def set(self, v: str) -> None:
-        self.var.set(v)
+        if v != self.var.get():                 # gán trùng vẫn kích trace → vẽ lại nhãn vô ích
+            self.var.set(v)
 
     def set_values(self, values: list[str], keep: bool = True) -> None:
         self._values = list(values) if values else []
@@ -451,6 +566,7 @@ class Select(ctk.CTkFrame):
         if "state" in kw:
             self._state = kw.pop("state")
             self.label.configure(text_color=T.TEXT_MUTED if self._state == "disabled" else T.TEXT)
+            self._shown = None
         if "command" in kw:
             self._command = kw.pop("command")
         if kw:
@@ -460,7 +576,11 @@ class Select(ctk.CTkFrame):
     def _render(self) -> None:
         v = self.var.get()
         text = self._short(v) if v else self._placeholder
-        self.label.configure(text=text, text_color=T.TEXT if (v and self._state != "disabled") else T.TEXT_MUTED)
+        color = T.TEXT if (v and self._state != "disabled") else T.TEXT_MUTED
+        if self.__dict__.get("_shown") == (text, color):      # không đổi → khỏi vẽ lại (CTkLabel vẽ lại cả khung)
+            return
+        self._shown = (text, color)
+        self.label.configure(text=text, text_color=color)
         if self._chip:      # chip vừa khít: đệm 10 · [icon 15 · 8] · chữ · 4 · chevron 11 · 10 (+6 dự phòng làm tròn DPI)
             w = text_width(text, self._fs, self) + (10 + 15 + 8 if self._has_icon else 12) + 4 + 11 + 10 + 6
             super().configure(width=max(56, min(260, w)))

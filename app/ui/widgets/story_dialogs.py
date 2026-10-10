@@ -8,6 +8,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from app.config import theme as T
+from app.core.state import TTS_LABELS, TTS_PROVIDERS, provider_or_default
 from app.services.story.prompts import LANGUAGES, MASTER_PROMPTS, load_competitors, save_competitors
 from app.ui.widgets.ui import button
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, pack_rows
@@ -58,7 +59,7 @@ class CompetitorDialog(ctk.CTkToplevel):
         self.language = OptionRow(sec.body, "Ngôn ngữ", LANGUAGES)
         self.style = OptionRow(sec.body, "Phong cách ảnh", [v[0] for v in MASTER_PROMPTS.values()])
         self.style_custom = EntryRow(sec.body, "Prompt thêm")
-        self.provider = OptionRow(sec.body, "Engine giọng", ["Edge TTS", "ElevenLabs", "Google Cloud TTS"])
+        self.provider = OptionRow(sec.body, "Engine giọng", TTS_PROVIDERS, labels=TTS_LABELS)
         self.speed = EntryRow(sec.body, "Tốc độ giọng", placeholder="0.95")
         rows = [self.name, self.language, self.style, self.style_custom, self.provider, self.speed]
         self.fields: dict[str, EntryRow] = {}
@@ -89,7 +90,7 @@ class CompetitorDialog(ctk.CTkToplevel):
         self.language.set(c.get("language", LANGUAGES[0]) if c.get("language") in LANGUAGES else LANGUAGES[0])
         self.style.set(MASTER_PROMPTS.get(c.get("master_prompt_preset", ""), MASTER_PROMPTS["cinematic_hyperrealism"])[0])
         self.style_custom.set(c.get("master_prompt_custom", ""))
-        self.provider.set(c.get("voice_provider", "Edge TTS"))
+        self.provider.set(provider_or_default(c.get("voice_provider", "Edge TTS")))
         self.speed.set(str(c.get("voice_speed", 1.0)))
         for key, _ in _FIELDS:
             self.fields[key].set(str(c.get(key, "")))

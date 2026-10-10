@@ -9,12 +9,19 @@ from __future__ import annotations
 import customtkinter as ctk
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 
+_MAC = sys.platform == "darwin"
+
+
 def _pick_ui_font() -> str:
-    """Segoe UI Variable (Win11) gần với Inter của các app AI hiện đại; máy cũ dùng Segoe UI."""
+    """Segoe UI Variable (Win11) gần với Inter của các app AI hiện đại; máy cũ dùng Segoe UI.
+    macOS: font hệ thống (SF Pro) qua tên đặc biệt của Tk."""
+    if _MAC:
+        return ".AppleSystemUIFont"
     fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
     if (fonts_dir / "SegUIVar.ttf").exists():
         return "Segoe UI Variable Text"
@@ -22,9 +29,14 @@ def _pick_ui_font() -> str:
 
 
 UI_FONT = _pick_ui_font()
-UI_FONT_MEDIUM = "Segoe UI Variable Text Semibold" if UI_FONT.startswith("Segoe UI Variable") else "Segoe UI Semibold"
-MONO_FONT = "Consolas"
-EMOJI_FONT = "Segoe UI Emoji"
+if _MAC:
+    UI_FONT_MEDIUM = UI_FONT                    # Tk trên macOS không tách họ font «Semibold» riêng
+    MONO_FONT = "Menlo"
+    EMOJI_FONT = "Apple Color Emoji"
+else:
+    UI_FONT_MEDIUM = "Segoe UI Variable Text Semibold" if UI_FONT.startswith("Segoe UI Variable") else "Segoe UI Semibold"
+    MONO_FONT = "Consolas"
+    EMOJI_FONT = "Segoe UI Emoji"
 
 # ── Bộ theme trọn gói ────────────────────────────────────────────────────
 # Mỗi theme là một bộ màu đồng bộ (nền · panel · thẻ · chữ · màu nhấn). Ít mà chất: chọn một là xong.
@@ -86,6 +98,8 @@ SUCCESS = "#22C55E"
 SUCCESS_HOVER = "#16A34A"
 DANGER = "#EF4444"
 DANGER_HOVER = "#DC2626"
+DANGER_BG = "#DC2626"          # nền nút xoá / dừng: đỏ đậm hơn DANGER để chữ trắng đủ tương phản (4,8:1)
+DANGER_BG_HOVER = "#B91C1C"
 DANGER_SOFT = "#4A1D1D"
 WARNING = "#F59E0B"
 INFO = "#38BDF8"
@@ -182,6 +196,93 @@ def apply_theme(name: str = DEFAULT_THEME, accent: str = "") -> None:
         t["CTk"]["fg_color"] = [BG, BG]
     if isinstance(t.get("CTkToplevel"), dict):
         t["CTkToplevel"]["fg_color"] = [BG, BG]
+    _patch_segmented()
+    _patch_switch()
+
+
+# ── Chữ trên nền màu ──────────────────────────────────────────────────────
+
+def _luminance(widget, color: str) -> float:
+    """Độ sáng tương đối (WCAG) của một màu Tk bất kỳ (#hex hay tên màu)."""
+    lin = [c / 65535 for c in widget.winfo_rgb(color)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in lin]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def text_on(widget, bg: str, normal: str) -> str:
+    """Màu chữ đọc rõ trên nền ``bg``: ON_ACCENT (tối) nếu tương phản hơn ``normal`` — nền màu nhấn luôn ra chữ tối."""
+    try:
+        lb = _luminance(widget, bg)
+        dark = (lb + 0.05) / (_luminance(widget, ON_ACCENT) + 0.05)
+        light = (_luminance(widget, normal) + 0.05) / (lb + 0.05)
+        light = light if light >= 1 else 1 / light
+    except Exception:                     # noqa: BLE001 — màu lạ («transparent»…) → giữ màu chữ thường
+        return normal
+    return ON_ACCENT if dark > light else normal
+
+
+def _patch_segmented() -> None:
+    """CTkSegmentedButton (cả thanh tab của CTkTabview) chỉ có một màu chữ cho mọi ô → ô đang chọn nền màu nhấn bị chữ
+    sáng chói, khó đọc. Vá một lần: ô đang chọn dùng chữ tối ON_ACCENT khi nền ô sáng; ô khác giữ màu chữ thường.
+    Hàm nội bộ ``_select/_unselect_button_by_value`` giống nhau ở CustomTkinter 5.2 và 6.0."""
+    cls = ctk.CTkSegmentedButton
+    if getattr(cls, "_es_contrast", False) or not hasattr(cls, "_select_button_by_value"):
+        return
+    select, unselect, configure = cls._select_button_by_value, cls._unselect_button_by_value, cls.configure
+
+    def _select(self, value: str) -> None:
+        select(self, value)
+        b = self._buttons_dict.get(value)
+        if b is not None:
+            normal = self._apply_appearance_mode(self._sb_text_color)
+            b.configure(text_color=text_on(self, self._apply_appearance_mode(self._sb_selected_color), normal))
+
+    def _unselect(self, value: str) -> None:
+        unselect(self, value)
+        b = self._buttons_dict.get(value)
+        if b is not None:
+            b.configure(text_color=self._sb_text_color)
+
+    def _configure(self, **kwargs) -> None:
+        configure(self, **kwargs)
+        cur = getattr(self, "_current_value", None)
+        if cur and cur in getattr(self, "_buttons_dict", {}):   # đổi màu / màu chữ → tô lại ô đang chọn
+            _select(self, cur)
+
+    cls._select_button_by_value, cls._unselect_button_by_value, cls.configure = _select, _unselect, _configure
+    cls._es_contrast = True
+
+
+def _patch_switch() -> None:
+    """CTkSwitch: núm trắng nằm trên nền màu nhấn khi bật → gần như không thấy. Vá một lần: đang bật thì núm dùng màu tối
+    ON_ACCENT (như «onPrimary» của Material 3); tắt thì giữ núm sáng trên nền tối. Núm vẽ ở ``_draw`` / ``_on_enter`` /
+    ``_on_leave`` (tag «slider_parts») — giống nhau ở CustomTkinter 5.2 và 6.0."""
+    cls = ctk.CTkSwitch
+    if getattr(cls, "_es_contrast", False) or not hasattr(cls, "_on_leave"):
+        return
+    draw, enter, leave = cls._draw, cls._on_enter, cls._on_leave
+
+    def _paint(self) -> None:
+        hover = getattr(self, "_hover_state", False)
+        knob = self._apply_appearance_mode(self._button_hover_color if hover else self._button_color)
+        if self._check_state is True and self._progress_color != "transparent":
+            knob = text_on(self, self._apply_appearance_mode(self._progress_color), knob)
+        self._canvas.itemconfig("slider_parts", fill=knob, outline=knob)
+
+    def _draw(self, no_color_updates: bool = False) -> None:
+        draw(self, no_color_updates)
+        _paint(self)
+
+    def _on_enter(self, event=0) -> None:
+        enter(self, event)
+        _paint(self)
+
+    def _on_leave(self, event=0) -> None:
+        leave(self, event)
+        _paint(self)
+
+    cls._draw, cls._on_enter, cls._on_leave = _draw, _on_enter, _on_leave
+    cls._es_contrast = True
 
 
 # ── Font helper ───────────────────────────────────────────────────────────
@@ -228,7 +329,7 @@ def ghost_button() -> dict:
 
 
 def danger_button() -> dict:
-    return {"fg_color": DANGER, "hover_color": DANGER_HOVER, "text_color": "#FFFFFF",
+    return {"fg_color": DANGER_BG, "hover_color": DANGER_BG_HOVER, "text_color": "#FFFFFF",
             "font": font(13), "corner_radius": RADIUS, "border_width": 0}
 
 

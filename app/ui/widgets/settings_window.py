@@ -1,11 +1,11 @@
-"""Cửa sổ Cài đặt (toàn màn hình): Hệ thống & API · Phím tắt & Cẩm nang."""
+"""Cửa sổ Cài đặt (toàn màn hình): 🖥 AI trên máy · ☁ AI dùng API key · ⚙ Chung — và trang Phím tắt & Hướng dẫn."""
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -13,50 +13,41 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
-from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRESETS_DIR, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
-from app.core.state import GPU_BACKENDS, TRANSLATE_PROVIDERS, VIDEO_CODECS
+from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRON_FILE, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
+from app.core.platform import exe_name
 from app.services.ffmpeg import FFmpeg
 from app.services.sysinfo import gpu_name
-from app.services.translate_router import DEFAULT_MODELS
+from app.services.gemini_models import migrate_model, text_models
+from app.services.translate_router import DEFAULT_MODEL
 from app.ui.widgets.ui import Select, button
-from app.ui.widgets.common import EntryRow, OptionRow, SwitchRow, SliderRow, hint
+from app.ui.widgets.common import EntryRow, OptionRow, SwitchRow, SliderRow, StatusLabel, hint, info_icon
 from app.ui.widgets.dialogs import SHORTCUTS
+from app.core.platform import open_path
 
-KEY_LINKS = {"Gemini": "https://aistudio.google.com/apikey", "Groq": "https://console.groq.com/keys",
-             "DeepSeek": "https://platform.deepseek.com/api_keys", "OpenAI": "https://platform.openai.com/api-keys",
-             "ElevenLabs": "https://elevenlabs.io/app/settings/api-keys",
-             "Google": "https://console.cloud.google.com/apis/credentials"}
-MODEL_CHOICES = {"Gemini": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash",
-                           "gemini-flash-lite-latest", "gemini-pro-latest"],
-                 "Groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b"],
-                 "DeepSeek": ["deepseek-chat", "deepseek-reasoner"],
-                 "OpenAI": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"]}
+GEMINI_KEY_URL = "https://aistudio.google.com/apikey"
 
 GUIDE = [
-    ("Cấu hình cài đặt & tăng tốc hệ thống", T.INFO, [
-        ("Tăng tốc GPU (NVENC / QSV / AMF)", "Hệ thống tự quét card đồ hoạ (NVIDIA / AMD / Intel). Chọn «auto» để tự ưu tiên, "
-                                             "hoặc chọn trực tiếp bộ mã hóa. Không dùng được sẽ tự chuyển sang CPU."),
-        ("Chuẩn nén video (Codec)", "H.264 tương thích 100% thiết bị; HEVC nén sâu giảm ~40% dung lượng; AV1 chuẩn mới nhất."),
-        ("Dịch thuật AI & từ điển thuật ngữ", "Kết nối Gemini, Groq, DeepSeek hoặc OpenAI, nhiều key xoay vòng khi hết quota. "
-                                              "Nạp bảng thuật ngữ để dịch chuẩn tên riêng, xưng hô theo ngữ cảnh."),
-        ("Giọng đọc cloud & local", "Edge TTS miễn phí, ElevenLabs/Google Cloud chất lượng cao (cần key), VieNeu tiếng Việt chạy local có clone giọng."),
-        ("Thư mục xuất & preset", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu cấu hình hiện tại thành preset 1-click hoặc file JSON để chia sẻ."),
+    ("Cài đặt", T.INFO, [
+        ("🖥 AI trên máy", "Nghe lời thoại (Qwen3-ASR), giọng đọc Việt (VieNeu), kiểm lỗi giọng đọc (Whisper), căn chữ "
+                           "nổi: cài một lần, miễn phí, không giới hạn lượt. Có GPU NVIDIA thì nhanh hơn nhiều."),
+        ("☁ AI dùng API key", "Gemini dịch phụ đề, sửa lời thoại theo yêu cầu, rút gọn câu đọc không kịp và viết kịch "
+                              "bản Dựng truyện. Hết lượt / quá tải thì máy dừng và báo để bạn chọn model khác."),
+        ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
     ]),
-    ("Bộ công cụ video (F1 – F5)", T.SUCCESS, [
-        ("F1 · Nạp video & hàng đợi", "Kéo thả hoặc mở video (MP4, MKV, MOV…). Ứng dụng tự đo độ phân giải, fps, kiểm tra luồng âm thanh."),
-        ("F2 · Phụ đề & kiểu dáng", "Font, cỡ, màu, viền, bóng, nền, karaoke từng từ; khung phụ đề kéo thả trực tiếp trên xem trước."),
-        ("F3 · Nhận diện giọng nói (STT)", "Whisper cục bộ (GPU/CPU) hoặc Gemini cloud; tự cắt cue ngắn gọn, video dài vẫn ổn định."),
-        ("F4 · Dịch phụ đề đa ngữ", "Dịch SRT sang tiếng Việt và 10 ngôn ngữ khác, giữ timestamp; có bảng dịch tay và checkpoint tiếp tục."),
-        ("F5 · Lồng tiếng AI (TTS)", "Đọc lời thoại theo phụ đề, tốc độ 0.8–2.0×, đồng bộ mềm hoặc voice tự nhiên dời phụ đề theo giọng."),
+    ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
+        ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
+        ("F2 · Nhận diện lời (STT)", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video."),
+        ("F3 · Lời thoại & phụ đề", "Sửa từng câu, «Nhờ AI sửa», dịch. Kiểu phụ đề mặc định giống TikTok; chỉnh chi tiết khi cần."),
+        ("F4 · Lồng tiếng (TTS)", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
     ]),
-    ("Bộ công cụ video (F6 – F10)", T.WARNING, [
-        ("F6 · Che mờ thông minh", "Vẽ nhiều vùng che (mờ / pixel / đen), bo góc, mềm mép, theo khoảng thời gian."),
-        ("F7 · Nhạc nền & tách vocal", "Nhiều đoạn nhạc trên timeline, tự hạ nhạc khi có giọng (ducking), tách lời bằng Demucs."),
-        ("F8 · Logo, khung viền & watermark", "Logo/chữ/watermark có chuyển động, vùng an toàn TikTok, khung viền trang trí."),
-        ("F9 · Cắt gọt & tỉ lệ khung hình", "Cắt đầu/cuối, nhiều đoạn (ghép liền hoặc xuất từng file); đổi 16:9 ↔ 9:16 ↔ 1:1 với nền mờ."),
-        ("F10 · Hiệu ứng hình ảnh", "Lật gương, preset màu, sáng/tương phản/bão hoà, khử rung, hạt phim, vignette, Ken Burns, texture."),
+    ("Bộ công cụ video (F5 – F9)", T.WARNING, [
+        ("F5 · Che mờ", "Che chữ cũ, logo… Tự dò phụ đề in sẵn của từng video."),
+        ("F6 · Nhạc nền", "Nhiều đoạn nhạc, tự hạ nhạc khi có giọng."),
+        ("F7 · Logo & chữ", "Logo, chữ, watermark có chuyển động, khung viền."),
+        ("F8 · Cắt", "Cắt đầu / cuối, nhiều đoạn (ghép liền hoặc xuất riêng)."),
+        ("F9 · Hiệu ứng", "Màu, khử rung, hạt phim, Ken Burns, texture."),
     ]),
-    ("Module Dựng Truyện AI (F11)", "#F472B6", [
+    ("Dựng Truyện AI (F10)", "#F472B6", [
         ("Tạo kịch bản phân cảnh tự động", "Nhập ý tưởng, AI viết dàn ý → từng chương → cảnh kèm lời kể và prompt ảnh."),
         ("Sinh ảnh minh hoạ đồng nhất phong cách", "Ảnh cho từng cảnh theo preset phong cách (điện ảnh, anime, màu nước…), giữ nhân vật đồng nhất; clip Veo tuỳ chọn."),
         ("Lồng tiếng đa nhân vật & ghép video", "Gán giọng riêng từng nhân vật, ghép ảnh + giọng + SFX thành MP4, tự tạo SRT và metadata YouTube."),
@@ -64,113 +55,339 @@ GUIDE = [
 ]
 
 
+#: trang (khoá, tên, icon) — menu bên trái, mỗi lần hiện một trang
+PAGES = [("local", "AI trên máy", "gpu"), ("cloud", "AI dùng API key", "lock"), ("export", "Xuất video", "export"),
+         ("look", "Giao diện", "color"), ("storage", "Bộ nhớ & nâng cao", "folder"),
+         ("guide", "Phím tắt & hướng dẫn", "keyboard")]
+
+
 class SettingsWindow(ctk.CTkToplevel):
+    NAV_W = 224
+
     def __init__(self, window, tab: str | None = None) -> None:
         super().__init__(window)
         self.window = window
         self.app_state = window.app_state
         st = self.app_state.settings
         self.title(f"Cài đặt — Edit Studio v{APP_VERSION}")
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{min(1700, sw - 60)}x{min(1000, sh - 100)}+30+30")
-        self.minsize(1100, 700)
+        w, h = min(1060, self.winfo_screenwidth() - 80), min(800, self.winfo_screenheight() - 120)
+        try:                                       # giữa cửa sổ chính
+            x = window.winfo_rootx() + max(0, (window.winfo_width() - w) // 2)
+            y = window.winfo_rooty() + max(0, (window.winfo_height() - h) // 3)
+        except Exception:                          # noqa: BLE001
+            x, y = 40, 40
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.minsize(900, 600)
         self.after(50, self.lift)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._nvidia = False
+        self.page = ""
 
-        top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
-        self.tab_var = ctk.StringVar(value="Cài Đặt Hệ Thống & API")
-        ctk.CTkSegmentedButton(top, values=["⚙ Cài Đặt Hệ Thống & API", "📖 Phím Tắt & Cẩm Nang Hướng Dẫn"],
-                               command=self._switch_tab, font=T.font(12, "bold")).pack(side="left")
-        ctk.CTkLabel(top, text=f"v{APP_VERSION}", font=T.font(12, "bold"), fg_color=T.BG_CARD, corner_radius=6,
-                     width=90, height=30).pack(side="right")
+        # ── Menu trái ──
+        nav = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=0, width=self.NAV_W)
+        nav.grid(row=0, column=0, rowspan=2, sticky="nsw")
+        nav.pack_propagate(False)
+        ctk.CTkLabel(nav, text="Cài đặt", font=T.font(17, "bold"), anchor="w").pack(fill="x", padx=20, pady=(18, 12))
+        self.nav_items: dict[str, tuple] = {}
+        for key, label, ic in PAGES:
+            self._nav_item(nav, key, label, ic)
+        ctk.CTkLabel(nav, text=f"Edit Studio v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED,
+                     anchor="w").pack(side="bottom", fill="x", padx=20, pady=14)
 
-        self.page_settings = ctk.CTkFrame(self, fg_color="transparent")
-        self.page_guide: ctk.CTkScrollableFrame | None = None     # dựng khi mở tab hướng dẫn lần đầu (~150 widget)
-        self._build_settings(self.page_settings, st)
+        # ── Các trang (Phím tắt & hướng dẫn dựng khi mở lần đầu — ~150 widget) ──
+        self.pages: dict[str, ctk.CTkScrollableFrame] = {
+            k: ctk.CTkScrollableFrame(self, fg_color="transparent") for k, *_ in PAGES if k != "guide"}
+        self._build_local(self.pages["local"], st)
+        self._build_cloud(self.pages["cloud"], st)
+        self._build_export(self.pages["export"], st)
+        self._build_look(self.pages["look"], st)
+        self._build_storage(self.pages["storage"], st)
 
         foot = ctk.CTkFrame(self, fg_color="transparent")
-        foot.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 12))
-        ctk.CTkLabel(foot, text=" Mẹo: Các cấu hình API, đường dẫn thư mục và chế độ tăng tốc được tự động ghi nhớ.", image=icon(EMOJI_ICONS["💡"], 14, dy=1), compound="left",
-                     font=T.font(11), text_color=T.TEXT_MUTED).pack(side="left")
-        ctk.CTkButton(foot, text="Đóng", width=110, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
+        foot.grid(row=1, column=1, sticky="ew", padx=(18, 16), pady=(6, 12))
+        ctk.CTkLabel(foot, text=" Bấm «Lưu tất cả» để áp dụng. Key chỉ lưu trên máy này.",
+                     image=icon(EMOJI_ICONS["💡"], 14, dy=1), compound="left", font=T.font(11),
+                     text_color=T.TEXT_MUTED).pack(side="left")
+        ctk.CTkButton(foot, text="Đóng", width=100, height=36, command=self._close, **T.secondary_button()).pack(side="right")
         button(foot, "Lưu tất cả", icon_name="save", variant="primary", command=self._save).pack(side="right", padx=8)
-        self._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn" if tab == "shortcuts" else "⚙ Cài Đặt Hệ Thống & API")
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self._badge("cloud", "" if st.gemini_keys() else "!")
+        self.show_page({"shortcuts": "guide", "model": "cloud"}.get(tab or "", tab or "local"))
+        self._initial = self._values()
+        self.after(200, self._scan_machine)
+        if tab == "model":
+            self.after(150, self.focus_model)
 
-    def _switch_tab(self, name: str) -> None:
-        guide = "Phím" in name
-        if guide and self.page_guide is None:
-            self.page_guide = ctk.CTkScrollableFrame(self, fg_color="transparent")
-            self._build_guide(self.page_guide)
-        self.page_settings.grid_forget()
-        if self.page_guide is not None:
-            self.page_guide.grid_forget()
-        (self.page_guide if guide else self.page_settings).grid(row=1, column=0, sticky="nsew", padx=14)
+    def focus_model(self) -> None:
+        """Từ nút «Chọn model…» (model đang chọn hết lượt / quá tải): chỉ đúng chỗ đổi model."""
+        self.show_page("cloud")
+        self.models_status.configure(text="⬆ Model đang chọn hết lượt / quá tải — chọn model khác ở ô «Model» rồi bấm "
+                                          "«Lưu tất cả».", text_color=T.WARNING)
+        try:
+            self.tr_model.focus_set()
+        except Exception:                          # noqa: BLE001 — chỉ là đưa con trỏ tới, không quan trọng
+            pass
 
-    # ── Trang cài đặt ────────────────────────────────────────────────────
-    def _card(self, parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
+    # ── Menu trái ────────────────────────────────────────────────────────
+    def _nav_item(self, nav, key: str, label: str, icon_name: str) -> None:
+        row = ctk.CTkFrame(nav, fg_color="transparent", corner_radius=T.RADIUS, height=40)
+        row.pack(fill="x", padx=10, pady=1)
+        row.pack_propagate(False)
+        ic = ctk.CTkLabel(row, text="", width=22, image=icon(icon_name, 16, T.TEXT_DIM, dy=1))
+        ic.pack(side="left", padx=(10, 8))
+        txt = ctk.CTkLabel(row, text=label, font=T.font(13), text_color=T.TEXT_DIM, anchor="w")
+        txt.pack(side="left", fill="x", expand=True)
+        badge = ctk.CTkLabel(row, text="", font=T.font(11, "bold"), text_color=T.WARNING, width=10)
+        badge.pack(side="right", padx=(0, 12))
+        for w in (row, ic, txt, badge):
+            w.bind("<Button-1>", lambda _e, k=key: self.show_page(k))
+            w.bind("<Enter>", lambda _e, k=key: self._nav_paint(k, hover=True))
+            w.bind("<Leave>", lambda _e, k=key: self._nav_paint(k))
+            try:
+                w.configure(cursor="hand2")
+            except Exception:                      # noqa: BLE001
+                pass
+        self.nav_items[key] = (row, ic, txt, badge, icon_name)
+
+    def _nav_paint(self, key: str, hover: bool = False) -> None:
+        row, ic, txt, _badge, name = self.nav_items[key]
+        on = key == self.page
+        row.configure(fg_color=T.ACCENT_SOFT if on else (T.BG_HOVER if hover else "transparent"))
+        txt.configure(text_color=T.ACCENT if on else (T.TEXT if hover else T.TEXT_DIM),
+                      font=T.font(13, "medium" if on else "normal"))
+        ic.configure(image=icon(name, 16, T.ACCENT if on else (T.TEXT if hover else T.TEXT_DIM), dy=1))
+
+    def _badge(self, key: str, text: str) -> None:
+        """Nhãn nhắc trên menu (vd số phần AI chưa cài, «!» khi chưa có key)."""
+        self.nav_items[key][3].configure(text=text)
+
+    def show_page(self, key: str) -> None:
+        key = key if key in self.nav_items else "local"
+        if key == "guide" and "guide" not in self.pages:
+            self.pages["guide"] = ctk.CTkScrollableFrame(self, fg_color="transparent")
+            self._build_guide(self.pages["guide"])
+        for k, p in self.pages.items():
+            if k != key:
+                p.grid_forget()
+        self.pages[key].grid(row=0, column=1, sticky="nsew", padx=(18, 12), pady=(14, 0))
+        self.page = key
+        for k in self.nav_items:
+            self._nav_paint(k)
+
+    # ── Đóng / thay đổi chưa lưu ─────────────────────────────────────────
+    def _values(self) -> tuple:
+        """Giá trị các ô cần «Lưu tất cả» (giao diện đổi là lưu ngay nên không tính) — đóng mà khác thì hỏi lưu."""
+        return (self.toast.get(), self.ffmpeg.get().strip(), self.ffprobe.get().strip(), self.vieneu.get(),
+                float(self.loudness.get()), self.waveform.get(), self.tr_model.get().strip(),
+                tuple(self.app_state.settings.split_keys(self._key_text())), self.glossary.get("1.0", "end").strip(),
+                self.out_var.get().strip())
+
+    def _close(self) -> None:
+        try:
+            dirty = self._values() != self._initial
+        except Exception:                          # noqa: BLE001 — cửa sổ đang huỷ dở
+            dirty = False
+        if dirty:
+            ans = messagebox.askyesnocancel("Cài đặt", "Lưu các thay đổi trước khi đóng?", parent=self)
+            if ans is None:
+                return
+            if ans:
+                self._save()
+                return
+        self.destroy()
+
+    # ── Khung ────────────────────────────────────────────────────────────
+    def _card(self, parent, title: str, *, sub: str = "", info: str = "") -> ctk.CTkFrame:
+        """Thẻ có tiêu đề (``sub``: tên thành phần, chữ nhỏ; ``info``: giải thích dài trong ⓘ)."""
         card = ctk.CTkFrame(parent, fg_color=T.BG_CARD, corner_radius=10, border_width=1, border_color=T.BORDER_SOFT)
-        card.pack(fill="x", pady=6)
-        ctk.CTkLabel(card, text=title, font=T.font(13, "bold"), text_color=T.ACCENT, anchor="w").pack(fill="x", padx=14, pady=(10, 0))
-        if subtitle:
-            ctk.CTkLabel(card, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", wraplength=520,
-                         justify="left").pack(fill="x", padx=14, pady=(0, 4))
+        card.pack(fill="x", pady=5)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=14, pady=(10, 0))
+        ctk.CTkLabel(head, text=title, font=T.font(13, "bold"), text_color=T.TEXT, anchor="w").pack(side="left")
+        if sub:
+            ctk.CTkLabel(head, text=sub, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(side="left", padx=(6, 0))
+        if info:
+            info_icon(head, info).pack(side="left", padx=(4, 0))
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=12, pady=(2, 12))
+        body.pack(fill="x", padx=12, pady=(4, 12))
         return body
 
-    def _col_title(self, parent, text: str) -> None:
-        ctk.CTkLabel(parent, text=text, font=T.font(12, "bold"), text_color=T.TEXT_DIM, anchor="w").pack(fill="x", padx=4, pady=(6, 0))
+    def _page_head(self, parent, title: str, sub: str) -> None:
+        ctk.CTkLabel(parent, text=title, font=T.font(18, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=4)
+        ctk.CTkLabel(parent, text=sub, font=T.font(12), text_color=T.TEXT_MUTED, anchor="w", justify="left",
+                     wraplength=760).pack(fill="x", padx=4, pady=(0, 6))
 
-    def _build_settings(self, page, st) -> None:
-        page.grid_columnconfigure((0, 1, 2), weight=1, uniform="col")
-        page.grid_rowconfigure(0, weight=1)
-        cols = [ctk.CTkScrollableFrame(page, fg_color="transparent") for _ in range(3)]
-        for i, c in enumerate(cols):
-            c.grid(row=0, column=i, sticky="nsew", padx=4)
+    @staticmethod
+    def _status_row(body) -> tuple[StatusLabel, ctk.CTkFrame]:
+        """Dòng trạng thái + chỗ đặt nút (Cài / Tải) bên phải."""
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        status = StatusLabel(row, "Đang kiểm tra…")
+        status.pack(side="left", fill="x", expand=True)
+        return status, row
 
-        # ── Cột 1 ────────────────────────────────────────────────────────
-        c1 = cols[0]
-        self._col_title(c1, "⚡ HIỆU NĂNG, GIAO DIỆN & CACHE")
-        b = self._card(c1, "Tăng tốc phần cứng & hiệu năng", "Bộ mã hóa GPU đồ hoạ & tối ưu pipeline render video MP4.")
-        self.encoder = OptionRow(b, "Bộ mã hóa", GPU_BACKENDS, value=st.gpu_encoder if st.gpu_encoder in GPU_BACKENDS else "auto")
-        self.codec = OptionRow(b, "Chuẩn nén", VIDEO_CODECS, value=self.app_state.video.video_codec)
-        self.encoder.pack(fill="x", pady=3)
-        self.codec.pack(fill="x", pady=3)
-        self.enc_status = ctk.CTkLabel(b, text="Đang kiểm tra bộ mã hóa…", font=T.font(12, "bold"), fg_color="#123524",
-                                       text_color=T.SUCCESS, corner_radius=8, height=34, wraplength=360, justify="left")
-        self.enc_status.pack(fill="x", pady=6)
+    # ── Trang: AI trên máy ───────────────────────────────────────────────
+    def _build_local(self, c, st) -> None:
+        self._page_head(c, "AI trên máy", "Miễn phí, không giới hạn lượt, không cần mạng sau khi cài. Có GPU NVIDIA thì "
+                                          "nhanh hơn nhiều.")
+        b = self._card(c, "Máy này", info="Card đồ hoạ quyết định tốc độ của mọi phần AI trên máy. GPU NVIDIA cần thêm "
+                                          "CUDA runtime (một lần) để Whisper chạy trên GPU.")
+        self.gpu_status = StatusLabel(b, "Đang kiểm tra card đồ hoạ…")
+        self.gpu_status.pack(fill="x")
+        self.cuda_status, row = self._status_row(b)
+        self.cuda_btn = button(row, "Cài CUDA", icon_name="download", size="sm", command=self._install_cuda)
+        row2 = ctk.CTkFrame(b, fg_color="transparent")
+        row2.pack(fill="x", pady=(8, 0))
+        button(row2, "Kiểm tra máy", icon_name="gpu", size="sm", command=lambda: self.window.open_selfcheck(),
+               tip="Liệt kê cái có / cái thiếu trên máy này và cách bổ sung").pack(side="left")
+
+        b = self._card(c, "Nghe lời thoại", sub="Qwen3-ASR",
+                       info="AI nghe giọng nói trong video rồi chép thành phụ đề (mốc thời gian từng chữ, tách câu theo "
+                            "nghĩa). Dùng khi tab STT chọn «Giọng nói trong video». Cài một lần ~11 GB.")
+        self.qwen_status, row = self._status_row(b)
+        self.qwen_btn = button(row, "Cài", icon_name="download", size="sm", command=self._install_qwen)
+
+        b = self._card(c, "Giọng đọc tiếng Việt", sub="VieNeu",
+                       info="25 giọng Việt (Bắc / Trung / Nam) chạy trên máy, có clone giọng. Câu đọc lỗi tự đọc lại; "
+                            "đọc lại vẫn hỏng thì đọc tạm bằng Edge (cần mạng) thay vì để im lặng.")
+        self.vieneu_status, row = self._status_row(b)
+        self.vieneu_btn = button(row, "Cài", icon_name="download", size="sm", command=self._install_vieneu)
+        self.vieneu = OptionRow(b, "Chất lượng", ["int8", "fp32"], value=st.vieneu_precision,
+                                labels={"int8": "Nhanh", "fp32": "Cao (chậm hơn)"},
+                                info="Nhanh: đủ tốt cho hầu hết video. Cao: giọng mượt hơn một chút nhưng đọc chậm hơn.")
+        self.vieneu.pack(fill="x", pady=(6, 0))
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 0))
+        button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron).pack(side="left")
+        info_icon(row, "Mở pronunciation.json: «chữ viết»: «cách đọc», vd \"ANC\": \"ây en xi\". Áp cho mọi giọng — lưu file "
+                       "rồi tạo lại giọng.").pack(side="left", padx=(6, 0))
+
+        b = self._card(c, "Kiểm lỗi giọng đọc", sub="Whisper",
+                       info="Máy nghe lại từng câu vừa lồng tiếng để bắt câu đọc sai, đọc thiếu rồi đọc lại; cũng dùng "
+                            "để đọc liền vài câu ngắn rồi tách lại cho tự nhiên. Luôn bật khi đã có model.")
+        self.whisper_status, row = self._status_row(b)
+        self.whisper_btn = button(row, "Tải", icon_name="download", size="sm", command=self._download_whisper)
+
+        b = self._card(c, "Căn chữ nổi", sub="CTC tiếng Việt",
+                       info="Phụ đề «Nổi chữ đang đọc»: căn từng chữ theo đúng tiếng của giọng lồng, như CapCut. Chưa "
+                            "cài thì chữ nổi chia theo khoảng lặng trong câu — gần đúng. Chạy bằng CPU.")
+        self.align_status, row = self._status_row(b)
+        self.align_btn = button(row, "Tải", icon_name="download", size="sm", command=self._install_aligner)
+
+        b = self._card(c, "Khử giọng gốc & nhận ra người nói",
+                       info="Khử giọng nói gốc (giữ nhạc nền, tiếng động) và nhận ra ai nói câu nào để lồng mỗi người một "
+                            "giọng. Model nhỏ, tự tải ở lần dùng đầu.")
+        self.small_status = StatusLabel(b, "")
+        self.small_status.pack(fill="x")
+
+    # ── Trang: AI dùng API key ───────────────────────────────────────────
+    def _build_cloud(self, c, st) -> None:
+        self._page_head(c, "AI dùng API key", "Cần mạng. Gói miễn phí có giới hạn lượt mỗi ngày.")
+        b = self._card(c, "Gemini", info="Dùng để: dịch phụ đề (2 bước, sát nghĩa rồi tự nhiên), tách câu nhận diện quá "
+                                         "dài, «Nhờ AI sửa», rút gọn câu đọc không kịp, viết kịch bản Dựng truyện. "
+                                         "Gói miễn phí: Google có thể dùng chữ bạn gửi để cải thiện sản phẩm — đừng gửi "
+                                         "nội dung nhạy cảm.")
+        r = ctk.CTkFrame(b, fg_color="transparent")
+        r.pack(fill="x")
+        ctk.CTkLabel(r, text="API key", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        info_icon(r, "Mỗi dòng một key. Key lỗi thì tự thử key kế tiếp. Lấy miễn phí ở Google AI Studio. Key được che "
+                     "khi không sửa — bấm «Hiện / sửa» để xem và sửa.").pack(side="left", padx=(4, 0))
+        ctk.CTkButton(r, text="Lấy key ↗", width=80, height=32, command=lambda: webbrowser.open(GEMINI_KEY_URL),
+                      **T.secondary_button()).pack(side="right")
+        self.keys_toggle = ctk.CTkButton(r, text="", width=90, height=32, command=self._toggle_keys,
+                                         **T.secondary_button())
+        self.keys_toggle.pack(side="right", padx=(0, 6))
+        self.gemini_keys = ctk.CTkTextbox(b, height=86, font=T.mono(11))
+        self.gemini_keys.pack(fill="x", pady=(2, 6))
+        # key che sẵn (chia sẻ màn hình / chụp ảnh không lộ key); chưa có key thì mở sẵn để dán
+        self._keys_real = st.gemini_api_keys
+        self._keys_shown = not st.gemini_keys()
+        self._paint_keys()
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+        ctk.CTkLabel(row, text="Model", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        info_icon(row, "Model Gemini dùng cho mọi việc ở trên. Hết lượt hôm nay hoặc quá tải lâu: máy dừng và báo để bạn "
+                       "chọn model khác — không tự đổi model giữa chừng (đổi giữa chừng làm bản dịch kém hay, lệch giọng "
+                       "văn). Bấm ↻ để lấy danh sách model mới nhất bằng key của bạn.").pack(side="left", padx=(4, 8))
+        self.tr_model = Select(row, text_models() or [DEFAULT_MODEL], height=34, placeholder="")
+        self.tr_model.set(st.translate_model or DEFAULT_MODEL)
+        self.tr_model.pack(side="left", fill="x", expand=True)
+        self.models_btn = button(row, "", icon_name="refresh", size="sm", width=36, command=self._refresh_models,
+                                 tip="Lấy danh sách model mới nhất bằng API key ở trên")
+        self.models_btn.pack(side="left", padx=(6, 0))
+        self.models_status = hint(b, "")
+        self.models_status.pack(fill="x")
+
+        b = self._card(c, "Từ điển tên riêng", info="Mỗi dòng: chữ gốc=nghĩa, vd 周彦淑=Chu Ngạn Thục. AI luôn dịch đúng "
+                                                    "như vậy (cả khi dịch lại / Nhờ AI sửa).")
+        self.glossary = ctk.CTkTextbox(b, height=200, font=T.mono(11))
+        self.glossary.insert("1.0", st.glossary)
+        self.glossary.pack(fill="x")
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 0))
+        ctk.CTkButton(row, text="Nhập TXT…", width=90, height=32, command=self._import_glossary,
+                      **T.secondary_button()).pack(side="left")
+
+    @staticmethod
+    def _mask(key: str) -> str:
+        return key if len(key) <= 12 else f"{key[:4]}{'•' * 8}{key[-4:]}"
+
+    def _paint_keys(self) -> None:
+        box = self.gemini_keys
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        if self._keys_shown:
+            box.insert("1.0", self._keys_real)
+        else:
+            box.insert("1.0", "\n".join(self._mask(k) for k in self.app_state.settings.split_keys(self._keys_real)))
+            box.configure(state="disabled")
+        self.keys_toggle.configure(text="Ẩn" if self._keys_shown else "Hiện / sửa")
+
+    def _toggle_keys(self) -> None:
+        if self._keys_shown:
+            self._keys_real = self.gemini_keys.get("1.0", "end").strip()
+        self._keys_shown = not self._keys_shown
+        self._paint_keys()
+
+    def _key_text(self) -> str:
+        """Key thật (ô đang che thì lấy bản đã lưu, không lấy chữ đã che)."""
+        return self.gemini_keys.get("1.0", "end").strip() if self._keys_shown else self._keys_real
+
+    # ── Trang: Xuất video ────────────────────────────────────────────────
+    def _build_export(self, c, st) -> None:
+        self._page_head(c, "Xuất video", "Nơi lưu file và độ to âm thanh. Bộ mã hoá, chuẩn nén chỉnh ở mục «Video» (theo "
+                                         "từng mẫu / video).")
+        b = self._card(c, "Thư mục xuất")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x")
-        button(row, "Kiểm tra máy", icon_name="gpu", size="sm", command=lambda: self.window.open_selfcheck(),
-               tip="Liệt kê cái có / cái thiếu trên máy này (GPU, CUDA, model, giọng, key) và cách bổ sung").pack(side="left")
-        ctk.CTkButton(row, text="Quét lại", width=90, height=32, command=self._scan_encoders, **T.secondary_button()).pack(side="right")
-        self.ffmpeg_fast = SwitchRow(b, "Tăng tốc FFmpeg (thử nghiệm)", value=st.ffmpeg_fast)
-        self.ffmpeg_fast.pack(fill="x", pady=3)
-        hint(b, "Dùng preset encode nhanh nhất, ưu tiên tốc độ hơn dung lượng.").pack(fill="x")
-        self.toast = SwitchRow(b, "Thông báo Windows Native khi hoàn tất", value=st.windows_toast)
+        self.out_var = ctk.StringVar(value=self.app_state.output_dir)
+        ctk.CTkEntry(row, textvariable=self.out_var, height=32, font=T.font(12)).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(row, text="Chọn", width=60, height=32, command=self._browse_out, **T.secondary_button()).pack(side="left", padx=4)
+        ctk.CTkButton(row, text="Mở", width=50, height=32, command=self._open_out, **T.secondary_button()).pack(side="left")
+        b = self._card(c, "Âm thanh & thông báo")
+        self.loudness = SliderRow(b, "Độ to file xuất", from_=-23, to=-9, step=1, value=st.loudness_target, suffix=" LUFS",
+                                  info="Dùng khi bật «Chuẩn hoá âm lượng» ở mục «Video»: đo độ to cả bài rồi chỉnh đúng "
+                                       "một lần, đỉnh luôn ≤ −1 dBTP. TikTok · Facebook · YouTube: −14. Truyền hình: −23.")
+        self.loudness.pack(fill="x", pady=(2, 3))
+        self.toast = SwitchRow(b, "Báo khi xuất xong", value=st.windows_toast,
+                               info="Hiện thông báo của Windows / macOS khi render xong.")
         self.toast.pack(fill="x", pady=3)
-        hint(b, "Gửi thông báo Toast vào Windows Action Center khi render hoàn tất.").pack(fill="x")
-        self.ffmpeg = EntryRow(b, "ffmpeg.exe", value=st.ffmpeg_path, browse="exe", placeholder="để trống = bin/ffmpeg.exe hoặc PATH")
-        self.ffprobe = EntryRow(b, "ffprobe.exe", value=st.ffprobe_path, browse="exe", placeholder="để trống = bin/ffprobe.exe hoặc PATH")
-        self.workers = SliderRow(b, "Luồng TTS", from_=1, to=8, step=1, value=st.tts_workers)
-        self.compute = OptionRow(b, "Whisper compute", ["auto", "int8", "float16", "float32"], value=st.whisper_compute)
-        self.vieneu = OptionRow(b, "VieNeu precision", ["int8", "fp32"], value=st.vieneu_precision)
-        for r in (self.ffmpeg, self.ffprobe, self.workers, self.compute, self.vieneu):
-            r.pack(fill="x", pady=3)
 
-        b = self._card(c1, "Giao diện", "Chọn một bộ màu — đổi ngay lập tức, không cần mở lại.")
+    # ── Trang: Giao diện ─────────────────────────────────────────────────
+    def _build_look(self, c, st) -> None:
+        self._page_head(c, "Giao diện", "Bấm một bộ màu là đổi ngay, không cần mở lại app.")
+        b = self._card(c, "Bộ màu")
         grid = ctk.CTkFrame(b, fg_color="transparent")
         grid.pack(fill="x", pady=(2, 6))
-        grid.grid_columnconfigure((0, 1, 2), weight=1)
+        grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="theme")
         self.theme_cards: dict[str, ctk.CTkFrame] = {}
         for i, (key, th) in enumerate(T.THEMES.items()):
             card = ctk.CTkFrame(grid, fg_color=T.BG_INPUT, corner_radius=T.RADIUS, border_width=2,
                                 border_color=T.ACCENT if key == T.THEME_NAME else T.BORDER_SOFT, cursor="hand2")
-            card.grid(row=i // 3, column=i % 3, sticky="ew", padx=4, pady=4)
+            card.grid(row=i // 3, column=i % 3, sticky="nsew", padx=4, pady=4)
             # ô xem trước: nền · panel · thẻ · chấm màu nhấn
-            sw = ctk.CTkFrame(card, fg_color=th["bg"], corner_radius=6, height=44)
+            sw = ctk.CTkFrame(card, fg_color=th["bg"], corner_radius=6, height=48)
             sw.pack(fill="x", padx=8, pady=(8, 4))
             sw.pack_propagate(False)
             ctk.CTkFrame(sw, fg_color=th["panel"], corner_radius=4, width=26).pack(side="left", fill="y", padx=(4, 3), pady=4)
@@ -178,17 +395,22 @@ class SettingsWindow(ctk.CTkToplevel):
             inner.pack(side="left", fill="both", expand=True, padx=(0, 4), pady=4)
             ctk.CTkFrame(inner, fg_color=th["accent"], corner_radius=6, width=34, height=12).place(relx=0.08, rely=0.3)
             ctk.CTkFrame(inner, fg_color=th["dim"], corner_radius=2, width=60, height=4).place(relx=0.5, rely=0.42)
-            ctk.CTkLabel(card, text=th["name"], font=T.font(12, "bold"), anchor="w").pack(fill="x", padx=10)
-            ctk.CTkLabel(card, text=th["desc"], font=T.font(10), text_color=T.TEXT_MUTED, anchor="w", justify="left",
-                         wraplength=150).pack(fill="x", padx=10, pady=(0, 8))
+            name = th["name"] + ("  ✓" if key == T.THEME_NAME else "")
+            ctk.CTkLabel(card, text=name, font=T.font(12, "bold"), anchor="w").pack(fill="x", padx=10)
+            ctk.CTkLabel(card, text=th["desc"], font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", justify="left",
+                         wraplength=220).pack(fill="x", padx=10, pady=(0, 8))
             for w in (card, sw, inner, *card.winfo_children()):
                 w.bind("<Button-1>", lambda _e, k=key: self._pick_theme(k))
             self.theme_cards[key] = card
-        self.waveform = SwitchRow(b, "Hiển thị dải sóng âm (Audio Waveform) dưới thanh tua", value=st.show_waveform)
+        b = self._card(c, "Khung xem trước")
+        self.waveform = SwitchRow(b, "Dải sóng âm dưới thanh tua", value=st.show_waveform)
         self.waveform.pack(fill="x", pady=3)
 
-        b = self._card(c1, "Trung tâm cache & dữ liệu tạm")
-        self.cache_label = ctk.CTkLabel(b, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w")
+    # ── Trang: Bộ nhớ & nâng cao ─────────────────────────────────────────
+    def _build_storage(self, c, st) -> None:
+        self._page_head(c, "Bộ nhớ & nâng cao", "Dọn file tạm khi ổ đầy. Video, phụ đề, giọng đã xuất không bị xoá.")
+        b = self._card(c, "Bộ nhớ tạm")
+        self.cache_label = ctk.CTkLabel(b, text="", font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.cache_label.pack(fill="x")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
@@ -197,112 +419,33 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(row, text="Xóa job & Project", width=130, height=32, command=self._clean_jobs, **T.danger_button()).pack(side="right")
         self._cache_sizes()
 
-        # ── Cột 2 ────────────────────────────────────────────────────────
-        c2 = cols[1]
-        self._col_title(c2, "🌐 DỊCH THUẬT AI & TỪ ĐIỂN")
-        b = self._card(c2, "API Dịch thuật & từ điển AI", "Cấu hình nhà cung cấp, model và API key dịch phụ đề (tự xoay vòng key & model).")
-        self.tr_provider = OptionRow(b, "Nhà cung cấp", TRANSLATE_PROVIDERS, value=st.translate_provider, on_change=self._provider_changed)
-        self.tr_provider.pack(fill="x", pady=3)
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x", pady=3)
-        ctk.CTkLabel(row, text="Model", font=T.font(12), text_color=T.TEXT_DIM, width=120, anchor="w").pack(side="left")
-        self.tr_model = Select(row, MODEL_CHOICES.get(st.translate_provider, []) or [""], height=34, placeholder="")
-        self.tr_model.set(st.translate_model or DEFAULT_MODELS.get(st.translate_provider, ""))
-        self.tr_model.pack(side="left", fill="x", expand=True)
-        self.key_boxes: dict[str, ctk.CTkTextbox] = {}
-        for prov, value in (("Gemini", st.gemini_api_keys or st.gemini_api_key), ("Groq", st.groq_api_key),
-                            ("DeepSeek", st.deepseek_api_key), ("OpenAI", st.openai_api_key)):
-            r = ctk.CTkFrame(b, fg_color="transparent")
-            r.pack(fill="x", pady=(6, 0))
-            ctk.CTkLabel(r, text=f"API keys {prov}", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
-            ctk.CTkButton(r, text="Lấy key ↗", width=80, height=32, command=lambda p=prov: webbrowser.open(KEY_LINKS[p]),
-                          **T.secondary_button()).pack(side="right")
-            box = ctk.CTkTextbox(b, height=52, font=T.mono(11))
-            box.insert("1.0", value or "")
-            box.pack(fill="x")
-            self.key_boxes[prov] = box
-        hint(b, "Mỗi dòng một key. Tự xoay vòng: nhà cung cấp chính → các nhà cung cấp khác có key. "
-                "Gemini/Groq có gói miễn phí · DeepSeek/OpenAI cần key trả phí · Edge-TTS không cần key.").pack(fill="x", pady=(4, 0))
-        r = ctk.CTkFrame(b, fg_color="transparent")
-        r.pack(fill="x", pady=(10, 0))
-        ctk.CTkLabel(r, text="Từ điển tên riêng (Thuật ngữ):", font=T.font(12, "bold"), anchor="w").pack(side="left")
-        ctk.CTkButton(r, text="Nhập TXT…", width=90, height=32, command=self._import_glossary, **T.secondary_button()).pack(side="right")
-        self.glossary = ctk.CTkTextbox(b, height=160, font=T.mono(11))
-        self.glossary.insert("1.0", st.glossary)
-        self.glossary.pack(fill="x", pady=(4, 0))
-        hint(b, "Mỗi dòng: từ nguồn=nghĩa tiếng Việt (ví dụ 周彦淑=Chu Ngạn Thục). Áp dụng cho prompt và bộ nhớ dịch.").pack(fill="x", pady=(4, 0))
-
-        # ── Cột 3 ────────────────────────────────────────────────────────
-        c3 = cols[2]
-        self._col_title(c3, "🎙 GIỌNG CLOUD & CẤU HÌNH")
-        b = self._card(c3, "Giọng đọc cloud (ElevenLabs · Google · VieNeu)", "Key lưu tại settings.json trên máy này.")
-        r = ctk.CTkFrame(b, fg_color="transparent")
-        r.pack(fill="x")
-        ctk.CTkLabel(r, text="ElevenLabs API keys (mỗi dòng một key)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
-        ctk.CTkButton(r, text="Lấy key ↗", width=80, height=32, command=lambda: webbrowser.open(KEY_LINKS["ElevenLabs"]), **T.secondary_button()).pack(side="right")
-        self.eleven_keys = ctk.CTkTextbox(b, height=52, font=T.mono(11))
-        self.eleven_keys.insert("1.0", st.elevenlabs_api_keys or st.elevenlabs_api_key)
-        self.eleven_keys.pack(fill="x", pady=(0, 6))
-        r = ctk.CTkFrame(b, fg_color="transparent")
-        r.pack(fill="x")
-        ctk.CTkLabel(r, text="Google API keys (mỗi dòng một key · bật Text-to-Speech API)", font=T.font(12), text_color=T.TEXT_DIM,
-                     anchor="w").pack(side="left")
-        ctk.CTkButton(r, text="Lấy key ↗", width=80, height=32, command=lambda: webbrowser.open(KEY_LINKS["Google"]), **T.secondary_button()).pack(side="right")
-        self.google_key = ctk.CTkTextbox(b, height=52, font=T.mono(11))
-        self.google_key.insert("1.0", st.google_api_key)
-        self.google_key.pack(fill="x", pady=(0, 6))
-        self.google_json = EntryRow(b, "Google JSON", value=st.google_sa_json, browse="file", placeholder="Service Account JSON (tuỳ chọn)")
-        self.google_json.pack(fill="x", pady=3)
-        hint(b, "Mọi ô key đều nhận nhiều key, mỗi dòng một key: hết hạn mức hoặc key lỗi thì tự chuyển sang key kế tiếp.").pack(fill="x", pady=(2, 0))
-
-        b = self._card(c3, "Mẫu cấu hình sẵn (Preset 1-Click)", "Chọn nhanh mẫu dựng video chuẩn hoặc lưu cấu hình riêng.")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x")
-        ctk.CTkLabel(row, text="Chọn mẫu:", font=T.font(12), text_color=T.TEXT_DIM, width=80, anchor="w").pack(side="left")
-        self.preset_var = ctk.StringVar(value="-- Không dùng (Mặc định) --")
-        self.preset_menu = Select(row, ["-- Không dùng (Mặc định) --"] + self.app_state.list_presets(),
-                                  variable=self.preset_var, height=34, command=self._load_preset)
-        self.preset_menu.pack(side="left", fill="x", expand=True)
-        row2 = ctk.CTkFrame(b, fg_color="transparent")
-        row2.pack(fill="x", pady=(6, 0))
-        button(row2, "Đặt lại", icon_name="refresh", size="sm", command=self._reset_config).pack(side="left")
-        button(row2, "Lưu mới", icon_name="add", variant="primary", size="sm", command=self._save_preset).pack(side="left", padx=6)
-        button(row2, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self._delete_preset).pack(side="left")
-        hint(b, "Cấu hình chuẩn ban đầu: tỉ lệ gốc, không zoom/lật, âm lượng chuẩn, không phụ đề/hiệu ứng. "
-                "Mẹo: chọn preset sẽ nạp ngay mọi thông số; Ctrl+Z trên cửa sổ chính để hoàn tác khung/vùng che.").pack(fill="x", pady=(4, 0))
-
-        b = self._card(c3, "Thư mục xuất MP4 & quản lý cấu hình")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x")
-        self.out_var = ctk.StringVar(value=self.app_state.output_dir)
-        ctk.CTkEntry(row, textvariable=self.out_var, height=32, font=T.font(12)).pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(row, text="Chọn", width=60, height=32, command=self._browse_out, **T.secondary_button()).pack(side="left", padx=4)
-        ctk.CTkButton(row, text="Mở", width=50, height=32, command=self._open_out, **T.primary_button()).pack(side="left")
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x", pady=(8, 0))
-        ctk.CTkLabel(row, text="Cấu hình file:", font=T.font(12), text_color=T.TEXT_DIM, width=100, anchor="w").pack(side="left")
-        button(row, "Lưu cấu hình (JSON)", icon_name="save", variant="primary", size="sm", command=self._export_config).pack(side="left")
-        button(row, "Nhập cấu hình (JSON)", icon_name="openfolder", size="sm", command=self._import_config).pack(side="left", padx=6)
-        self.after(200, self._scan_encoders)
+        b = self._card(c, "Đường dẫn ffmpeg", info="Chỉ cần khi máy không tự tìm thấy ffmpeg (để trống = dùng bản đi kèm).")
+        ffm, ffp = exe_name("ffmpeg"), exe_name("ffprobe")
+        self.ffmpeg = EntryRow(b, ffm, value=st.ffmpeg_path, browse="exe", placeholder=f"để trống = bin/{ffm} hoặc PATH")
+        self.ffprobe = EntryRow(b, ffp, value=st.ffprobe_path, browse="exe", placeholder=f"để trống = bin/{ffp} hoặc PATH")
+        for r in (self.ffmpeg, self.ffprobe):
+            r.pack(fill="x", pady=3)
 
     # ── Trang phím tắt & cẩm nang ────────────────────────────────────────
     def _build_guide(self, page) -> None:
-        page.grid_columnconfigure((0, 1), weight=1)
+        page.grid_columnconfigure((0, 1), weight=1, uniform="col")
         head = ctk.CTkFrame(page, fg_color=T.BG_CARD, corner_radius=10)
         head.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=6)
-        ctk.CTkLabel(head, text="ⓘ Trợ giúp, phím tắt & cẩm nang render", font=T.font(15, "bold"), text_color=T.ACCENT, anchor="w").pack(fill="x", padx=14, pady=(10, 0))
-        ctk.CTkLabel(head, text="Tra cứu nhanh các tổ hợp phím tắt bàn phím và cẩm nang lựa chọn chế độ render tối ưu.",
+        ctk.CTkLabel(head, text="Phím tắt & hướng dẫn", font=T.font(18, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=14, pady=(10, 0))
+        ctk.CTkLabel(head, text="Tra cứu nhanh phím tắt và các tính năng chính.",
                      font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(fill="x", padx=14, pady=(0, 6))
         button(head, "Mở Hướng dẫn sử dụng đầy đủ (từng bước, theo module)", icon_name="book", variant="primary", command=lambda: self.window.open_guide_window("start")).pack(anchor="w", padx=14, pady=(0, 12))
         for i, (title, rows) in enumerate(SHORTCUTS):
             card = ctk.CTkFrame(page, fg_color=T.BG_CARD, corner_radius=10)
             card.grid(row=1 + i // 2, column=i % 2, sticky="nsew", padx=6, pady=6)
-            ctk.CTkLabel(card, text="⌨ " + title, font=T.font(13, "bold"), text_color=T.ACCENT, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
+            ctk.CTkLabel(card, text=title, font=T.font(13, "bold"), text_color=T.TEXT, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
             for key, desc in rows:
                 row = ctk.CTkFrame(card, fg_color="transparent")
                 row.pack(fill="x", padx=12, pady=2)
-                ctk.CTkLabel(row, text=key, font=T.mono(11), fg_color=T.BG_ELEVATED, corner_radius=6, width=170, text_color=T.INFO).pack(side="left")
-                ctk.CTkLabel(row, text=desc, font=T.font(11), anchor="w", text_color=T.TEXT_DIM).pack(side="left", padx=10)
+                ctk.CTkLabel(row, text=key, font=T.mono(11), fg_color=T.BG_ELEVATED, corner_radius=6, width=140,
+                             text_color=T.INFO).pack(side="left", anchor="n")
+                ctk.CTkLabel(row, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=190,
+                             text_color=T.TEXT_DIM).pack(side="left", padx=10, fill="x", expand=True)
             ctk.CTkLabel(card, text="").pack(pady=2)
         base = 1 + (len(SHORTCUTS) + 1) // 2
         for i, (title, color, rows) in enumerate(GUIDE):
@@ -311,38 +454,131 @@ class SettingsWindow(ctk.CTkToplevel):
             ctk.CTkLabel(card, text=title, font=T.font(13, "bold"), text_color=color, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
             for name, desc in rows:
                 ctk.CTkLabel(card, text="• " + name, font=T.font(12, "bold"), anchor="w", text_color=T.TEXT).pack(fill="x", padx=12, pady=(4, 0))
-                ctk.CTkLabel(card, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=640, text_color=T.TEXT_DIM).pack(fill="x", padx=26)
+                ctk.CTkLabel(card, text=desc, font=T.font(11), anchor="w", justify="left", wraplength=340, text_color=T.TEXT_DIM).pack(fill="x", padx=26)
             ctk.CTkLabel(card, text="").pack(pady=2)
 
-    # ── Hành động ────────────────────────────────────────────────────────
-    def _scan_encoders(self) -> None:
+    # ── Trạng thái AI trên máy ───────────────────────────────────────────
+    def _scan_machine(self) -> None:
+        """Dò GPU / encoder / CUDA / các model trong nền (nạp DLL CUDA, gọi ffmpeg…) rồi điền dòng trạng thái."""
         ff = FFmpeg(self.ffmpeg.get(), self.ffprobe.get())
         main_ff = getattr(self.window, "ffmpeg", None)
         if main_ff is not None and (ff.ffmpeg, ff.ffprobe) == (main_ff.ffmpeg, main_ff.ffprobe):
             ff = main_ff             # cùng ffmpeg với cửa sổ chính → dùng lại kết quả dò encoder đã cache
-        if not ff.available:
-            self.enc_status.configure(text="✖ Không tìm thấy ffmpeg/ffprobe", fg_color="#3B1D1D", text_color=T.DANGER)
-            return
 
         def work():
-            gpu_name()               # dò trong nền → done() lấy từ cache
-            ok = [b for b in ("nvenc", "qsv", "amf") if ff.encoder_works(f"h264_{b}")]
-            return ok
+            from app.services.whisper_stt import cuda_ready
+
+            name = gpu_name()
+            nvidia = "NVIDIA" in name.upper()
+            enc = [b for b in ("nvenc", "qsv", "amf") if ff.available and ff.encoder_works(f"h264_{b}")]
+            return name, nvidia, enc, (cuda_ready() if nvidia else False)
 
         def done(result, error):
-            if error or not result:
-                self.enc_status.configure(text=f"CPU (libx264) · {gpu_name()} — GPU không dùng được (cập nhật driver?)",
-                                          fg_color="#3B2A12", text_color=T.WARNING)
-            else:
+            if not self.winfo_exists():
+                return
+            if error or result is None:
+                self.gpu_status.warn(f"Không dò được card đồ hoạ: {error}")
+                result = ("", False, [], False)
+            name, nvidia, enc, cuda = result
+            self._nvidia = nvidia
+            if name:
                 names = {"nvenc": "NVIDIA NVENC", "qsv": "Intel QSV", "amf": "AMD AMF"}
-                note = ""
-                if "nvenc" not in result and "NVIDIA" in gpu_name().upper():
-                    note = " · NVENC chưa dùng được (cần driver NVIDIA ≥ 610)"
-                self.enc_status.configure(text=f"✔ {names[result[0]]} sẵn sàng · GPU: {gpu_name()}{note}",
-                                          fg_color="#123524", text_color=T.SUCCESS)
+                if enc:
+                    self.gpu_status.ok(f"✓ {name} · xuất video bằng {names[enc[0]]}")
+                else:
+                    self.gpu_status.info(f"{name} · xuất video bằng CPU (GPU không dùng được — cập nhật driver?)")
+            self._show_cuda(nvidia, cuda)
+            self._refresh_local()
 
         self.window.run_bg(work, done)
 
+    def _show_cuda(self, nvidia: bool, cuda: bool) -> None:
+        self.cuda_btn.pack_forget()
+        if not nvidia:
+            self.cuda_status.info("Không có GPU NVIDIA → AI trên máy chạy bằng CPU (chậm hơn).")
+        elif cuda:
+            self.cuda_status.ok("✓ CUDA sẵn sàng — Whisper chạy trên GPU.")
+        else:
+            self.cuda_status.warn("Thiếu CUDA runtime → Whisper chạy CPU, bỏ bước nghe lại giọng đọc.")
+            self.cuda_btn.pack(side="right")
+
+    def _refresh_local(self) -> None:
+        """Trạng thái Qwen3-ASR / VieNeu / Whisper / model nhỏ (đọc đĩa, nhanh)."""
+        from app.services import diarize, vocal_remove
+        from app.services.ctc_align import DOWNLOAD_MB, model_ready as align_ok
+        from app.services.qwen_asr import INSTALL_GB, is_installed as qwen_ok
+        from app.services.tts.quality import local_whisper
+        from app.services.tts.vieneu import is_installed as vieneu_ok
+
+        for btn in (self.qwen_btn, self.vieneu_btn, self.whisper_btn, self.align_btn):
+            btn.pack_forget()
+        if align_ok():
+            self.align_status.ok("✓ Đã cài — chữ nổi khớp từng tiếng.")
+        else:
+            self.align_status.warn(f"Chưa cài — chữ nổi đang chia gần đúng (tải ~{DOWNLOAD_MB} MB, một lần).")
+            self.align_btn.pack(side="right")
+        if qwen_ok():
+            self.qwen_status.ok("✓ Đã cài.")
+        else:
+            self.qwen_status.warn(f"Chưa cài — cần để nhận diện giọng nói (~{INSTALL_GB} GB, một lần).")
+            self.qwen_btn.pack(side="right")
+        if vieneu_ok():
+            self.vieneu_status.ok("✓ Đã cài.")
+        else:
+            self.vieneu_status.warn("Chưa cài — đang dùng Edge (cần mạng) thay thế.")
+            self.vieneu_btn.pack(side="right")
+        size = local_whisper()
+        if size:
+            self.whisper_status.ok(f"✓ Đã có model «{size}»" + ("." if self._nvidia else " (chạy CPU — chỉ dùng để đọc liền)."))
+        else:
+            self.whisper_status.warn("Chưa có model — bỏ bước nghe lại và đọc liền.")
+            self.whisper_btn.pack(side="right")
+        uvr = "đã có" if vocal_remove.model_ready() else f"tự tải lần đầu (~{vocal_remove.MODEL_SIZE_MB} MB)"
+        spk = "đã có" if diarize.MODEL_PATH.exists() else f"tự tải lần đầu (~{diarize.MODEL_SIZE_MB} MB)"
+        self.small_status.info(f"Khử giọng gốc: {uvr} · Nhận ra người nói: {spk}.")
+        missing = sum(not ok for ok in (qwen_ok(), vieneu_ok(), bool(size), align_ok()))
+        self._badge("local", str(missing) if missing else "")          # số phần chưa cài, hiện trên menu trái
+
+    def _after_install(self, what: str) -> Callable:
+        def done(ok: bool, error: Exception | None) -> None:
+            if not self.winfo_exists():
+                return
+            if not ok:
+                self.window.log(f"✖ {what} thất bại: {error or 'xem log'}")
+            self._scan_machine()
+        return done
+
+    def _install_qwen(self) -> None:
+        from app.ui.local_ai import install_qwen
+
+        if install_qwen(self.window, self._after_install("Cài Qwen3-ASR")):
+            self.qwen_status.warn("Đang cài (vài chục phút)… xem log")
+
+    def _install_vieneu(self) -> None:
+        from app.ui.local_ai import install_vieneu
+
+        if install_vieneu(self.window, self._after_install("Cài VieNeu")):
+            self.vieneu_status.warn("Đang cài (vài phút)… xem log")
+
+    def _install_cuda(self) -> None:
+        from app.ui.local_ai import install_cuda
+
+        if install_cuda(self.window, self._after_install("Tải CUDA runtime")):
+            self.cuda_status.warn("Đang tải CUDA runtime… xem log")
+
+    def _download_whisper(self) -> None:
+        from app.ui.local_ai import download_whisper, whisper_size
+
+        if download_whisper(self.window, whisper_size(self._nvidia), self._after_install("Tải Whisper")):
+            self.whisper_status.warn("Đang tải model… xem log")
+
+    def _install_aligner(self) -> None:
+        from app.ui.local_ai import install_aligner
+
+        if install_aligner(self.window, self._after_install("Cài bộ căn chữ nổi")):
+            self.align_status.warn("Đang tải model… xem log")
+
+    # ── Hành động ────────────────────────────────────────────────────────
     def _pick_theme(self, key: str) -> None:
         """Đổi theme ngay: lưu cài đặt, dựng lại giao diện chính, mở lại cửa sổ Cài đặt."""
         if key == T.THEME_NAME:
@@ -350,9 +586,29 @@ class SettingsWindow(ctk.CTkToplevel):
         self._save(close=False, silent=True)
         self.window.apply_theme_live(key)
 
-    def _provider_changed(self, prov: str) -> None:
-        self.tr_model.configure(values=MODEL_CHOICES.get(prov, []))
-        self.tr_model.set(DEFAULT_MODELS.get(prov, ""))
+    def _refresh_models(self) -> None:
+        """Hỏi Google các model Gemini key này dùng được → cập nhật danh sách (lưu cache, Dựng Truyện cũng dùng)."""
+        from app.services.gemini_models import fetch_models
+
+        keys = self.app_state.settings.split_keys(self._key_text())
+        if not keys:
+            self.models_status.configure(text="Nhập Gemini API key trước rồi bấm lại.", text_color=T.TEXT_MUTED)
+            return
+        self.models_status.configure(text="Đang hỏi Google danh sách model…", text_color=T.TEXT_MUTED)
+        self.models_btn.configure(state="disabled")
+
+        def done(result, error):
+            self.models_btn.configure(state="normal")
+            if error:
+                self.models_status.configure(text=f"Không lấy được danh sách model: {error}")
+                return
+            cur = self.tr_model.get()
+            self.tr_model.configure(values=text_models())
+            self.tr_model.set(migrate_model(cur) or DEFAULT_MODEL)
+            self.models_status.configure(text=f"✓ Đã cập nhật: {len(result['text'])} model văn bản · "
+                                              f"{len(result['image'])} model ảnh · {len(result['video'])} model video.")
+
+        self.window.run_bg(lambda: fetch_models(keys[0]), done)
 
     def _import_glossary(self) -> None:
         p = filedialog.askopenfilename(filetypes=[("Text", "*.txt *.csv"), ("Tất cả", "*.*")])
@@ -374,7 +630,7 @@ class SettingsWindow(ctk.CTkToplevel):
                                         f"Tổng: {tts + pv + jobs:.1f} MB")
 
     def _clean_cache(self) -> None:
-        for d in (PREVIEW_CACHE_DIR, CACHE_DIR / "demucs"):
+        for d in (PREVIEW_CACHE_DIR, CACHE_DIR / "demucs", CACHE_DIR / "novocal"):
             shutil.rmtree(d, ignore_errors=True)
             d.mkdir(parents=True, exist_ok=True)
         self._cache_sizes()
@@ -389,47 +645,15 @@ class SettingsWindow(ctk.CTkToplevel):
         self._cache_sizes()
         self.window.log("Đã xoá job tạm và cache TTS.")
 
-    def _load_preset(self, name: str) -> None:
-        if name.startswith("--"):
-            return
-        if self.app_state.load_preset(name):
-            self.window.refresh_modules()
-            self.window.log(f"Đã nạp preset “{name}”.")
-
-    def _save_preset(self) -> None:
-        dlg = ctk.CTkInputDialog(text="Tên preset:", title="Lưu preset")
-        name = (dlg.get_input() or "").strip()
-        if not name:
-            return
-        self.app_state.save_preset(name)
-        self.preset_menu.configure(values=["-- Không dùng (Mặc định) --"] + self.app_state.list_presets())
-        self.preset_var.set(name)
-        self.window.log(f"Đã lưu preset “{name}”.")
-
-    def _delete_preset(self) -> None:
-        name = self.preset_var.get()
-        if name.startswith("--"):
-            return
-        if messagebox.askyesno("Xóa preset", f"Xoá preset “{name}”?"):
-            try:
-                (PRESETS_DIR / f"{name}.json").unlink()
-            except OSError:
-                pass
-            self.preset_menu.configure(values=["-- Không dùng (Mặc định) --"] + self.app_state.list_presets())
-            self.preset_var.set("-- Không dùng (Mặc định) --")
-
-    def _reset_config(self) -> None:
-        if not messagebox.askyesno("Đặt lại", "Đưa mọi module về cấu hình mặc định (giữ hàng đợi)?"):
-            return
-        from app.core.state import (BGMConfig, BlurConfig, BrandConfig, ColorConfig, SubtitleConfig, TTSConfig, TrimConfig,
-                                    VideoConfig)
-
-        s = self.app_state
-        s.video, s.subtitle, s.tts = VideoConfig(), SubtitleConfig(), TTSConfig()
-        s.blur, s.bgm, s.brand, s.trim, s.color = BlurConfig(), BGMConfig(), BrandConfig(), TrimConfig(), ColorConfig()
-        s.emit("config_loaded")
-        s.mark_dirty()
-        self.window.log("Đã đặt lại cấu hình mặc định.")
+    def _open_pron(self) -> None:
+        """Mở từ điển phát âm TTS (chưa có thì tạo file mẫu — khoá bắt đầu bằng «_» là ghi chú, không áp)."""
+        if not PRON_FILE.exists():
+            PRON_FILE.write_text(json.dumps({
+                "_ghi_chú": "Mỗi dòng: \"chữ viết\": \"cách đọc\". Khớp nguyên từ, không phân biệt hoa/thường. "
+                            "Lưu file rồi bấm tạo lại giọng.",
+                "_ví_dụ": "\"ANC\": \"ây en xi\", \"Xiaomi\": \"xao mi\", \"Shopee\": \"sóp pi\""},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+        open_path(str(PRON_FILE))
 
     def _browse_out(self) -> None:
         d = filedialog.askdirectory(title="Thư mục xuất")
@@ -440,61 +664,25 @@ class SettingsWindow(ctk.CTkToplevel):
         d = self.out_var.get().strip()
         if d:
             Path(d).mkdir(parents=True, exist_ok=True)
-            os.startfile(d)
-
-    def _export_config(self) -> None:
-        p = filedialog.asksaveasfilename(defaultextension=".json", initialfile="edit_studio_config.json",
-                                         filetypes=[("JSON", "*.json")])
-        if p:
-            data = self.app_state.to_config_dict()
-            data.pop("videos", None)
-            Path(p).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.window.log(f"Đã lưu cấu hình: {p}")
-
-    def _import_config(self) -> None:
-        p = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
-        if p:
-            try:
-                self.app_state.apply_config_dict(json.loads(Path(p).read_text(encoding="utf-8")), include_videos=False)
-                self.app_state.emit("config_loaded")
-                self.app_state.mark_dirty()
-                self.window.log(f"Đã nhập cấu hình: {p}")
-            except Exception as exc:
-                messagebox.showerror("Nhập cấu hình", str(exc))
+            open_path(d)
 
     def _save(self, close: bool = True, silent: bool = False) -> None:
         st = self.app_state.settings
-        st.gpu_encoder = self.encoder.get()
-        self.app_state.video.gpu_backend = st.gpu_encoder
-        self.app_state.video.use_gpu = st.gpu_encoder != "cpu"
-        self.app_state.video.video_codec = self.codec.get()
-        st.ffmpeg_fast = self.ffmpeg_fast.get()
-        if st.ffmpeg_fast:
-            self.app_state.video.encode_preset = "Nhanh"
         st.windows_toast = self.toast.get()
         st.ffmpeg_path, st.ffprobe_path = self.ffmpeg.get().strip(), self.ffprobe.get().strip()
-        st.tts_workers = int(self.workers.get())
-        st.whisper_compute = self.compute.get()
         st.vieneu_precision = self.vieneu.get()
+        st.loudness_target = float(self.loudness.get())
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()
-        st.translate_provider = self.tr_provider.get()
-        st.translate_model = self.tr_model.get().strip() or DEFAULT_MODELS.get(st.translate_provider, "")
-        st.gemini_api_keys = self.key_boxes["Gemini"].get("1.0", "end").strip()
-        st.gemini_api_key = st.gemini_api_keys.splitlines()[0].strip() if st.gemini_api_keys else ""
-        st.groq_api_key = self.key_boxes["Groq"].get("1.0", "end").strip()
-        st.deepseek_api_key = self.key_boxes["DeepSeek"].get("1.0", "end").strip()
-        st.openai_api_key = self.key_boxes["OpenAI"].get("1.0", "end").strip()
+        st.translate_model = self.tr_model.get().strip() or DEFAULT_MODEL
+        st.gemini_api_keys = "\n".join(st.split_keys(self._key_text()))
         st.glossary = self.glossary.get("1.0", "end").strip()
-        st.elevenlabs_api_keys = self.eleven_keys.get("1.0", "end").strip()
-        st.elevenlabs_api_key = st.elevenlabs_api_keys.splitlines()[0].strip() if st.elevenlabs_api_keys else ""
-        st.google_api_key = self.google_key.get("1.0", "end").strip()
-        st.google_sa_json = self.google_json.get().strip()
         out = self.out_var.get().strip()
         if out:
             self.app_state.output_dir = out
         self.app_state.save_settings()
-        self.app_state.config_changed("video")
+        self._initial = self._values()             # đã lưu → đóng không hỏi nữa
+        self._badge("cloud", "" if st.gemini_keys() else "!")
         if silent:
             return
         self.window.apply_settings()

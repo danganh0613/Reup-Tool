@@ -1,40 +1,25 @@
-"""Nhận diện giọng nói bằng faster-whisper → danh sách cue SRT.
-
-Whisper trả về các đoạn khá dài; ta gom lại theo từng từ (word timestamps) rồi
-cắt thành cue vừa mắt: tối đa ~2 dòng, ~6 giây, ưu tiên ngắt ở dấu câu.
-"""
+"""Whisper (faster-whisper) chạy ngầm: nghe lại câu lồng tiếng để kiểm lỗi và tách đoạn đọc gộp (tts/quality.py,
+tts/batch.py). Ở đây: nạp / giải phóng model, tải model, CUDA runtime cho GPU NVIDIA; ``STTResult`` dùng chung cho các
+bộ nhận diện (Qwen3-ASR, OCR)."""
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.paths import CACHE_DIR, MODELS_DIR
-from app.services.ffmpeg import FFmpeg, RenderCancelled
-from app.services.srt_utils import Cue, display_width, is_cjk, wrap_lines
+from app.services.ffmpeg import RenderCancelled
+from app.services.srt_utils import Cue
 
 logger = logging.getLogger(__name__)
 
-MAX_CHARS = 84          # ~2 dòng × 42 ký tự
-MAX_DURATION = 6.0
-MAX_GAP = 0.9           # im lặng dài hơn → ngắt cue
-_END_PUNCT = ".?!。？！"
-_SOFT_PUNCT = ",;:，、；"
-
-# Whisper hay bỏ dấu câu (nhất là tiếng Trung/Nhật); mồi một câu có dấu câu đúng ngôn ngữ để model bắt chước
-_PUNCT_PROMPTS = {
-    "zh": "以下是普通话的句子，带有标点符号。", "ja": "以下は句読点を含む日本語の文章です。", "ko": "다음은 문장 부호가 있는 한국어 문장입니다.",
-    "vi": "Sau đây là bản ghi tiếng Việt, có dấu câu đầy đủ.", "en": "The following is a transcript with proper punctuation.",
-    "fr": "Voici une transcription avec la ponctuation.", "de": "Es folgt eine Transkription mit Zeichensetzung.",
-    "es": "A continuación, una transcripción con puntuación.", "th": "ต่อไปนี้คือข้อความถอดเสียงภาษาไทย",
-    "id": "Berikut adalah transkrip dengan tanda baca.", "ru": "Далее следует расшифровка со знаками препинания.",
-}
-
 _model_cache: dict[tuple[str, str, str], object] = {}
 _model_lock = threading.Lock()
+_last_used = 0.0                    # lần cuối lấy model (monotonic) — để giải phóng khi lâu không dùng
 
 
 @dataclass
@@ -214,11 +199,26 @@ def _download(size: str, log: Callable[[str], None] | None) -> str:
     raise RuntimeError(f"Không tải được model Whisper '{size}': {last_err}")
 
 
+def release_idle(max_idle: float) -> bool:
+    """Bỏ model Whisper đã nạp (0,5–2 GB RAM/VRAM) nếu ``max_idle`` giây chưa dùng. Lần nhận diện sau nạp lại."""
+    with _model_lock:
+        if not _model_cache or time.monotonic() - _last_used < max_idle:
+            return False
+        _model_cache.clear()
+    import gc
+
+    gc.collect()
+    logger.info("Đã giải phóng model Whisper (lâu không dùng)")
+    return True
+
+
 def load_model(size: str, device: str = "auto", compute: str = "auto", log: Callable[[str], None] | None = None):
     from faster_whisper import WhisperModel
 
+    global _last_used
     key = (size, device, compute)
     with _model_lock:
+        _last_used = time.monotonic()
         if key in _model_cache:
             return _model_cache[key]
         path = _download(size, log)
@@ -243,114 +243,3 @@ def load_model(size: str, device: str = "auto", compute: str = "auto", log: Call
                 if log:
                     log(f"  ↳ {dev}/{ct} không dùng được: {str(exc)[:160]}")
         raise RuntimeError(f"Không nạp được model Whisper: {last_err}")
-
-
-def _is_cjk_text(text: str) -> bool:
-    return is_cjk(text)
-
-
-def _flush(words: list[tuple[float, float, str]], cues: list[Cue]) -> None:
-    if not words:
-        return
-    text = "".join(w for _, _, w in words).strip()
-    if not text:
-        words.clear()
-        return
-    cues.append(Cue(len(cues) + 1, words[0][0], words[-1][1], wrap_lines(text)))
-    words.clear()
-
-
-def _resegment(segments, *, duration: float, on_progress: Callable[[float], None] | None,
-               cancel: threading.Event | None) -> list[Cue]:
-    cues: list[Cue] = []
-    buf: list[tuple[float, float, str]] = []
-    for seg in segments:
-        if cancel is not None and cancel.is_set():
-            raise RenderCancelled("Đã huỷ nhận diện")
-        words = getattr(seg, "words", None) or []
-        if not words:
-            _flush(buf, cues)
-            text = (seg.text or "").strip()
-            if text:
-                cues.append(Cue(len(cues) + 1, seg.start, seg.end, wrap_lines(text)))
-            continue
-        for w in words:
-            token = w.word
-            if buf:
-                cur_text = "".join(t for _, _, t in buf)
-                cur_w = display_width(cur_text)          # CJK tính 2 ô → cue tiếng Trung ngắn hơn, dễ đọc
-                gap = w.start - buf[-1][1]
-                too_long = cur_w + display_width(token) > MAX_CHARS
-                too_slow = (w.end - buf[0][0]) > MAX_DURATION
-                ended = cur_text.rstrip()[-1:] in _END_PUNCT and cur_w > 25
-                soft = cur_text.rstrip()[-1:] in _SOFT_PUNCT and cur_w > 55
-                if too_long or too_slow or gap > MAX_GAP or ended or soft:
-                    _flush(buf, cues)
-            buf.append((w.start, w.end, token))
-        if on_progress and duration > 0:
-            on_progress(min(0.99, seg.end / duration))
-    _flush(buf, cues)
-    # mẩu cụt (1–2 từ bị cắt rời do giới hạn thời lượng, vd "…vô" | "ích.") → gộp vào cue trước
-    merged: list[Cue] = []
-    for c in cues:
-        prev = merged[-1] if merged else None
-        tiny = c.duration < 1.0 and display_width(c.plain) <= 12
-        if prev is not None and tiny and c.start - prev.end < 0.35 and display_width(prev.plain) + display_width(c.plain) <= MAX_CHARS + 12:
-            prev.text = wrap_lines((prev.plain + ("" if _is_cjk_text(prev.plain) else " ") + c.plain).strip())
-            prev.end = c.end
-            continue
-        merged.append(c)
-    cues = merged
-    for i, c in enumerate(cues):
-        c.index = i + 1
-    # đảm bảo cue không chồng lấn và có thời lượng tối thiểu
-    for i, c in enumerate(cues):
-        if c.end - c.start < 0.4:
-            c.end = c.start + 0.4
-        if i + 1 < len(cues) and c.end > cues[i + 1].start:
-            c.end = max(c.start + 0.2, cues[i + 1].start - 0.02)
-    return cues
-
-
-def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, model_size: str = "base",
-               language: str = "auto", device: str = "auto", compute: str = "auto",
-               work_dir: Path | None = None,
-               on_progress: Callable[[float], None] | None = None,
-               log: Callable[[str], None] | None = None,
-               cancel: threading.Event | None = None) -> STTResult:
-    work_dir = work_dir or Path(video_path).parent
-    work_dir.mkdir(parents=True, exist_ok=True)
-    wav = work_dir / "stt_audio.wav"
-    if log:
-        log("Tách audio để nhận diện…")
-    ffmpeg.extract_audio_wav(video_path, wav, sample_rate=16000)
-
-    model = load_model(model_size, device, compute, log)
-    lang = None if language in ("", "auto") else language
-    if lang is None:
-        try:
-            from faster_whisper.audio import decode_audio
-
-            audio = decode_audio(str(wav), sampling_rate=16000)
-            lang, prob, _all = model.detect_language(audio)
-            if log:
-                log(f"Ngôn ngữ: {lang} ({prob:.0%})")
-        except Exception:
-            lang = None
-    if log:
-        log("Whisper đang nghe… (tiến độ cập nhật theo thời lượng)")
-    segments, info = model.transcribe(
-        str(wav), language=lang, beam_size=5, vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 400}, word_timestamps=True,
-        condition_on_previous_text=False, initial_prompt=_PUNCT_PROMPTS.get(lang or ""),
-    )
-    cues = _resegment(segments, duration=float(getattr(info, "duration", 0) or 0),
-                      on_progress=on_progress, cancel=cancel)
-    if on_progress:
-        on_progress(1.0)
-    try:
-        wav.unlink()
-    except OSError:
-        pass
-    return STTResult(cues=cues, language=getattr(info, "language", lang or ""),
-                     language_probability=float(getattr(info, "language_probability", 0) or 0))

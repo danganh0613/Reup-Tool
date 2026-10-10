@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -31,33 +31,43 @@ from app.ui.modules.module_color import ColorModule
 from app.ui.modules.module_srt import SRTModule
 from app.ui.modules.module_story import StoryModule
 from app.ui.modules.module_stt import STTModule
-from app.ui.modules.module_subtitle import SubtitleModule
 from app.ui.modules.module_trim import TrimModule
 from app.ui.modules.module_tts import TTSModule
 from app.ui.modules.module_video import VideoModule
 from app.ui.preview_panel import PreviewPanel
-from app.ui.progress_panel import ProgressPanel, stage_index_for
+from app.ui.progress_panel import ProgressPanel, friendly_error
 from app.ui.widgets.dialogs import LogWindow, NotificationCenter, ShortcutsWindow, now_str
 from app.ui.widgets.ui import button, button_width, relabel
+from app.core.platform import IS_MAC, IS_WIN, exe_name, open_path
 
 ctk_patches.apply()      # vá CTk: hết vạch hở 1 px mép phải/dưới ở DPI lẻ
 
 logger = logging.getLogger(__name__)
 
-try:  # kéo thả file từ Explorer
+try:  # kéo thả file từ Explorer / Finder
     from tkinterdnd2 import DND_FILES, TkinterDnD
 
     class _Root(ctk.CTk, TkinterDnD.DnDWrapper):
         def __init__(self) -> None:
             super().__init__()
-            self.TkdndVersion = TkinterDnD._require(self)
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+            except Exception:                    # thư viện tkdnd không nạp được trên máy này → vẫn mở app, chỉ tắt kéo thả
+                logger.warning("Không bật được kéo thả file (tkdnd)", exc_info=True)
+                self.TkdndVersion = None
 
     _HAS_DND = True
 except Exception:  # pragma: no cover
     _Root = ctk.CTk  # type: ignore[misc,assignment]
     _HAS_DND = False
 
-MODULES: list[type[BaseModule]] = [VideoModule, SubtitleModule, STTModule, SRTModule, TTSModule, BlurModule,
+RAIL_W = 72                      # thanh tính năng bên trái (gọn: chỉ icon + nhãn ngắn)
+#: tab dựng sẵn (ẩn) lúc người dùng rảnh, theo thứ tự hay dùng — mở lần đầu khỏi đứng hình 0,2–0,7 s (audit_out/perf)
+PREWARM = ["srt", "tts", "stt", "video", "blur", "color", "bgm", "brand", "trim", "story"]
+PREWARM_IDLE = 1.5               # giây không bấm / gõ / cuộn mới dựng sẵn
+RAIL_LABELS = {"story": "Truyện"}  # nhãn ngắn trên thanh bên (tiêu đề đầy đủ vẫn ở đầu bảng tính năng)
+# «Phụ đề» (kiểu chữ) đã gộp vào «Lời thoại»; vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước
+MODULES: list[type[BaseModule]] = [VideoModule, STTModule, SRTModule, TTSModule, BlurModule,
                                    BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
 _FKEYS = {f"<F{i + 1}>": m.key for i, m in enumerate(MODULES)}
 
@@ -68,8 +78,14 @@ class MainWindow(_Root):
         self.app_state = state
         self.ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
         self.pipeline = Pipeline(state, self.ffmpeg)
+        self._waiting: list[tuple[str, Callable[[], None]]] = []   # việc xếp hàng chờ tác vụ / render đang chạy
         self.runner = JobRunner(self.pipeline, self.ui_call)
         self.tasks = TaskRunner(self.ui_call)
+        # model AI đang chọn hết lượt / quá tải (không tự đổi model) → báo + nút mở đúng chỗ chọn model
+        from app.services import translate_router
+
+        self._unavailable_shown: set[str] = set()
+        translate_router.on_unavailable = lambda model, msg: self.ui_call(lambda: self.model_unavailable(model, msg))
         self.player = AudioPlayer(self.ffmpeg)
         self.modules: dict[str, BaseModule] = {}
         self._rail_buttons: dict[str, ctk.CTkButton] = {}
@@ -89,7 +105,7 @@ class MainWindow(_Root):
         self._compact_header = False
         self._compact_rail = False
         self._help_wanted = False
-        self.after(50, lambda: self.wm_state("zoomed"))
+        self.after(50, self._maximize)
         self.configure(fg_color=T.BG)
         self._set_icon()
         state.set_save_scheduler(self._schedule_save)
@@ -98,21 +114,31 @@ class MainWindow(_Root):
         self.grid_rowconfigure(1, weight=1)
         self._build_header()
         self._build_body()
-        self.progress = ProgressPanel(self, self)
-        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+        self._build_progress()
 
         add_ui_sink(self._log_sink)
         self.app_state.on("active_changed", self._active_changed)
         self.app_state.on("config_loaded", self.refresh_modules)
+        self.app_state.on("videos_changed", lambda: (self.update_render_button(), self.progress.refresh_idle()))
+        from app.services.watch_folder import FolderWatcher
+
+        self._watcher = FolderWatcher()
+        self._watch_pending: list[VideoItem] = []
+        self.after(4000, self._watch_tick)
+        self.after(60000, self._release_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
         self.after(400, self._apply_layout)
-        if _HAS_DND:
+        if _HAS_DND and getattr(self, "TkdndVersion", None):
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
 
         self.show_module(self.app_state.ui.get("active_module", "video"))
+        self._last_input = time.monotonic()
+        for seq in ("<KeyPress>", "<ButtonPress>", "<MouseWheel>"):
+            self.bind_all(seq, self._mark_input, add="+")
+        self.after(3000, self._prewarm)
         if self.app_state.settings.show_guide_on_start:
             self.after(600, lambda: self.open_guide("start"))
         elif self.app_state.ui.get("help_open"):
@@ -120,20 +146,32 @@ class MainWindow(_Root):
         self._active_changed()
         if not self.ffmpeg.available:
             self.after(300, lambda: messagebox.showwarning(
-                APP_NAME, "Không tìm thấy ffmpeg/ffprobe.\nĐặt ffmpeg.exe + ffprobe.exe vào thư mục bin/ "
+                APP_NAME, f"Không tìm thấy ffmpeg/ffprobe.\nĐặt {exe_name('ffmpeg')} + {exe_name('ffprobe')} vào thư mục bin/ "
                           "hoặc chọn đường dẫn trong Cài đặt."))
-        dnd = " · kéo thả: bật" if _HAS_DND else ""
+        dnd = " · kéo thả: bật" if _HAS_DND and getattr(self, "TkdndVersion", None) else ""
         self.run_bg(self.ffmpeg.version,          # chạy `ffmpeg -version` trong nền, không chặn lúc mở app
                     lambda v, _e: self.log(f"{APP_NAME} sẵn sàng · {(v or '')[:40] or 'chưa có ffmpeg'}{dnd}"))
 
     # ── Dựng giao diện ────────────────────────────────────────────────────
-    def _set_icon(self) -> None:
-        ico = ASSETS_DIR / "icon.ico"
-        if ico.exists():
+    def _maximize(self) -> None:
+        try:
+            self.wm_state("zoomed")              # Windows + macOS
+        except tk.TclError:
             try:
-                self.iconbitmap(str(ico))
-            except Exception:
+                self.attributes("-zoomed", True)  # Linux (X11)
+            except tk.TclError:
                 pass
+
+    def _set_icon(self) -> None:
+        ico, png = ASSETS_DIR / "icon.ico", ASSETS_DIR / "icon.png"
+        try:
+            if IS_WIN and ico.exists():
+                self.iconbitmap(str(ico))
+            elif png.exists():                   # macOS: icon Dock khi chạy mã nguồn (bản .app lấy từ .icns)
+                self._icon_photo = tk.PhotoImage(file=str(png))
+                self.iconphoto(True, self._icon_photo)
+        except Exception:
+            pass
 
     def _build_header(self) -> None:
         head = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, height=58)
@@ -149,14 +187,16 @@ class MainWindow(_Root):
         self.version_label = ctk.CTkLabel(left, text=f"v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED)
         self.version_label.pack(side="left", padx=(8, 0))
         self.header_btns: list[list] = []   # [nút, nhãn đầy đủ, bề rộng đầy đủ] — cửa sổ hẹp thì chỉ còn icon
-        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: API key, GPU, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
+        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: AI trên máy, API key, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
         self._hbtn(left, "Hướng dẫn", "book", lambda: self.toggle_help(), tip="Bật / tắt bảng hướng dẫn bên cạnh (Ctrl+H)").pack(side="left", padx=4)
         self._hbtn(left, "Phím tắt", "keyboard", self.open_shortcuts, tip="Danh sách phím tắt").pack(side="left", padx=4)
         self.notif_btn = self._hbtn(left, "Thông báo", "bell", self.open_notifications, tip="Trung tâm thông báo (kết quả render, lỗi)")
         self.notif_btn.pack(side="left", padx=4)
-        self.busy_label = ctk.CTkLabel(left, text="", font=T.font(12), text_color=T.WARNING)
-        self.busy_label.pack(side="left", padx=12)
 
+        from app.ui.widgets.template_dialogs import TemplateBar
+
+        self.template_bar = TemplateBar(head, self)
+        self.template_bar.grid(row=0, column=1, pady=8)
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
         self._hbtn(right, "Thư mục xuất", "folder", self.open_output_dir, tip="Mở thư mục chứa video đã xuất").pack(side="left", padx=4)
@@ -168,6 +208,8 @@ class MainWindow(_Root):
         self.render_btn.pack(side="left", padx=(8, 4))
         self.stop_btn = self._hbtn(right, "Dừng", "stop", self.stop_all, variant="destructive", state="disabled", tip="Dừng mọi việc đang chạy (Esc)")
         self.stop_btn.pack(side="left", padx=4)
+        self._running = False
+        self.after(300, self.update_render_button)
 
     def _hbtn(self, parent, text: str, icon_name: str, command, *, variant: str = "secondary", **kw) -> ctk.CTkButton:
         """Nút header (md, có icon); ghi nhớ nhãn + bề rộng để thu gọn/khôi phục khi cửa sổ đổi cỡ."""
@@ -185,19 +227,21 @@ class MainWindow(_Root):
                 return
 
     def _build_body(self) -> None:
-        self.rail = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=94)
+        self.rail = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=RAIL_W)
         self.rail.grid(row=1, column=0, sticky="ns", padx=(10, 4))
         self.rail.grid_propagate(False)
-        self.rail_label = ctk.CTkLabel(self.rail, text="Tính Năng", font=T.font(11, "bold"), text_color=T.ACCENT)
-        self.rail_label.pack(pady=(10, 2))
+        self.rail.pack_propagate(False)          # giữ đúng bề rộng RAIL_W dù nhãn nút dài
+        ctk.CTkFrame(self.rail, fg_color="transparent", height=4, width=1).pack()     # lề trên nhỏ, không tiêu đề
         for cls in MODULES:
             self._add_rail_button(cls)
+        self.sync_review_rail()
 
         self.panel = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=470)
         self.panel.grid(row=1, column=1, sticky="ns", padx=4)
         self.panel.grid_propagate(False)
         self.panel.grid_columnconfigure(0, weight=1)
-        self.panel.grid_rowconfigure(0, weight=1)
+        self.panel.grid_rowconfigure(1, weight=1)
+        self._build_scope_strip()
 
         from app.ui.widgets.guide_window import HelpPane
 
@@ -208,11 +252,11 @@ class MainWindow(_Root):
 
     def _add_rail_button(self, cls: type[BaseModule]) -> None:
         compact = self._compact_rail
-        b = ctk.CTkButton(self.rail, text=cls.title, width=82, height=32 if compact else 56, corner_radius=T.RADIUS,
-                          fg_color="transparent", hover_color=T.BG_HOVER, text_color=T.TEXT_DIM, font=T.font(8 if compact else 11),
-                          image=icon(MODULE_ICONS.get(cls.key, "grid"), 14 if compact else 20, T.TEXT_DIM), compound="top",
+        b = ctk.CTkButton(self.rail, text=RAIL_LABELS.get(cls.key, cls.title), width=RAIL_W - 10, height=30 if compact else 48, corner_radius=T.RADIUS,
+                          fg_color="transparent", hover_color=T.BG_HOVER, text_color=T.TEXT_DIM, font=T.font(8 if compact else 10),
+                          image=icon(MODULE_ICONS.get(cls.key, "grid"), 14 if compact else 18, T.TEXT_DIM), compound="top",
                           command=lambda k=cls.key: self.show_module(k))
-        b.pack(pady=(0 if compact else 4, 0), padx=6)
+        b.pack(pady=(0 if compact else 2, 0), padx=5)
         self._rail_buttons[cls.key] = b
 
     # ── Responsive ────────────────────────────────────────────────────────
@@ -234,14 +278,15 @@ class MainWindow(_Root):
 
     def _apply_layout(self) -> None:
         """Bố cục theo kích thước cửa sổ (đơn vị logic, đã chia DPI):
-        header gọn < 1500 · rail gọn khi thấp < 880 · bảng tính năng 360–470 · hướng dẫn 300–400, hẹp quá thì ẩn ·
+        header gọn < 1500 · rail gọn khi thấp < 800 · bảng tính năng 360–470 · hướng dẫn 300–400, hẹp quá thì ẩn ·
         thanh công cụ xem trước gọn khi khung < 760."""
         self._resize_after = None
         k = self._scaling()
         w, h = self.winfo_width() / k, self.winfo_height() / k
         if w < 50:
             return
-        compact_header = w < 1500
+        compact_header = w < 1740               # thanh «Mẫu» ở giữa cần chỗ → nút đầu trang chỉ còn icon sớm hơn
+        self.template_bar.set_compact(w < 1250)
         if compact_header != self._compact_header:
             self._compact_header = compact_header
             for b, label, width in self.header_btns:
@@ -249,19 +294,16 @@ class MainWindow(_Root):
                     continue
                 relabel(b, "" if compact_header else label, width=36 if compact_header else width)
             self.version_label.configure(text="" if compact_header else f"v{APP_VERSION}")
-        compact_rail = h < 880
+        compact_rail = h < 800
         if compact_rail != self._compact_rail:
             self._compact_rail = compact_rail
             cur = self._current_module
             for b in self._rail_buttons.values():
                 b.destroy()
             self._rail_buttons.clear()
-            if compact_rail:
-                self.rail_label.pack_forget()
-            elif not self.rail_label.winfo_ismapped():
-                self.rail_label.pack(pady=(10, 2))
             for cls in MODULES:
                 self._add_rail_button(cls)
+            self.sync_review_rail()
             if cur:
                 self.show_module(cur)
         panel_w = int(max(360, min(470, w * 0.30)))
@@ -270,7 +312,7 @@ class MainWindow(_Root):
             self._panel_help_w = (panel_w, help_w)
             self.panel.configure(width=panel_w)
             self.help.set_width(help_w)
-        room_for_help = w - 94 - panel_w - help_w - 60 >= 560
+        room_for_help = w - RAIL_W - panel_w - help_w - 60 >= 560
         if self._help_open and not room_for_help:
             self._help_wanted = True
             self.help.grid_forget()
@@ -279,7 +321,7 @@ class MainWindow(_Root):
         elif self._help_wanted and room_for_help and not self._help_open:
             self._help_wanted = False
             self.open_guide(self.help.key)
-        preview_w = w - 94 - panel_w - (help_w if self._help_open else 0) - 60
+        preview_w = w - RAIL_W - panel_w - (help_w if self._help_open else 0) - 60
         self.preview.set_compact(preview_w < 760)
         # ẩn/hiện lại các khung (vẽ lại toàn bộ) chỉ khi bố cục thực sự đổi, không phải mỗi lần _apply_layout được gọi
         sig = (round(w), round(h), panel_w, help_w, self._help_open)
@@ -301,7 +343,18 @@ class MainWindow(_Root):
 
     # ── Module ────────────────────────────────────────────────────────────
     def show_module(self, key: str) -> None:
-        cls = next((c for c in MODULES if c.key == key), MODULES[0])
+        if key == "subtitle":                   # mục «Phụ đề» cũ (cấu hình / tab Duyệt «Sửa ›») → phần phụ đề ở Lời thoại
+            self.show_module("srt")
+            self.modules["srt"].open_style()
+            return
+        if key == "review" and not self.review_mode:
+            key = "video"                       # tab Duyệt chỉ có khi bật «Duyệt trước khi xuất»
+        if key == "review":
+            from app.ui.widgets.review_window import ReviewPanel
+
+            cls = ReviewPanel
+        else:
+            cls = next((c for c in MODULES if c.key == key), MODULES[0])
         key = cls.key
         if key not in self.modules:
             self.modules[key] = cls(self.panel, self)
@@ -309,7 +362,7 @@ class MainWindow(_Root):
             if k != key and m.winfo_ismapped():
                 m.grid_forget()
                 m.on_hidden()
-        self.modules[key].grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        self.modules[key].grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
         self.modules[key].on_shown()
         self.after(30, self.modules[key].scroll_top)
         prev = self._current_module
@@ -320,19 +373,49 @@ class MainWindow(_Root):
                         text_color=T.ACCENT if k == key else T.TEXT_DIM,
                         image=icon(MODULE_ICONS.get(k, "grid"), 20, T.ACCENT if k == key else T.TEXT_DIM))
         self._current_module = key
+        self._update_scope_strip()
         self.app_state.ui["active_module"] = key
         self.app_state.mark_dirty()
         if self._help_open and self.help.key not in ("start", "flow_dub", "flow_short", "faq", "settings", "shortcuts"):
             self.help.show(key)
+        self.preview.set_edit_tools(key in ("srt", "blur"))
         if key == "blur":
             self.preview.set_tool("B")
-        elif key == "subtitle":
+        elif key == "srt":
             self.preview.set_tool("T")
         else:
             self.preview._redraw()
 
     def current_module_key(self) -> str:
         return self._current_module or ""
+
+    def _mark_input(self, _e=None) -> None:
+        self._last_input = time.monotonic()
+
+    def _prewarm(self) -> None:
+        """Dựng sẵn (ẩn) một tab chưa mở khi người dùng rảnh — dựng widget tốn 0,2–0,7 s, hiện tab đã dựng chỉ 0,1–0,27 s.
+        Đang bấm / gõ / cuộn hoặc đang chạy tác vụ thì hoãn; mỗi lần một tab."""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        todo = [k for k in PREWARM if k not in self.modules]
+        if not todo:
+            return
+        if time.monotonic() - self._last_input < PREWARM_IDLE or self._running:
+            self.after(1000, self._prewarm)
+            return
+        key = todo[0]
+        cls = next((c for c in MODULES if c.key == key), None)
+        try:
+            if cls is not None:
+                m = self.modules[key] = cls(self.panel, self)
+                m._fresh = False                 # dựng từ lâu → lần hiện đầu vẫn đổ lại giá trị mới nhất
+        except Exception:
+            logger.exception("Không dựng sẵn được tab %s", key)
+            PREWARM.remove(key)                  # lỗi thì để lúc mở tab dựng như cũ, không thử lại liên tục
+        self.after(600, self._prewarm)
 
     def refresh_modules(self) -> None:
         for m in self.modules.values():
@@ -345,14 +428,29 @@ class MainWindow(_Root):
             m.refresh()
 
     def notify_box_edit(self, kind: str) -> None:
-        m = self.modules.get("blur" if kind == "blur" else "subtitle")
+        if kind == "blur":
+            m = self.modules.get("blur")
+            if m is not None:
+                m.refresh()
+            return
+        m = self.modules.get("srt")
         if m is not None:
-            m.refresh()
+            m.refresh_subtitle()
+        self.preview.refresh_sub_chips()
 
     def queue_update(self, item: VideoItem) -> None:
         m = self.modules.get("video")
         if m is not None:
             m.queue.update_row(item)
+        self.update_render_button()
+        r = self.modules.get("review")
+        if r is not None and getattr(self, "_review_counts_after", None) is None:
+            # trạng thái đổi liên tục khi render → gom lại, cập nhật đếm / ô chọn video của tab Duyệt tối đa 2 lần/giây
+            def _upd() -> None:
+                self._review_counts_after = None
+                if r.winfo_exists():
+                    r._update_counts()
+            self._review_counts_after = self.after(500, _upd)
 
     # ── Trạng thái / sự kiện ──────────────────────────────────────────────
     def _active_changed(self) -> None:
@@ -360,6 +458,8 @@ class MainWindow(_Root):
         self.preview.set_item(item)
         for m in self.modules.values():
             m.on_active_changed()
+        self._scope_note = ""
+        self._update_scope_strip()
 
     def _on_drop(self, event) -> None:
         try:
@@ -415,8 +515,10 @@ class MainWindow(_Root):
             win.deiconify()
             win.lift()
             win.focus_force()
-            if tab == "shortcuts":
-                win._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn")
+            if tab == "model":
+                win.focus_model()
+            elif tab:
+                win.show_page({"shortcuts": "guide"}.get(tab, tab))
             return
         self._settings_win = SettingsWindow(self, tab=tab)
 
@@ -429,7 +531,7 @@ class MainWindow(_Root):
         T.apply_theme(st.theme)
         self.rebuild_ui()
         self.log(f"Đã đổi giao diện: {T.THEMES[st.theme]['name']}.")
-        self.after(150, lambda: self.open_settings())
+        self.after(150, lambda: self.open_settings(tab="look"))    # mở lại đúng trang Giao diện
 
     def rebuild_ui(self) -> None:
         """Hủy mọi widget và dựng lại (dùng khi đổi theme). Job/preview state nằm trong AppState nên không mất gì."""
@@ -451,11 +553,11 @@ class MainWindow(_Root):
         self._panel_help_w = self._layout_sig = None     # khung mới dựng lại → phải đặt lại kích thước / vẽ lại
         self._help_open = False
         self._compact_header = False
+        self._render_label = None
         self.configure(fg_color=T.BG)
         self._build_header()
         self._build_body()
-        self.progress = ProgressPanel(self, self)
-        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+        self._build_progress()
         self.show_module(current)
         self._active_changed()
         try:
@@ -533,7 +635,40 @@ class MainWindow(_Root):
     def open_output_dir(self) -> None:
         d = self.app_state.output_dir or str(VIDEOS_DIR)
         Path(d).mkdir(parents=True, exist_ok=True)
-        os.startfile(d)
+        open_path(d)
+
+    def model_unavailable(self, model: str, msg: str) -> None:
+        """Model dịch / nhận diện đang chọn hết lượt hôm nay hoặc quá tải lâu: máy KHÔNG tự đổi model — báo một lần
+        mỗi model (hộp nhỏ, không chặn) kèm nút «Chọn model…» mở đúng chỗ đổi model."""
+        self.add_notification("Model AI không dùng được", msg, "error")
+        if model in self._unavailable_shown:
+            return
+        self._unavailable_shown.add(model)
+        from app.ui.widgets.ui import button
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Model AI không dùng được")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        ctk.CTkLabel(dlg, text=msg, font=T.font(12), wraplength=420, justify="left", anchor="w").pack(
+            fill="x", padx=16, pady=(16, 10))
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(0, 14))
+        button(row, "Để sau", variant="ghost", command=dlg.destroy).pack(side="right")
+        button(row, "Chọn model…", icon_name="settings", variant="primary",
+               command=lambda: (dlg.destroy(), self.open_settings(tab="model"))).pack(side="right", padx=(0, 8))
+        dlg.after(50, dlg.lift)
+
+    def _error_action(self, message: str | None) -> tuple | None:
+        """Nút nên bấm cho câu lỗi: model hết lượt → «Chọn model…»; chưa cài AI trên máy → «Cài…»."""
+        from app.services.qwen_asr import MISSING_MARK
+        from app.services.translate_router import UNAVAILABLE_MARK
+
+        if UNAVAILABLE_MARK in (message or ""):
+            return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
+        if MISSING_MARK in (message or ""):
+            return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
+        return None
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
@@ -546,18 +681,27 @@ class MainWindow(_Root):
     def _bind_shortcuts(self) -> None:
         for seq, key in _FKEYS.items():
             self.bind(seq, lambda _e, k=key: self.show_module(k))
-        self.bind("<Control-s>", lambda _e: (self.app_state.save_config(), self.log("Đã lưu cấu hình.")))
-        self.bind("<Control-r>", lambda _e: self.start_render(list(self.app_state.videos)))
-        self.bind("<Control-z>", lambda e: self._if_free(e, self.preview.undo))
-        self.bind("<Control-y>", lambda e: self._if_free(e, self.preview.redo))
-        self.bind("<Control-Shift-Z>", lambda e: self._if_free(e, self.preview.redo))
-        self.bind("<Control-e>", lambda e: self._if_free(e, self._open_srt_editor))
-        self.bind("<Control-h>", lambda e: self._if_free(e, lambda: self.toggle_help()))
-        self.bind("<Control-slash>", lambda e: self._if_free(e, lambda: self.toggle_help()))
-        self.bind("<Control-plus>", lambda _e: self.preview.zoom_step(1))
-        self.bind("<Control-equal>", lambda _e: self.preview.zoom_step(1))
-        self.bind("<Control-minus>", lambda _e: self.preview.zoom_step(-1))
-        self.bind("<Control-0>", lambda _e: self.preview.set_zoom(None))
+        mod_keys = {
+            "s": lambda _e: (self.app_state.save_config(), self.log("Đã lưu cấu hình.")),
+            "r": lambda _e: self.start_render(list(self.app_state.videos)),
+            "z": lambda e: self._if_free(e, self.preview.undo),
+            "y": lambda e: self._if_free(e, self.preview.redo),
+            "Shift-Z": lambda e: self._if_free(e, self.preview.redo),
+            "e": lambda e: self._if_free(e, self._open_srt_editor),
+            "h": lambda e: self._if_free(e, lambda: self.toggle_help()),
+            "slash": lambda e: self._if_free(e, lambda: self.toggle_help()),
+            "plus": lambda _e: self.preview.zoom_step(1),
+            "equal": lambda _e: self.preview.zoom_step(1),
+            "minus": lambda _e: self.preview.zoom_step(-1),
+            "0": lambda _e: self.preview.set_zoom(None),
+            "Return": lambda _e: self._review_key("approve"),
+            "Down": lambda _e: self._review_key("next"),
+            "Up": lambda _e: self._review_key("prev"),
+        }
+        for k, fn in mod_keys.items():
+            self.bind(f"<Control-{k}>", fn)
+            if IS_MAC:                           # macOS quen dùng ⌘ (Command) thay Ctrl
+                self.bind(f"<Command-{k}>", fn)
         self.bind("<Escape>", lambda _e: self.stop_all() if (self.runner.running or self.tasks.running) else None)
 
         def fps() -> float:
@@ -645,39 +789,118 @@ class MainWindow(_Root):
 
     def run_task(self, name: str, fn: Callable[[threading.Event], object],
                  done: Callable[[object | None, Exception | None], None]) -> None:
-        if self.runner.running:
-            messagebox.showinfo(APP_NAME, "Đang render hàng đợi — hãy đợi xong hoặc bấm Dừng.")
+        if self.runner.running or self.tasks.running:
+            self._offer_wait(name, lambda: self.run_task(name, fn, done))
             return
-        if self.tasks.running:
-            messagebox.showinfo(APP_NAME, f"Đang chạy tác vụ “{self.tasks.name}” — hãy đợi xong.")
-            return
-        self.busy_label.configure(text=f"⏳ {name}…")
-        self.progress.set_status(f"{name}…")
-        self.progress.set_progress(0.0)
-        self.progress.set_stage(0)
+        self.progress.start_task(name)
         self.set_running(True)
 
         def _done(result, error):
-            self.busy_label.configure(text="")
             self.set_running(False)
+            self.after(400, self._run_waiting)
             if error:
-                self.progress.set_status(f"✖ {name}: {str(error).splitlines()[0][:120]}")
+                stopped = "huỷ" in str(error).lower()
+                self.progress.result("stopped" if stopped else "error", f"{name}: đã dừng" if stopped else f"{name} lỗi",
+                                     "" if stopped else friendly_error(str(error)), self._error_action(str(error)))
                 self.log(f"✖ {name}: {error}")
-                self.add_notification(f"{name} lỗi", str(error)[:300], "error")
+                if not stopped:
+                    self.add_notification(f"{name} lỗi", str(error)[:300], "error")
             else:
-                self.progress.set_status(f"✔ {name} xong.")
-                self.progress.set_progress(1.0)
+                self.progress.result("ok", f"{name} xong")
             done(result, error)
 
         self.tasks.start(name, fn, on_done=_done)
+
+    # ── Hàng chờ việc: bấm khi đang bận → hỏi xếp hàng, xong việc trước tự chạy ──
+    def _offer_wait(self, name: str, action: Callable[[], None]) -> None:
+        busy = "render hàng đợi" if self.runner.running else f"«{self.tasks.name}»"
+        if any(n == name for n, _a in self._waiting):
+            messagebox.showinfo(APP_NAME, f"«{name}» đã nằm trong hàng chờ — sẽ tự chạy sau {busy}.")
+            return
+        if not messagebox.askyesno(APP_NAME, f"Đang chạy {busy}.\n\nXếp «{name}» vào hàng chờ? Nó sẽ tự chạy ngay khi "
+                                             "việc đang làm xong (bấm Dừng để huỷ cả hàng chờ)."):
+            return
+        self._waiting.append((name, action))
+        self.log(f"Đã xếp «{name}» vào hàng chờ — {len(self._waiting)} việc đang chờ.")
+        self._show_waiting()
+
+    def _show_waiting(self) -> None:
+        self.progress.set_waiting([n for n, _a in self._waiting])
+
+    def _run_waiting(self) -> None:
+        if not self._waiting or self.runner.running or self.tasks.running:
+            return
+        name, action = self._waiting.pop(0)
+        self.log(f"▶ Chạy việc trong hàng chờ: {name}")
+        try:
+            action()
+        except Exception:
+            logger.exception("Việc trong hàng chờ lỗi: %s", name)
+        self._show_waiting()
+
+    def retry_item(self, item: VideoItem) -> None:
+        """Nút ↻ của video lỗi trong hàng đợi: chuẩn bị lại (chế độ Duyệt) hoặc render lại đúng video đó."""
+        if item not in self.app_state.videos:
+            return
+        self.log(f"Thử lại: {item.name}")
+        if self.review_mode and item.review != "approved":
+            item.review = ""
+            self._run_queue([item], mode="prepare")
+        else:
+            self._run_queue([item], mode="render")
+
+    def pipeline_for(self, item: VideoItem) -> Pipeline:
+        """Pipeline với bản chụp cấu hình của ``item`` — tác vụ nền (nhận diện, dịch, tạo giọng…) không bị đổi cấu hình
+        giữa chừng khi người dùng chọn sang video khác (có cấu hình riêng) hoặc chỉnh tiếp trong lúc chờ."""
+        return Pipeline(self.app_state.state_for(item), self.ffmpeg)
 
     def set_busy_progress(self, p: float) -> None:
         self.ui_call(lambda: self.progress.set_progress(p))
 
     def set_running(self, running: bool) -> None:
+        self._running = running
         self.render_btn.configure(state="disabled" if running else "normal")
         self.mp3_btn.configure(state="disabled" if running else "normal")
         self.stop_btn.configure(state="normal" if running else "disabled")
+
+    def _build_progress(self) -> None:
+        self.progress = ProgressPanel(self, self)
+        self.progress.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(4, 10))
+
+    def _show_result(self, items: list[VideoItem], ok: int, fail: int, elapsed: float, prep: bool) -> None:
+        """Kết quả một lượt chạy trên thanh trạng thái: một câu + đúng một việc nên bấm tiếp."""
+        from app.ui.progress_panel import _clock, short_path
+
+        took = f"mất {_clock(elapsed)}"
+        if fail:
+            first = next(it for it in items if it.status == "Lỗi")
+            self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
+                                 f"{first.name}: {friendly_error(first.message, first)}",
+                                 self._error_action(first.message) or ("Thử lại", self.retry_failed, "refresh", True))
+        elif any(it.status == "Đã huỷ" for it in items):
+            self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
+        elif prep:
+            self.progress.result("ok", f"Chuẩn bị xong {ok} video",
+                                 f"{took} · xem từng video ở tab «Duyệt», ưng thì bấm «Duyệt», xong bấm «Xuất» trên cùng")
+        else:
+            out = self.app_state.output_dir or str(VIDEOS_DIR)
+            self.progress.result("ok", f"Đã xuất {ok} video", f"{took} · lưu ở {short_path(out)}",
+                                 ("Mở thư mục", self.open_output_dir, "openfolder", False))
+
+    def retry_failed(self) -> None:
+        """Nút «Thử lại» ở thanh trạng thái: chạy lại mọi video lỗi (chưa duyệt → chuẩn bị lại, đã duyệt → xuất lại)."""
+        failed = [it for it in self.app_state.videos if it.status == "Lỗi"]
+        prep = [it for it in failed if self.review_mode and it.review != "approved"]
+        ren = [it for it in failed if it not in prep]
+        for it in prep:
+            it.review = ""
+        if prep:
+            self._run_queue(prep, mode="prepare")
+            if ren:
+                self._waiting.append((f"Render {len(ren)} video", lambda: self._run_queue(ren, mode="render")))
+                self._show_waiting()
+        elif ren:
+            self._run_queue(ren, mode="render")
 
     # ── Log ───────────────────────────────────────────────────────────────
     def log(self, msg: str) -> None:
@@ -699,18 +922,36 @@ class MainWindow(_Root):
             self._log_win.append(line)
 
     # ── Render ────────────────────────────────────────────────────────────
-    def start_render(self, items: list[VideoItem], audio_only: bool = False) -> None:
+    @property
+    def review_mode(self) -> bool:
+        return bool(self.app_state.ui.get("review_mode"))
+
+    def start_render(self, items: list[VideoItem], audio_only: bool = False, *, force: bool = False) -> None:
+        """Nút Render. Bật «Duyệt trước khi xuất»: video chưa chuẩn bị → Chuẩn bị; đã duyệt → xuất; còn lại → mở tab Duyệt.
+        ``force``: xuất đúng các video được đưa vào (đã duyệt)."""
         if not items:
             messagebox.showinfo(APP_NAME, "Hàng đợi trống — bấm Nạp video trước.")
             return
+        if self.review_mode and not force:
+            todo = [it for it in items if not it.review]
+            if todo:
+                self._run_queue(todo, mode="prepare")
+                return
+            ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
+            if not ready:
+                self.open_review()
+                return
+            items = ready
+        self._run_queue(items, mode="render", audio_only=audio_only)
+
+    def _run_queue(self, items: list[VideoItem], *, mode: str = "render", audio_only: bool = False) -> None:
         if not self.ffmpeg.available:
             messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
             return
-        if self.tasks.running:
-            messagebox.showinfo(APP_NAME, f"Đang chạy tác vụ “{self.tasks.name}” — hãy đợi xong.")
-            return
-        if self.runner.running:   # không được đổi audio_only của pipeline khi hàng đợi đang chạy
-            messagebox.showinfo(APP_NAME, "Đang render hàng đợi — hãy đợi xong hoặc bấm Dừng.")
+        if self.tasks.running or self.runner.running:   # không đổi audio_only của pipeline khi hàng đợi đang chạy
+            label = "Chuẩn bị" if mode == "prepare" else ("Xuất MP3" if audio_only else "Render")
+            self._offer_wait(f"{label} {len(items)} video",
+                             lambda: self._run_queue(items, mode=mode, audio_only=audio_only))
             return
         self.preview.stop_play()
         Path(self.app_state.output_dir or VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
@@ -721,40 +962,258 @@ class MainWindow(_Root):
         total = len(items)
         done_count = [0]
         self.pipeline.audio_only = audio_only
+        prep = mode == "prepare"
 
         def on_update(it: VideoItem) -> None:
             self.queue_update(it)
-            if it.status == "Đang xử lý":
-                self.progress.set_stage(stage_index_for(it.message))
-                self.progress.set_status(f"[{done_count[0] + 1}/{total}] {it.name} — {it.message}")
-                self.progress.set_progress((done_count[0] + it.progress) / total)
-            elif it.status in ("Xong", "Lỗi", "Đã huỷ"):
+            if it.status in ("Đang xử lý", "Đang chuẩn bị"):
+                self.progress.update_item(it, done_count[0] + 1, total, (done_count[0] + it.progress) / total)
+            elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt"):
                 done_count[0] = min(total, done_count[0] + 1)
 
         def on_done(ok: int, fail: int) -> None:
             self.set_running(False)
-            self.busy_label.configure(text="")
+            self.after(400, self._run_waiting)
+            self.update_render_button()
             elapsed = time.time() - self._render_started
+            self._show_result(items, ok, fail, elapsed, prep)
+            if prep:
+                msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
+                self.log(msg)
+                self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
+                notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
+                self.app_state.save_config()
+                if ok:
+                    self.open_review()
+                return
             msg = f"Hoàn tất: {ok} xong, {fail} lỗi · {elapsed / 60:.1f} phút"
-            self.progress.set_stage(4 if fail == 0 else -1)
-            self.progress.set_progress(1.0 if fail == 0 else 0.0)
-            self.progress.set_status(msg)
             self.log(msg)
             self.add_notification("Render xong" if fail == 0 else "Render có lỗi", msg, "ok" if fail == 0 else "error")
             notify("Edit Studio — Render xong", msg, enabled=self.app_state.settings.windows_toast)
             self.app_state.save_config()
             self.pipeline.audio_only = False
 
-        if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done):
+        if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
             self.set_running(True)
-            self.busy_label.configure(text="⏳ Đang render…")
-            self.progress.set_stage(0)
-            self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+            self.progress.start_queue(items, mode)
+            if prep:
+                self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
+            else:
+                self.log(f"Bắt đầu render {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+
+    # ── Thư mục theo dõi ─────────────────────────────────────────────────
+    def watch_started(self) -> None:
+        """Vừa bật / đổi thư mục theo dõi: hỏi có lấy luôn các video đang có sẵn trong thư mục không."""
+        ui = self.app_state.ui
+        folder = ui.get("watch_dir")
+        if not folder or not Path(folder).is_dir():
+            return
+        known = {v.path.lower() for v in self.app_state.videos} | {p.lower() for p in ui.get("watch_seen", [])}
+        old = [p for p in self._watcher.existing(folder) if p.lower() not in known]
+        if old and not messagebox.askyesno(APP_NAME, f"Thư mục đang có sẵn {len(old)} video.\n\nNạp luôn các video này? "
+                                                     "(Không = chỉ nạp video chép vào từ giờ.)"):
+            ui["watch_seen"] = (list(ui.get("watch_seen", [])) + old)[-3000:]
+            self.app_state.mark_dirty()
+
+    MODEL_IDLE_S = 180                  # model AI không dùng quá 3 phút → trả RAM/VRAM cho máy
+
+    def _release_tick(self) -> None:
+        """Whisper / VieNeu nặng 0,5–2 GB; xong việc mà lâu không dùng thì giải phóng (lần sau tự nạp lại)."""
+        if not (self.runner.running or self.tasks.running):
+            freed = []
+            for mod, name in (("app.services.whisper_stt", "Whisper"), ("app.services.tts.vieneu", "VieNeu")):
+                m = sys.modules.get(mod)              # chưa từng dùng thì module chưa nạp → không có gì để bỏ
+                try:
+                    if m is not None and m.release_idle(self.MODEL_IDLE_S):
+                        freed.append(name)
+                except Exception:
+                    logger.warning("Giải phóng model %s lỗi", name, exc_info=True)
+            if freed:
+                self.log(f"Đã giải phóng model {', '.join(freed)} khỏi bộ nhớ (lâu không dùng) — lần sau tự nạp lại.")
+        self.after(60000, self._release_tick)
+
+    def _watch_tick(self) -> None:
+        try:
+            self._watch_scan()
+        except Exception:
+            logger.warning("Thư mục theo dõi lỗi", exc_info=True)
+        self.after(4000, self._watch_tick)
+
+    def _watch_scan(self) -> None:
+        from app.services import templates as TP
+        from app.services.watch_folder import SHARED, WATCH_ACTIONS
+
+        ui = self.app_state.ui
+        folder = ui.get("watch_dir")
+        if ui.get("watch_enable") and folder and Path(folder).is_dir():
+            skip = {v.path.lower() for v in self.app_state.videos} | {p.lower() for p in ui.get("watch_seen", [])}
+            new = self._watcher.scan(folder, skip)
+            if new:
+                added = self.app_state.add_videos(new)
+                ui["watch_seen"] = (list(ui.get("watch_seen", [])) + new)[-3000:]
+                ui["watch_added"] = int(ui.get("watch_added", 0)) + len(added)
+                t = TP.get_template(ui.get("watch_template") or "") if ui.get("watch_template") not in (None, "", SHARED) else None
+                for it in added:
+                    if t is not None:
+                        TP.apply_to_item(self.app_state, it, t)
+                    self.queue_update(it)
+                self.log(f"Thư mục theo dõi: nạp {len(added)} video mới" + (f" (mẫu «{t.name}»)" if t else "") + ".")
+                if (ui.get("watch_action") or WATCH_ACTIONS[0]) != WATCH_ACTIONS[0]:
+                    self._watch_pending += added
+                m = self.modules.get("video")
+                if m is not None:
+                    m.update_watch_status()
+                self.app_state.mark_dirty()
+        if self._watch_pending and not self.runner.running and not self.tasks.running:
+            items = [it for it in self._watch_pending if it in self.app_state.videos]
+            self._watch_pending = []
+            if not items:
+                return
+            if (ui.get("watch_action") or "") == WATCH_ACTIONS[1]:
+                self._run_queue(items, mode="prepare")
+            else:
+                self._run_queue(items, mode="render")
+
+    # ── Duyệt ─────────────────────────────────────────────────────────────
+    def open_review(self) -> None:
+        """Tab «Duyệt» trong bảng tính năng — khung xem trước vẫn hiện cạnh bên để vừa xem vừa sửa."""
+        self.sync_review_rail()
+        self.show_module("review")
+
+    # ── Đang duyệt: sửa ở tab tính năng = sửa riêng video đó; dải nhắc ở đầu bảng tính năng ──
+    def _build_scope_strip(self) -> None:
+        self.scope_strip = ctk.CTkFrame(self.panel, fg_color=T.ACCENT_SOFT, corner_radius=8)
+        self.scope_strip.grid_columnconfigure(0, weight=1)
+        self.scope_label = ctk.CTkLabel(self.scope_strip, text="", font=T.font(11), anchor="w", justify="left",
+                                        text_color=T.TEXT, wraplength=210)
+        self.scope_label.grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=6)
+        self.scope_all_btn = button(self.scope_strip, "Áp cho tất cả", size="sm", variant="ghost",
+                                    command=self._apply_to_all,
+                                    tip="Dùng cách chỉnh của video này làm cấu hình chung cho các video chưa chỉnh riêng")
+        self.scope_all_btn.grid(row=0, column=1, padx=2)
+        self.scope_back_btn = button(self.scope_strip, "‹ Về Duyệt", size="sm", variant="primary",
+                                     command=lambda: self.show_module("review"),
+                                     tip="Quay lại bảng duyệt video (Ctrl+Enter: duyệt luôn video này)")
+        self.scope_back_btn.grid(row=0, column=2, padx=(2, 8))
+        self._scope_note = ""
+        if not getattr(self, "_scope_listening", False):        # dựng lại giao diện (đổi theme) → không đăng ký lặp
+            self._scope_listening = True
+            self.app_state.on("scoped", self._on_scoped)
+            self.app_state.on("config_changed", self._scope_changed)
+
+    def _update_scope_strip(self) -> None:
+        strip = getattr(self, "scope_strip", None)
+        if strip is None or not strip.winfo_exists():
+            return
+        it = self.app_state.active
+        show = self.review_mode and it is not None and self._current_module not in (None, "review")
+        if not show:
+            self.scope_strip.grid_remove()
+            return
+        own = it.config is not None
+        name = it.name if len(it.name) <= 22 else it.name[:20] + "…"
+        text = (f"✎ Chỉnh riêng: {name}" if own else f"Đang duyệt {name} · chỉnh ở đây chỉ áp cho video này")
+        if self._scope_note:
+            text += f"\n{self._scope_note}"
+        self.scope_label.configure(text=text)
+        if own:
+            self.scope_all_btn.grid()
+        else:
+            self.scope_all_btn.grid_remove()
+        self.scope_strip.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 0))
+
+    def _on_scoped(self, item: VideoItem) -> None:
+        self.log(f"{item.name}: tách cấu hình riêng (video khác không bị đổi).")
+        self.queue_update(item)
+
+    def _scope_changed(self, _section: str = "") -> None:
+        if self.review_mode and not self.preview.player.playing and not self.app_state.last_change_auto:
+            self._scope_note = "✓ Đã chỉnh — ▶ Phát để xem lại"
+        self._update_scope_strip()
+
+    def _apply_to_all(self) -> None:
+        it = self.app_state.active
+        if it is None or it.config is None:
+            return
+        if not messagebox.askyesno(APP_NAME, f"Dùng cách chỉnh của «{it.name}» cho mọi video chưa chỉnh riêng?"):
+            return
+        self.app_state.apply_to_all(it)
+        self.queue_update(it)
+        self._scope_note = "✓ Đã áp cho tất cả video chưa chỉnh riêng"
+        self._update_scope_strip()
+        self.log(f"Đã dùng cấu hình của {it.name} làm cấu hình chung.")
+
+    def edit_in(self, key: str) -> None:
+        """«Sửa ›» ở bảng Duyệt: mở đúng tab tính năng cho video đang duyệt."""
+        self._scope_note = ""
+        self.show_module(key)
+
+    def review_panel(self):
+        """Bảng Duyệt (tạo nếu chưa có — để phím tắt duyệt dùng được ở mọi tab)."""
+        if "review" not in self.modules:
+            from app.ui.widgets.review_window import ReviewPanel
+
+            self.modules["review"] = ReviewPanel(self.panel, self)
+        return self.modules["review"]
+
+    def _review_key(self, action: str) -> None:
+        if not self.review_mode or not self.app_state.videos:
+            return
+        rv = self.review_panel()
+        if action == "approve":
+            rv.approve()
+        else:
+            rv._step(1 if action == "next" else -1)
+        self._scope_note = ""
+        self._update_scope_strip()
+
+    def sync_review_rail(self) -> None:
+        """Nút «Duyệt» trên thanh tính năng chỉ hiện khi bật chế độ Duyệt trước khi xuất."""
+        self.app_state.set_review_scope(self.review_mode)
+        self._update_scope_strip()
+        b = self._rail_buttons.get("review")
+        if self.review_mode and b is None:
+            from app.ui.widgets.review_window import ReviewPanel
+
+            self._add_rail_button(ReviewPanel)
+            first = self._rail_buttons.get("video")
+            if first is not None:
+                self._rail_buttons["review"].pack_configure(after=first)
+        elif not self.review_mode and b is not None:
+            if self._current_module == "review":
+                self.show_module("video")
+            b.destroy()
+            del self._rail_buttons["review"]
+
+    def update_render_button(self) -> None:
+        """Nhãn nút Render theo bước duyệt: Chuẩn bị (n) → Duyệt → Xuất (n)."""
+        vids = self.app_state.videos
+        if not self.review_mode:
+            text = "Render MP4"
+        else:
+            todo = sum(1 for it in vids if not it.review)
+            ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
+            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else "Duyệt")
+        if getattr(self, "_render_label", None) != text:
+            self._render_label = text
+            relabel(self.render_btn, text)
+            if hasattr(self, "progress"):
+                self.progress.refresh_idle()
 
     def stop_all(self) -> None:
+        if self._waiting:
+            self.log(f"Đã huỷ {len(self._waiting)} việc trong hàng chờ.")
+            self._waiting.clear()
         self.runner.stop()
         self.tasks.stop()
         self.log("Đã yêu cầu dừng…")
+
+    def destroy(self) -> None:
+        # khử giọng AI đang chạy nền (onnxruntime) phải dừng gọn trước khi thoát, không thì tiến trình bị abort
+        from app.services import vocal_remove
+
+        vocal_remove.shutdown()
+        super().destroy()
 
     def _on_close(self) -> None:
         if self.runner.running or self.tasks.running:

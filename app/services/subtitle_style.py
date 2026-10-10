@@ -51,19 +51,80 @@ def _ass_text(text: str, uppercase: bool = False) -> str:
     return text.replace("\n", "\\N")
 
 
-def _karaoke_text(text: str, duration: float, uppercase: bool) -> str:
-    """Chia thời lượng cue cho từng từ theo số ký tự → {\\kNN}từ."""
+#: chia thời lượng câu cho từng chữ: trọng số 2 + số ký tự, dấu câu thêm khoảng nghỉ — chỉ dùng khi chưa có mốc chữ
+#: theo giọng thật (``word_timing``: căn ép đúng chữ / bám khoảng lặng)
+_PAUSE = {",": 0.6, ";": 0.8, ":": 0.8, ".": 1.0, "?": 1.0, "!": 1.0, "…": 1.0}
+POP_SCALE = 115                       # % phóng chữ đang đọc (kiểu CapCut)
+POP_IN, POP_OUT = 70, 90              # ms chữ nổi lên / trở lại
+
+
+def words_of(text: str) -> list[str]:
+    """Các chữ của câu đúng như chữ nổi tách (bỏ thẻ, gộp dòng) — mốc chữ theo giọng tính trên cùng cách tách này."""
     plain = " ".join(_OTHER_TAG.sub("", text.replace("\n", " ")).split())
-    if uppercase:
-        plain = plain.upper()
-    words = plain.split(" ")
-    total = sum(len(w) for w in words) or 1
-    cs_total = max(1, int(duration * 100))
+    return plain.split(" ") if plain else []
+
+
+def word_spans(words: list[str], duration: float) -> list[tuple[float, float]]:
+    """(bắt đầu, kết thúc) — giây tính từ đầu câu — của từng chữ khi câu đọc trong ``duration`` giây."""
+    weights = [2.0 + len(re.sub(r"[^\w]", "", w)) for w in words]
+    pauses = [4.0 * _PAUSE.get(w[-1:], 0.0) for w in words]
+    total = (sum(weights) + sum(pauses[:-1])) or 1.0
+    out: list[tuple[float, float]] = []
+    t = 0.0
+    for wt, ps in zip(weights, pauses):
+        a = t / total * duration
+        t += wt
+        out.append((a, t / total * duration))
+        t += ps
+    return out
+
+
+def _bgr(hex_color: str) -> str:
+    """#RRGGBB → &HBBGGRR& (màu trong thẻ \\1c)."""
+    return _ass_color(hex_color, 100.0)[:2] + _ass_color(hex_color, 100.0)[4:] + "&"
+
+
+def _alpha(opacity_pct: float) -> str:
+    return f"&H{int(round((100 - max(0.0, min(100.0, opacity_pct))) * 2.55)):02X}&"
+
+
+def _anim_text(text: str, duration: float, cfg: SubtitleConfig, at: float | None = None, offset: float = 0.0,
+               spans: list[tuple[float, float]] | None = None) -> str:
+    """Câu với chữ đang đọc nổi lên theo ``cfg.karaoke_mode`` (pop · fill · reveal). ``at``: giây tính từ lúc câu
+    hiện → vẽ đúng trạng thái lúc đó, không chuyển động (khung xem trước tĩnh). ``offset``: lời bắt đầu muộn hơn lúc
+    câu hiện bấy nhiêu giây (câu ngắn được hiện sớm cho đủ 1 s); âm = câu đã đọc dở từ trước (phát xem trước giữa câu).
+    ``spans``: (bắt đầu, kết thúc) từng chữ tính từ lúc bắt đầu đọc — mốc theo giọng thật; không có thì ước lượng."""
+    words = words_of(text)
+    if not words:
+        return ""
+    if cfg.sub_uppercase:
+        words = [w.upper() for w in words]
+    if not spans or len(spans) != len(words):
+        spans = word_spans(words, max(0.05, duration))
+    mode = cfg.karaoke_mode if cfg.karaoke_mode in ("pop", "fill", "reveal") else "pop"
+    base, hl = _bgr(cfg.sub_color), _bgr(cfg.karaoke_color)
+    a1, a4 = _alpha(cfg.sub_opacity), _alpha(min(cfg.sub_opacity, 70.0))
+    big = f"\\fscx{POP_SCALE}\\fscy{POP_SCALE}"
     out = []
-    for w in words:
-        cs = max(1, int(cs_total * len(w) / total))
+    for w, (s0, s1) in zip(words, spans):
         w = w.replace("{", "\\{").replace("}", "\\}")
-        out.append(f"{{\\k{cs}}}{w}")
+        a, b = max(0, round((s0 + offset) * 1000)), max(0, round((s1 + offset) * 1000))
+        if at is not None:                     # trạng thái tĩnh tại giây ``at`` của câu
+            said, now = at >= s0 + offset, s0 + offset <= at < s1 + offset
+            if mode == "pop":
+                tag = f"\\1c{hl}{big}" if now else f"\\1c{base}\\fscx100\\fscy100"
+            elif mode == "fill":
+                tag = f"\\1c{hl if said else base}"
+            else:
+                tag = f"\\1a{a1}\\3a{a1}\\4a{a4}" if said else "\\1a&HFF&\\3a&HFF&\\4a&HFF&"
+        elif mode == "pop":
+            tag = (f"\\1c{base}\\fscx100\\fscy100\\t({a},{a + POP_IN},\\1c{hl}{big})"
+                   f"\\t({b},{b + POP_OUT},\\1c{base}\\fscx100\\fscy100)")
+        elif mode == "fill":
+            tag = f"\\1c{base}\\t({a},{a + POP_IN},\\1c{hl})"
+        else:
+            tag = f"\\1a&HFF&\\3a&HFF&\\4a&HFF&\\t({a},{a + POP_IN},\\1a{a1}\\3a{a1}\\4a{a4})"
+        out.append("{" + tag + "}" + w)
     return " ".join(out)
 
 
@@ -86,6 +147,33 @@ def _effect_params(cfg: SubtitleConfig, scale: float) -> tuple[float, float, str
     return outline, shadow, extra
 
 
+BOX_LINES = 2          # khung lưu trong cấu hình cao vừa 2 dòng chữ (câu dài hơn thì tràn lên trên, đáy giữ nguyên)
+
+
+def box_height_px(cfg: SubtitleConfig, width: int, height: int, lines: int = BOX_LINES, size: float | None = None) -> float:
+    """Chiều cao (px khung ra) của ``lines`` dòng chữ: libass cho mỗi dòng cao ≈ đúng cỡ chữ, cộng viền + bóng."""
+    scale = min(width, height) / 1080.0
+    fs = (cfg.sub_size if size is None else size) * scale
+    outline, shadow, _ = _effect_params(cfg, scale)
+    return max(1, lines) * fs + 2 * outline + shadow + 6 * scale
+
+
+def fit_box_height(cfg: SubtitleConfig, width: int, height: int) -> None:
+    """Cho khung cao vừa chữ theo cỡ hiện tại, giữ nguyên đáy (chữ bám đáy khung)."""
+    h = min(0.9, box_height_px(cfg, width, height) / max(1, height))
+    bottom = max(h, min(1.0, cfg.box_y + cfg.box_h))
+    cfg.box_h = round(h, 4)
+    cfg.box_y = round(max(0.0, bottom - h), 4)
+
+
+def size_for_height(cfg: SubtitleConfig, width: int, height: int, h_px: float, lines: int = BOX_LINES) -> int:
+    """Cỡ chữ để ``lines`` dòng cao vừa ``h_px`` (ngược của box_height_px)."""
+    scale = min(width, height) / 1080.0
+    outline, shadow, _ = _effect_params(cfg, scale)
+    fs = (h_px - 2 * outline - shadow - 6 * scale) / max(1, lines)
+    return int(round(max(12, min(120, fs / max(1e-6, scale)))))
+
+
 def layout_margins(cfg: SubtitleConfig, width: int, height: int) -> tuple[int, int, int, int, int]:
     """(align, marginL, marginR, marginV, box_top_px) từ khung hoặc chế độ vị trí cũ."""
     scale = min(width, height) / 1080.0
@@ -97,7 +185,8 @@ def layout_margins(cfg: SubtitleConfig, width: int, height: int) -> tuple[int, i
         ml = int(round(x * width))
         mr = int(round((1.0 - x - w) * width))
         mv = int(round((1.0 - y - h) * height))       # bám đáy khung
-        return 2, max(0, ml), max(0, mr), max(0, mv), int(round(y * height))
+        top = (y + h) * height - box_height_px(cfg, width, height)   # nền dải ngang: cao vừa 2 dòng chữ
+        return 2, max(0, ml), max(0, mr), max(0, mv), int(round(max(0.0, top)))
     side = int(round(width * (100 - max(20, min(100, cfg.sub_max_width))) / 200))
     margin_v = int(round(cfg.sub_margin_v * scale))
     pos_mode = cfg.sub_position
@@ -112,7 +201,8 @@ def layout_margins(cfg: SubtitleConfig, width: int, height: int) -> tuple[int, i
     return align, side, side, margin_v, 0
 
 
-def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> str:
+def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int, anim_at: float | None = None) -> str:
+    """``anim_at``: chữ nổi (karaoke) vẽ tĩnh đúng trạng thái tại giây này của câu — khung xem trước một khung hình."""
     width = max(16, int(width))
     height = max(16, int(height))
     scale = min(width, height) / 1080.0
@@ -123,7 +213,7 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     align, ml, mr, mv, box_top = layout_margins(cfg, width, height)
 
     primary = _ass_color(cfg.sub_color, cfg.sub_opacity)
-    secondary = _ass_color(cfg.karaoke_color, cfg.sub_opacity) if cfg.karaoke else "&H000000FF"
+    secondary = "&H000000FF"
     outline_c = _ass_color(cfg.sub_stroke_color, cfg.sub_opacity)
     shadow_c = _ass_color("#000000", min(cfg.sub_opacity, 70))
     bg_style = cfg.bg_style if cfg.bg_style in SUB_BG_STYLES else SUB_BG_STYLES[0]
@@ -136,10 +226,6 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     italic = -1 if cfg.sub_italic else 0
     font = cfg.sub_font or "Arial"
     pad = max(2, int(round(8 * scale)))
-    # Karaoke: từ chưa đọc = màu highlight? Trong ASS, \k đổi từ Secondary → Primary khi đọc tới.
-    # Ta muốn từ đang/đã đọc nổi bật → đặt Primary = màu highlight, Secondary = màu chữ thường.
-    if cfg.karaoke:
-        primary, secondary = _ass_color(cfg.karaoke_color, cfg.sub_opacity), _ass_color(cfg.sub_color, cfg.sub_opacity)
 
     lines = [
         "[Script Info]",
@@ -164,7 +250,14 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     ]
 
     pos_tag = ""
-    if not cfg.use_box and cfg.sub_position == SUB_POSITIONS[3]:
+    band = None                           # (đỉnh, đáy) px của dải nền ngang khi khối chữ căn giữa khung
+    if cfg.use_box and cfg.box_center:
+        # khối chữ (1 hay nhiều dòng) căn giữa khung theo chiều dọc; lề trái / phải vẫn giới hạn bề rộng dòng
+        bx, bw = max(0.0, cfg.box_x), max(0.05, cfg.box_w)
+        by, bh = max(0.0, cfg.box_y), max(0.03, cfg.box_h)
+        pos_tag = f"{{\\an5\\pos({int(round((bx + bw / 2) * width))},{int(round((by + bh / 2) * height))})}}"
+        band = (int(round(by * height)), int(round((by + bh) * height)))
+    elif not cfg.use_box and cfg.sub_position == SUB_POSITIONS[3]:
         x = int(round(width * max(0, min(100, cfg.sub_x)) / 100))
         y = int(round(height * max(0, min(100, cfg.sub_y)) / 100))
         pos_tag = f"{{\\an5\\pos({x},{y})}}"
@@ -178,7 +271,15 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     for c in cues:
         if c.end <= c.start:
             continue
-        text = _karaoke_text(c.text, c.duration, cfg.sub_uppercase) if cfg.karaoke else _ass_text(c.text, cfg.sub_uppercase)
+        plain = _ass_text(c.text, cfg.sub_uppercase)
+        text = plain
+        if cfg.karaoke:
+            # mốc lời thật (trước khi câu ngắn được kéo dài cho đủ 1 s) — chữ nổi theo đúng nhịp đọc;
+            # «words»: mốc từng chữ theo giọng (tỉ lệ trong đoạn giọng của câu)
+            meta = c.meta if isinstance(c.meta, dict) else {}
+            a0, dur = meta.get("anim", (c.start, c.duration))
+            spans = [(u0 * dur, u1 * dur) for u0, u1 in meta["words"]] if meta.get("words") else None
+            text = _anim_text(c.text, dur, cfg, anim_at, a0 - c.start, spans)
         if not text:
             continue
         secondary_text = c.meta.get("secondary") if isinstance(c.meta, dict) else None
@@ -186,11 +287,14 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
             text = f"{text}\\N{{\\fs{sec_size}}}{_ass_text(secondary_text, cfg.sub_uppercase)}"
         start, end = _ass_time(c.start), _ass_time(c.end)
         if bg_on and bg_style in (SUB_BG_STYLES[1], SUB_BG_STYLES[2]):
-            lines.append(f"Dialogue: 0,{start},{end},Box,,0,0,0,,{pos_tag}{text}")
+            lines.append(f"Dialogue: 0,{start},{end},Box,,0,0,0,,{pos_tag}{plain}")   # hộp nền: chữ tĩnh
         elif bg_on and bg_style == SUB_BG_STYLES[3]:
             # dải ngang toàn khung: vẽ hình chữ nhật bằng drawing mode ASS
-            top = box_top if cfg.use_box else height - mv - int(font_size * 2.2)
-            bottom = height - mv if cfg.use_box else height - mv + int(font_size * 0.3)
+            if band is not None:
+                top, bottom = band
+            else:
+                top = box_top if cfg.use_box else height - mv - int(font_size * 2.2)
+                bottom = height - mv if cfg.use_box else height - mv + int(font_size * 0.3)
             top, bottom = max(0, top), min(height, max(top + 4, bottom))
             lines.append(f"Dialogue: 0,{start},{end},Box,,0,0,0,,{{\\an7\\pos(0,0)\\1c&H{box_c[4:]}&\\1a&H{box_c[2:4]}&"
                          f"\\bord0\\shad0\\p1}}m 0 {top} l {width} {top} l {width} {bottom} l 0 {bottom}{{\\p0}}")
@@ -199,8 +303,9 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     return "\n".join(lines) + "\n"
 
 
-def write_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int, path: str | Path) -> Path:
+def write_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int, path: str | Path,
+              anim_at: float | None = None) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(build_ass(cues, cfg, width, height), encoding="utf-8")
+    p.write_text(build_ass(cues, cfg, width, height, anim_at), encoding="utf-8")
     return p

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
+import math
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,10 @@ from app.services import stages as stages_mod
 from app.services.ffmpeg import MediaInfo
 from app.services.player import Player, waveform_png
 from app.services.srt_utils import Cue, cue_at, format_ts
+from app.services import subtitle_style as sst
 from app.services.subtitle_style import write_ass
+from app.services.word_timing import speech_span
+from app.core.platform import open_path
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
@@ -37,6 +41,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HANDLE = 7
+CLIP_SECONDS = 15                 # độ dài bản render thử
 ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 
 
@@ -83,6 +88,10 @@ class PreviewPanel(ctk.CTkFrame):
         self._wave_line: int | None = None
         self.player = Player(window.ffmpeg, None, self._on_play_end)
         self._cues_cache: list[Cue] = []
+        self.fx_play = True                             # phát có đủ hiệu ứng như bản render
+        self._clip: dict | None = None                  # đang phát bản render thử
+        self._restart_id: str | None = None
+        self.state.on("config_changed", self._config_changed)
 
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -104,6 +113,14 @@ class PreviewPanel(ctk.CTkFrame):
         self.canvas.bind("<Motion>", self._hover)
         self.canvas.bind("<MouseWheel>", self._wheel)
         self._build_timeline()
+
+    def destroy(self) -> None:
+        self.state.off("config_changed", self._config_changed)    # dựng lại giao diện (đổi theme) → gỡ listener cũ
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        super().destroy()
 
     # ── Dựng UI ──────────────────────────────────────────────────────────
     def _build_header(self) -> None:
@@ -146,6 +163,20 @@ class PreviewPanel(ctk.CTkFrame):
         }
         for c in self.chips.values():
             c.pack(side="left", padx=(0, 6))
+        # phụ đề: vị trí + cỡ chữ chỉnh nhanh ngay trên khung (kiểu chữ ở tab «Lời thoại»)
+        from app.services import subtitle_presets as sp
+
+        ctk.CTkFrame(head, width=1, height=22, fg_color=T.BORDER).pack(side="left", padx=(4, 10))
+        self.sub_chips = {
+            "place": Chip(head, icon_name="subtitles", values=sp.PLACES, get_value=lambda: sp.place_of(self.state.subtitle),
+                          set_value=self._set_sub_place, short=lambda v: sp.PLACE_SHORT.get(v, v), labels=sp.PLACE_LABELS,
+                          menu_width=250, tip="Phụ đề nằm ở đâu: dưới (chừa nút TikTok) · giữa · trên · đè lên chữ cũ"),
+            "size": Chip(head, icon_name="font", values=list(sp.SIZES), get_value=lambda: sp.size_of(self.state.subtitle),
+                         set_value=self._set_sub_size, short=lambda v: sp.SIZE_LABELS.get(v, v), labels=sp.SIZE_LABELS,
+                         menu_width=150, tip="Cỡ chữ phụ đề"),
+        }
+        for c in self.sub_chips.values():
+            c.pack(side="left", padx=(0, 6))
         self._meta_text = ""
         del vcfg
 
@@ -154,8 +185,12 @@ class PreviewPanel(ctk.CTkFrame):
         self.bar = bar
         self.bar_label = ctk.CTkLabel(bar, text="Che mờ + Phụ đề (kéo thả)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.bar_label.pack(side="left", padx=(0, 10))
-        button(bar, "", icon_name="undo", variant="ghost", size="sm", command=self.undo, tip="Hoàn tác (Ctrl+Z)").pack(side="left", padx=1)
-        button(bar, "", icon_name="redo", variant="ghost", size="sm", command=self.redo, tip="Làm lại (Ctrl+Y)").pack(side="left", padx=(1, 8))
+        # công cụ chỉnh trên hình (khung phụ đề, ô che mờ): chỉ hiện ở tab Lời thoại / Che mờ — tab khác chỉ xem video
+        tools = ctk.CTkFrame(bar, fg_color="transparent")
+        self.tools = tools
+        tools.pack(side="left")
+        button(tools, "", icon_name="undo", variant="ghost", size="sm", command=self.undo, tip="Hoàn tác (Ctrl+Z)").pack(side="left", padx=1)
+        button(tools, "", icon_name="redo", variant="ghost", size="sm", command=self.redo, tip="Làm lại (Ctrl+Y)").pack(side="left", padx=(1, 8))
         self.tool_btns: dict[str, ctk.CTkButton] = {}
         self._tool_icons = {"V": "pointer", "T": "font", "B": "blur"}
         self._full_w: dict[ctk.CTkButton, int] = {}      # bề rộng đầy đủ (có chữ) của từng nút → khôi phục sau chế độ gọn
@@ -163,19 +198,25 @@ class PreviewPanel(ctk.CTkFrame):
         tool_tips = {"V": "Chọn / kéo hình xem trước (phím V)", "T": "Kéo, đổi cỡ khung phụ đề (phím T)",
                      "B": "Vẽ / kéo ô che mờ (phím B)"}
         for key in ("V", "T", "B"):
-            b = button(bar, key, icon_name=self._tool_icons[key], size="sm", command=lambda k=key: self.set_tool(k), tip=tool_tips[key])
+            b = button(tools, key, icon_name=self._tool_icons[key], size="sm", command=lambda k=key: self.set_tool(k), tip=tool_tips[key])
             b.pack(side="left", padx=1)
             self.tool_btns[key] = b
-        self.del_btn = button(bar, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
+        self.center_btn = button(tools, "Căn giữa", size="sm", command=lambda: self._quick_align("center"),
+                                 tip="Đưa khung phụ đề vào giữa theo chiều ngang")
+        self.center_btn.pack(side="left", padx=(8, 1))
+        self.full_btn = button(tools, "Rộng hết", size="sm", command=lambda: self._quick_align("full"),
+                               tip="Kéo khung phụ đề rộng hết khung hình (ít xuống dòng nhất)")
+        self.full_btn.pack(side="left", padx=1)
+        self.del_btn = button(tools, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
                               tip="Xoá ô che đang chọn · đang ở khung phụ đề thì tắt phụ đề (Delete)")
         self.del_btn.pack(side="left", padx=(8, 1))
         # Sub/Blur đổi chữ (Sub ↔ Sub ẩn): lấy bề rộng của nhãn dài hơn để nút không nhảy
-        self.sub_toggle = button(bar, "Sub", icon_name="eye", size="sm", command=self._toggle_sub,
-                                 width=button_width(bar, "Sub ẩn", size="sm", icon=True),
+        self.sub_toggle = button(tools, "Sub", icon_name="eye", size="sm", command=self._toggle_sub,
+                                 width=button_width(tools, "Sub ẩn", size="sm", icon=True),
                                  tip="Ẩn / hiện phụ đề trên khung xem trước (Shift+T) — không ảnh hưởng video xuất")
         self.sub_toggle.pack(side="left", padx=(8, 1))
-        self.blur_toggle = button(bar, "Blur", icon_name="eye", size="sm", command=self._toggle_blur,
-                                  width=button_width(bar, "Blur ẩn", size="sm", icon=True),
+        self.blur_toggle = button(tools, "Blur", icon_name="eye", size="sm", command=self._toggle_blur,
+                                  width=button_width(tools, "Blur ẩn", size="sm", icon=True),
                                   tip="Ẩn / hiện ô che mờ trên khung xem trước — không ảnh hưởng video xuất")
         self.blur_toggle.pack(side="left", padx=1)
         right = ctk.CTkFrame(bar, fg_color="transparent")
@@ -187,7 +228,8 @@ class PreviewPanel(ctk.CTkFrame):
         self.zoom_label = ctk.CTkLabel(right, text="Fit", font=T.font(11), text_color=T.TEXT_DIM, width=44)
         self.zoom_label.pack(side="right")
         button(right, "", icon_name="zoomout", variant="ghost", size="sm", command=lambda: self.zoom_step(-1), tip="Thu nhỏ (Ctrl −)").pack(side="right", padx=1)
-        for b in (*self.tool_btns.values(), self.del_btn, self.sub_toggle, self.blur_toggle):
+        for b in (*self.tool_btns.values(), self.center_btn, self.full_btn, self.del_btn, self.sub_toggle,
+                  self.blur_toggle):
             self._full_w[b] = b.cget("width")
         self.set_tool("V")
 
@@ -220,16 +262,21 @@ class PreviewPanel(ctk.CTkFrame):
         self.time_label = ctk.CTkLabel(ctrl, text="00:00:00 / 00:00:00", font=T.mono(11), width=150, anchor="w")
         self.time_label.pack(side="left", padx=(8, 0))
         self.cue_label = ctk.CTkLabel(ctrl, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w")
-        self.cue_label.pack(side="left", fill="x", expand=True, padx=8)
         button(ctrl, "", icon_name="fullscreen", size="sm", command=self.fullscreen, tip="Xem trước toàn màn hình (F)").pack(side="right")
-        self.ext_btn = button(ctrl, "Mở ngoài", icon_name="export", size="sm", command=self._open_external,
-                              tip="Mở video bằng trình phát mặc định của Windows")
-        self.ext_btn.pack(side="right", padx=(0, 4))
-        self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform,
-                               tip="Vẽ dạng sóng âm thanh dưới thanh thời gian")
-        self.wave_btn.pack(side="right", padx=(0, 4))
-        for b in (self.ext_btn, self.wave_btn):
+        self.more_btn = button(ctrl, "", icon_name="list", variant="ghost", size="sm", command=self._more_menu,
+                               tip="Thêm: hiệu ứng khi phát · vẽ lại sóng âm · mở bằng trình phát của máy")
+        self.more_btn.pack(side="right", padx=(0, 4))
+        # ít dùng → nằm trong menu ⋯ (giữ đối tượng nút để mã cũ đổi nhãn không lỗi, chỉ không hiện)
+        self.ext_btn = button(ctrl, "", icon_name="export", size="sm", command=self._open_external)
+        self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform)
+        self.clip_btn = button(ctrl, "Render thử", icon_name="film", size="sm", command=self.render_clip,
+                               tip=f"Xuất thử {CLIP_SECONDS} giây từ chỗ đang xem rồi phát ngay — giống hệt file sẽ xuất")
+        self.clip_btn.pack(side="right", padx=(0, 4))
+        self.fx_btn = button(ctrl, "Hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx)
+        for b in (self.wave_btn, self.clip_btn, self.fx_btn):
             self._full_w[b] = b.cget("width")
+        # chữ của câu phụ đề xếp sau cùng: thiếu chỗ thì nó co lại, các nút không bị đẩy ra ngoài
+        self.cue_label.pack(side="left", fill="x", expand=True, padx=8)
         self._compact = False
 
     def _layout_top(self) -> None:
@@ -249,8 +296,8 @@ class PreviewPanel(ctk.CTkFrame):
             self.head.grid(row=0, column=0, sticky="w")
             self.bar.grid(row=0, column=1, sticky="ew", padx=(12, 0))
         else:
-            if not self._compact:
-                self.bar_label.pack(side="left", padx=(0, 10), before=self.bar.winfo_children()[1])
+            if not self._compact and self.tools.winfo_ismapped():
+                self.bar_label.pack(side="left", padx=(0, 10), before=self._bar_first())
             self.head.grid(row=0, column=0, columnspan=2, sticky="ew")
             self.bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
@@ -274,6 +321,36 @@ class PreviewPanel(ctk.CTkFrame):
             total += ch.winfo_reqwidth() + pad
         return total
 
+    def _bar_first(self):
+        """Widget đang hiện đầu tiên của thanh công cụ (sau nhãn) — để xếp nhãn «Che mờ + Phụ đề» lên trước."""
+        return self.tools if self.tools.winfo_ismapped() else self.bar.winfo_children()[-1]
+
+    def set_edit_tools(self, on: bool) -> None:
+        """Công cụ chỉnh trên hình chỉ hiện ở tab Lời thoại / Che mờ (tab khác: thanh gọn, chỉ xem video)."""
+        if on == self.tools.winfo_ismapped():
+            return
+        if on:
+            self.tools.pack(side="left", before=self.bar.winfo_children()[-1])
+        else:
+            self.tools.pack_forget()
+            self.bar_label.pack_forget()          # nhãn «Che mờ + Phụ đề (kéo thả)» đi cùng công cụ
+            self.set_tool("V")
+        self._relayout_top()
+
+    def _more_menu(self) -> None:
+        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
+                    activeforeground=T.TEXT, selectcolor=T.ACCENT, bd=0)
+        fx = tk.BooleanVar(value=self.fx_play)
+        m.add_checkbutton(label="Hiệu ứng khi phát (giống bản xuất — máy yếu bị giật thì tắt)", variable=fx,
+                          command=self.toggle_fx)
+        m.add_command(label="Vẽ lại sóng âm", command=self.load_waveform)
+        m.add_command(label="Mở video gốc bằng trình phát của máy", command=self._open_external)
+        b = self.more_btn
+        try:
+            m.tk_popup(b.winfo_rootx(), b.winfo_rooty() - 80)
+        finally:
+            m.grab_release()
+
     def set_compact(self, compact: bool) -> None:
         """Khung xem trước hẹp (< ~760 px): bỏ nhãn chữ, chỉ giữ icon để thanh công cụ không tràn."""
         if compact == self._compact:
@@ -281,16 +358,18 @@ class PreviewPanel(ctk.CTkFrame):
         self._compact = compact
         if compact:
             self.bar_label.pack_forget()
-        elif self._top_rows == 2:
-            self.bar_label.pack(side="left", padx=(0, 10), before=self.bar.winfo_children()[1])
-        labels = {self.del_btn: "Xóa", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
-                  self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.ext_btn: "Mở ngoài", self.wave_btn: "Sóng âm",
+        elif self._top_rows == 2 and self.tools.winfo_ismapped():
+            self.bar_label.pack(side="left", padx=(0, 10), before=self._bar_first())
+        labels = {self.center_btn: "Căn giữa", self.full_btn: "Rộng hết",
+                  self.del_btn: "Xóa", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
+                  self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.wave_btn: "Sóng âm",
+                  self.clip_btn: "Render thử", self.fx_btn: "Hiệu ứng" if self.fx_play else "Hiệu ứng tắt",
                   **{b: key for key, b in self.tool_btns.items()}}
         for b, label in labels.items():
             relabel(b, "" if compact else label, width=32 if compact else self._full_w[b])
         self.time_label.configure(width=90 if compact else 150, font=T.mono(10 if compact else 11))
         self.vol.configure(width=60 if compact else 90)
-        for c in self.chips.values():
+        for c in (*self.chips.values(), *self.sub_chips.values()):
             c.refresh()                                   # chip tự rộng theo chữ (không ép cỡ cố định → không cắt chữ)
         self.meta.configure(text="" if compact else self._meta_text)
         self._top_rows = 0
@@ -304,6 +383,7 @@ class PreviewPanel(ctk.CTkFrame):
     # ── Public API ───────────────────────────────────────────────────────
     def set_item(self, item: VideoItem | None) -> None:
         self.stop_play()
+        self._clip = None
         self.item = item
         self.info = None
         self.t = 0.0
@@ -323,9 +403,11 @@ class PreviewPanel(ctk.CTkFrame):
             self._redraw()
             return
         self._draw_message("Đang tải…")
-        self.window.run_bg(lambda: self.window.ffmpeg.probe(item.path), self._probed)
+        self.window.run_bg(lambda: self.window.ffmpeg.probe(item.path), lambda i, e, it=item: self._probed(i, e, it))
 
-    def _probed(self, info: MediaInfo | None, error: Exception | None) -> None:
+    def _probed(self, info: MediaInfo | None, error: Exception | None, item: VideoItem | None = None) -> None:
+        if item is not None and item is not self.item:
+            return                      # đã chuyển sang video khác trong lúc đọc thông tin → bỏ kết quả cũ
         if error or info is None or self.item is None:
             self._draw_message(f"Không đọc được video: {error}")
             return
@@ -333,6 +415,12 @@ class PreviewPanel(ctk.CTkFrame):
         it = self.item
         it.duration, it.width, it.height, it.fps, it.has_audio = info.duration, info.width, info.height, info.fps, info.has_audio
         self.window.queue_update(it)
+        m = self.window.modules.get("video")
+        if m is not None:
+            m.update_fit_hint()                 # giờ mới biết kích thước video
+        m = self.window.modules.get("srt")
+        if m is not None and m.style_panel is not None:
+            m.style_panel.fill_pixels()         # ô pixel khung phụ đề tính theo khung ra thật
         self.slider.configure(to=max(0.01, info.duration))
         self.slider.set(0)
         self._meta_text = (f"{info.width}×{info.height} · {info.fps:.2f} fps · {format_ts(info.duration, '.')[:8]}"
@@ -342,6 +430,62 @@ class PreviewPanel(ctk.CTkFrame):
         self.schedule_refresh(0)
         if self.state.settings.show_waveform:
             self.load_waveform()
+        self.ensure_hardsub()
+        self.ensure_no_vocals()
+
+    def ensure_hardsub(self) -> None:
+        """«Tự dò chữ cứng» bật mà video đang xem chưa dò → dò nền rồi vẽ lại (vùng che hiện ngay trên khung xem trước)."""
+        from app.services.hardsub import cached_region, ensure_region
+
+        it, info = self.item, self.info
+        if it is None or info is None or not self.state.blur.auto_detect or cached_region(it) is not False:
+            return
+        pending = self.__dict__.setdefault("_hs_pending", set())
+        if it.path in pending:                 # đang dò video này rồi
+            return
+        pending.add(it.path)
+        ff = self.window.ffmpeg
+
+        def done(_r, _e):
+            pending.discard(it.path)
+            if self.item is it:
+                self.schedule_refresh(0)
+                m = self.window.modules.get("blur")
+                if m is not None:
+                    m._update_auto_status()
+                m = self.window.modules.get("srt")
+                if m is not None and m.style_panel is not None:
+                    m.style_panel.fill_pixels()
+                    m.style_panel.follow_status()
+
+        self.window.run_bg(lambda: ensure_region(it, ff, info.duration, log=self.window.log_bg), done)
+
+    def ensure_no_vocals(self) -> None:
+        """«Khử giọng gốc» bật mà video đang xem chưa khử → khử nền (AI) rồi phát lại với âm đã khử.
+        Trong lúc chờ, xem trước dùng âm gốc vặn rất nhỏ (giống bản render dự phòng)."""
+        from app.services.vocal_remove import cached_no_vocals
+
+        it, info = self.item, self.info
+        v = self.state.video
+        if it is None or info is None or not info.has_audio or not v.demucs_enable or not v.keep_original_audio \
+                or v.mute or cached_no_vocals(it.path) is not None:
+            return
+        pending = self.__dict__.setdefault("_nv_pending", set())
+        if it.path in pending:
+            return
+        pending.add(it.path)
+        pipe = self.window.pipeline_for(it)
+        self.window.log(f"{it.name}: đang khử giọng gốc nền (AI, ~1 phút cho mỗi phút video) — xong sẽ tự dùng.")
+
+        def done(_r, _e):
+            pending.discard(it.path)
+            m = self.window.modules.get("video")
+            if m is not None:
+                m._novocal_status()
+            if self.item is it and self.player.playing:
+                self._restart_live()
+
+        self.window.run_bg(lambda: pipe.remove_voice(it, log=self.window.log_bg), done)
 
     def schedule_refresh(self, delay_ms: int = 350) -> None:
         if self._after_id is not None:
@@ -371,15 +515,19 @@ class PreviewPanel(ctk.CTkFrame):
             cue_text = ""
             mods = stages_mod.collect(self.state, item, info, include_blur=show_blur)
             eff = mods.info
-            cues = self.window.pipeline.subtitle_cues(item)
+            pipe = self.window.pipeline
+            cues = pipe.preview_sub_cues(item, pipe.current_voice_track(item, info.duration)[0])
             c = cue_at(cues, t)
             if c is not None:
                 cue_text = c.plain + (f"  ⟂ {c.meta.get('secondary')}" if c.meta.get("secondary") else "")
             if scfg.enable_subtitle and show_sub and c is not None:
                 geo = rp.output_geometry(eff, vcfg)
                 PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                write_ass([Cue(1, 0.0, 60.0, c.text, dict(c.meta))], scfg, geo.width, geo.height,
-                          PREVIEW_CACHE_DIR / "preview.ass")
+                # chữ nổi (karaoke): vẽ tĩnh đúng chữ đang đọc tại vị trí đang xem (theo đoạn giọng thật của câu)
+                a0, d = speech_span(c)
+                write_ass([Cue(1, 0.0, 60.0, c.text, {**c.meta, "anim": (a0 - c.start, d)})],
+                          stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,
+                          PREVIEW_CACHE_DIR / "preview.ass", anim_at=max(0.0, t - c.start))
                 ass_name = "preview.ass"
             speed = max(0.25, vcfg.speed / 100.0)
             vg = rp.build_video_graph(eff, vcfg, work_dir=PREVIEW_CACHE_DIR, ass_name=ass_name, stages=mods.stages,
@@ -426,6 +574,8 @@ class PreviewPanel(ctk.CTkFrame):
     def seek(self, t: float) -> None:
         if self.info is None:
             return
+        if self._clip is not None:
+            self.stop_play()
         was_playing = self.player.playing
         self.t = max(0.0, min(max(0.0, self.info.duration - 0.05), t))
         self.slider.set(self.t)
@@ -446,6 +596,61 @@ class PreviewPanel(ctk.CTkFrame):
         self._cursor = {"V": "fleur", "T": "hand2", "B": "crosshair"}.get(key, "arrow")
         self.canvas.configure(cursor=self._cursor)
         self._redraw()
+
+    def sub_frame_size(self) -> tuple[int, int]:
+        """Cỡ khung ra của video đang xem (chưa có video: 1080×1920 — khung dọc TikTok)."""
+        if self.info is None:
+            return 1080, 1920
+        geo = rp.output_geometry(self.info, self.state.video)
+        return geo.width, geo.height
+
+    def refresh_sub_chips(self) -> None:
+        for c in self.sub_chips.values():
+            c.refresh()
+
+    def _sub_changed(self) -> None:
+        """Đổi phụ đề từ thanh khung video → lưu, vẽ lại, đồng bộ tab «Phụ đề» của mục Lời thoại."""
+        self.state.config_changed("subtitle")
+        self.refresh_sub_chips()
+        m = self.window.modules.get("srt")
+        if m is not None:
+            m.refresh_subtitle()
+        self.schedule_refresh(0)
+
+    def _set_sub_place(self, place: str) -> None:
+        from app.services.subtitle_presets import apply_place
+
+        apply_place(self.state.subtitle, place, *self.sub_frame_size())
+        if place == "hardsub":
+            self.ensure_follow_hardsub()
+        self._sub_changed()
+
+    def _set_sub_size(self, key: str) -> None:
+        from app.services.subtitle_presets import apply_size
+
+        apply_size(self.state.subtitle, key, *self.sub_frame_size())
+        self._sub_changed()
+
+    def ensure_follow_hardsub(self) -> None:
+        """«Đè lên chữ cũ» cần vùng chữ cứng đã dò → bật «Tự dò & che phụ đề gốc» ở Che mờ rồi dò video đang xem."""
+        if not self.state.blur.auto_detect:
+            self.state.blur.auto_detect = True
+            self.state.config_changed("blur")
+            self.window.log("Đã bật Che mờ › «Tự dò & che phụ đề gốc» để biết chỗ chữ cũ của từng video.")
+        self.ensure_hardsub()
+
+    def _quick_align(self, kind: str) -> None:
+        """Căn nhanh khung phụ đề: giữa theo chiều ngang · rộng hết khung (đang đè chữ cũ thì thôi đè, giữ chỗ)."""
+        cfg = self.state.subtitle
+        if not cfg.enable_subtitle:
+            return
+        self._detach_follow()
+        if kind == "center":
+            cfg.box_x = round((1.0 - cfg.box_w) / 2, 4)
+        else:
+            cfg.box_x, cfg.box_w = 0.0, 1.0
+        cfg.use_box = True
+        self._sub_changed()
 
     def _toggle_sub(self) -> None:
         self.show_sub = not self.show_sub
@@ -592,19 +797,30 @@ class PreviewPanel(ctk.CTkFrame):
     def _draw_live_subtitle(self, ox, oy, dw, dh) -> None:
         if not (self.state.subtitle.enable_subtitle and self.show_sub):
             return
+        if self._clip is not None or (self.fx_play and not self.player.effects_failed):
+            return                       # khung đã có phụ đề thật (ASS) — không vẽ đè
         c = cue_at(self._cues_cache, self.t)
         if c is None:
             return
-        cfg = self.state.subtitle
+        cfg = self._sub_cfg()
         size = max(8, int(cfg.sub_size * (min(dw, dh) / 1080.0)))
         x = ox + int((cfg.box_x + cfg.box_w / 2) * dw)
-        y = oy + int((cfg.box_y + cfg.box_h) * dh)
+        # bám chỗ chữ cứng: khối chữ căn giữa khung (như ASS \an5); còn lại chữ bám đáy khung
+        y = oy + int((cfg.box_y + (cfg.box_h / 2 if cfg.box_center else cfg.box_h)) * dh)
+        anchor = "center" if cfg.box_center else "s"
         font = (cfg.sub_font or "Arial", size, "bold" if cfg.sub_bold else "normal")
-        self._ov_text(x + 2, y + 2, text=c.plain, fill="#000000", font=font, anchor="s", width=int(cfg.box_w * dw))
-        self._ov_text(x, y, text=c.plain, fill=cfg.sub_color, font=font, anchor="s", width=int(cfg.box_w * dw))
+        self._ov_text(x + 2, y + 2, text=c.plain, fill="#000000", font=font, anchor=anchor, width=int(cfg.box_w * dw))
+        self._ov_text(x, y, text=c.plain, fill=cfg.sub_color, font=font, anchor=anchor, width=int(cfg.box_w * dw))
 
     def _draw_overlays(self, ox, oy, dw, dh) -> None:
         cv = self.canvas
+        if self._clip is not None:
+            a, b = self._clip["window"][0][0], self._clip["window"][-1][1]
+            self._ov_text(ox + 10, oy + 10, anchor="nw", fill=T.ACCENT, font=(T.UI_FONT, 11, "bold"),
+                          text=f"BẢN RENDER THỬ · {format_ts(a, '.')[:8]} → {format_ts(b, '.')[:8]}")
+            return
+        # viền mảnh quanh khung video xuất: phân biệt viền đen của video với nền đen của khung xem trước
+        self._ov_rectangle(ox - 1, oy - 1, ox + dw, oy + dh, outline=T.BORDER, width=1)
         self._badges: list[tuple[str, int, float, float, float]] = []
         mod = self.window.current_module_key()
         if self.tool == "B" or mod == "blur":
@@ -621,12 +837,14 @@ class PreviewPanel(ctk.CTkFrame):
                 if active and self.tool == "B":
                     self._draw_handles(x0, y0, x1, y1, col)
                     self._draw_delete_badge("blur", i, x1, y0)
-        if self.state.subtitle.enable_subtitle and self.state.subtitle.use_box and (self.tool == "T" or mod == "subtitle"):
+        if self.state.subtitle.enable_subtitle and self.state.subtitle.use_box and (self.tool == "T" or mod == "srt"):
             cfg = self.state.subtitle
-            x0, y0 = ox + cfg.box_x * dw, oy + cfg.box_y * dh
-            x1, y1 = x0 + cfg.box_w * dw, y0 + cfg.box_h * dh
+            bx, by, bw, bh = self._sub_box()
+            x0, y0 = ox + bx * dw, oy + by * dh
+            x1, y1 = x0 + bw * dw, y0 + bh * dh
             self._ov_rectangle(x0, y0, x1, y1, outline="#22D3EE", width=2, dash=(6, 3))
-            self._ov_text(x0 + 6, y0 - 4, text="Khung phụ đề", fill="#22D3EE", anchor="sw", font=(T.UI_FONT, 10, "bold"))
+            self._ov_text(x0 + 6, y0 - 4, text=f"Khung phụ đề · chữ {cfg.sub_size}px", fill="#22D3EE", anchor="sw",
+                          font=(T.UI_FONT, 10, "bold"))
             if self.tool == "T":
                 self._draw_handles(x0, y0, x1, y1, "#22D3EE")
                 self._draw_delete_badge("sub", 0, x1, y0)
@@ -686,8 +904,7 @@ class PreviewPanel(ctk.CTkFrame):
         ox, oy, dw, dh = self._fit
         boxes: list[tuple[str, int, tuple[float, float, float, float]]] = []
         if self.tool == "T" and self.state.subtitle.use_box:
-            c = self.state.subtitle
-            boxes.append(("sub", 0, (c.box_x, c.box_y, c.box_w, c.box_h)))
+            boxes.append(("sub", 0, self._sub_box()))
         if self.tool == "B":
             for i, r in enumerate(self.state.blur.regions):
                 try:
@@ -712,6 +929,113 @@ class PreviewPanel(ctk.CTkFrame):
             if bx <= px <= bx + bw and by <= py <= by + bh:
                 return kind, idx, "move"
         return None
+
+    # Khung phụ đề: chữ bám ĐÁY khung, nên khung hiển thị luôn cao vừa số dòng chữ (theo cỡ chữ) tính từ đáy —
+    # kéo cạnh trên/dưới = đổi cỡ chữ, kéo cạnh trái/phải = đổi bề rộng (chỗ xuống dòng), kéo giữa = dời chỗ.
+    def _sub_lines(self, dw: int, dh: int, size: float) -> int:
+        """Số dòng câu phụ đề đang hiện sẽ chiếm (ước theo bề rộng khung, như libass tự xuống dòng)."""
+        c = cue_at(self._cues_cache, self.t)
+        if c is None:
+            return sst.BOX_LINES
+        cfg = self.state.subtitle
+        px = max(4, int(round(size * min(dw, dh) / 1080.0)))
+        key = (cfg.sub_font, px, cfg.sub_bold, cfg.sub_italic)
+        if getattr(self, "_measure_key", None) != key:
+            try:
+                self._measure_font = tkfont.Font(family=cfg.sub_font or "Arial", size=-px,
+                                                 weight="bold" if cfg.sub_bold else "normal",
+                                                 slant="italic" if cfg.sub_italic else "roman")
+            except tk.TclError:
+                self._measure_font = None
+            self._measure_key = key
+        avail = max(10.0, cfg.box_w * dw)
+        spacing = cfg.sub_letter_spacing * min(dw, dh) / 1080.0
+        texts = [c.plain.upper() if cfg.sub_uppercase else c.plain]
+        if c.meta.get("secondary"):
+            texts.append(str(c.meta["secondary"]))
+        lines = 0
+        for text in texts:
+            for part in (text.splitlines() or [""]):
+                if self._measure_font is not None:
+                    w = self._measure_font.measure(part) + spacing * len(part)
+                else:
+                    w = len(part) * px * 0.5
+                lines += max(1, math.ceil(w / avail))
+        return max(1, lines)
+
+    def _sub_text_h(self, size: float | None = None) -> float:
+        """Chiều cao chữ của câu đang hiện (tỉ lệ khung ra) ở cỡ ``size``."""
+        cfg = self.state.subtitle
+        _ox, _oy, dw, dh = self._fit
+        size = cfg.sub_size if size is None else size
+        return sst.box_height_px(cfg, dw, dh, self._sub_lines(dw, dh, size), size=size) / max(1, dh)
+
+    def _sub_cfg(self):
+        """Phụ đề thực dùng cho video đang xem (khung có thể đang bám chỗ chữ cứng đã dò)."""
+        if self.item is None or self.info is None:
+            return self.state.subtitle
+        try:
+            return stages_mod.subtitle_for(self.state, self.item, self.info)
+        except Exception:
+            logger.debug("subtitle_for lỗi", exc_info=True)
+            return self.state.subtitle
+
+    def _sub_box(self, size: float | None = None) -> tuple[float, float, float, float]:
+        """Khung phụ đề đang hiển thị (tỉ lệ khung ra): đáy + bề ngang theo cấu hình, cao vừa chữ."""
+        cfg = self._sub_cfg()
+        _ox, _oy, dw, dh = self._fit
+        # tối thiểu đủ chỗ cho tay cầm (chữ nhỏ 1 dòng thì 8 tay cầm khỏi chồng lên nhau)
+        h = min(0.95, max(self._sub_text_h(size), HANDLE * 5 / max(1, dh)))
+        if cfg.box_center:                             # đang bám chỗ chữ cứng: khối chữ căn giữa khung
+            mid = cfg.box_y + cfg.box_h / 2
+            return cfg.box_x, mid - h / 2, cfg.box_w, h
+        bottom = max(0.02, min(1.0, cfg.box_y + cfg.box_h))
+        return cfg.box_x, bottom - h, cfg.box_w, h
+
+    def _detach_follow(self) -> None:
+        """Kéo khung đang bám chữ cứng → đặt tay: chép vị trí đang thấy vào cấu hình và tắt «bám chữ cứng»."""
+        cfg = self.state.subtitle
+        eff = self._sub_cfg()
+        if not cfg.follow_hardsub:
+            return
+        if eff is not cfg:
+            cfg.box_x, cfg.box_y, cfg.box_w, cfg.box_h = eff.box_x, eff.box_y, eff.box_w, eff.box_h
+        cfg.follow_hardsub = False
+        self.window.log("Phụ đề giờ theo vị trí bạn kéo (muốn đè lại lên chữ cũ: chọn «Đè chữ cũ» ở nút phụ đề trên "
+                        "khung video).")
+
+    def _drag_sub(self, d: dict, dx: float, dy: float) -> None:
+        cfg = self.state.subtitle
+        _ox, _oy, dw, dh = self._fit
+        bx, by, bw, bh = d["box"]
+        h = d["handle"]
+        x0, x1, bottom = bx, bx + bw, by + bh
+        if h == "move":
+            x0, x1, bottom = x0 + dx, x1 + dx, bottom + dy
+            if x0 < 0:
+                x0, x1 = 0.0, x1 - x0
+            if x1 > 1:
+                x0, x1 = x0 - (x1 - 1.0), 1.0
+        else:
+            if "w" in h:
+                x0 = max(0.0, min(x1 - 0.08, x0 + dx))
+            if "e" in h:
+                x1 = min(1.0, max(x0 + 0.08, x1 + dx))
+            if "n" in h or "s" in h:
+                th = d.setdefault("text_h", self._sub_text_h(d["size"]))
+                nh = max(0.005, th - dy if "n" in h else th + dy)
+                # cỡ chữ tỉ lệ theo chiều cao chữ kéo được (số dòng giữ như lúc bấm)
+                size = max(12, min(120, int(round(d["size"] * nh / max(1e-6, th)))))
+                cfg.sub_size = size
+                if "s" in h:                       # kéo cạnh dưới: giữ mép trên, đáy chạy theo chữ
+                    bottom = by + self._sub_box(size)[3]
+        cfg.box_x, cfg.box_w = round(max(0.0, x0), 4), round(max(0.05, min(1.0, x1) - max(0.0, x0)), 4)
+        h2 = min(0.9, sst.box_height_px(cfg, dw, dh) / max(1, dh))
+        bottom = max(min(1.0, h2), min(1.0, bottom))
+        cfg.box_h, cfg.box_y = round(h2, 4), round(max(0.0, bottom - h2), 4)
+        self._redraw()
+        if "n" in h or "s" in h:
+            self.schedule_refresh(150)            # dừng tay là thấy chữ thật ở cỡ mới
 
     def _empty_add(self) -> None:
         m = self.window.modules.get("video")
@@ -740,8 +1064,11 @@ class PreviewPanel(ctk.CTkFrame):
                 self.state.blur.active_index = idx
                 self.window.notify_blur_selection()
             self._snapshot()
+            if kind == "sub":
+                self._detach_follow()
             sfx, sfy = self._out_to_src(fx, fy) if kind == "blur" else (fx, fy)
-            self._drag = {"kind": kind, "idx": idx, "handle": handle, "fx": sfx, "fy": sfy, "box": self._get_box(kind, idx)}
+            self._drag = {"kind": kind, "idx": idx, "handle": handle, "fx": sfx, "fy": sfy, "box": self._get_box(kind, idx),
+                          "size": self.state.subtitle.sub_size}
             return
         if self.tool == "B":
             self._snapshot()
@@ -756,8 +1083,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _get_box(self, kind: str, idx: int) -> tuple[float, float, float, float]:
         if kind == "sub":
-            c = self.state.subtitle
-            return c.box_x, c.box_y, c.box_w, c.box_h
+            return self._sub_box()
         r = self.state.blur.regions[idx]
         return float(r["x"]), float(r["y"]), float(r["w"]), float(r["h"])
 
@@ -784,6 +1110,9 @@ class PreviewPanel(ctk.CTkFrame):
         if d["kind"] == "blur":
             fx, fy = self._out_to_src(fx, fy)
         dx, dy = fx - d["fx"], fy - d["fy"]
+        if d["kind"] == "sub":
+            self._drag_sub(d, dx, dy)
+            return
         bx, by, bw, bh = d["box"]
         h = d["handle"]
         if h == "move":
@@ -878,7 +1207,8 @@ class PreviewPanel(ctk.CTkFrame):
     def _state_snap(self) -> dict:
         c = self.state.subtitle
         return {"regions": copy.deepcopy(self.state.blur.regions), "active": self.state.blur.active_index,
-                "box": (c.box_x, c.box_y, c.box_w, c.box_h), "sub_on": c.enable_subtitle}
+                "box": (c.box_x, c.box_y, c.box_w, c.box_h), "sub_on": c.enable_subtitle, "size": c.sub_size,
+                "follow": c.follow_hardsub}
 
     def _snapshot(self) -> None:
         self._undo.append(self._state_snap())
@@ -892,6 +1222,10 @@ class PreviewPanel(ctk.CTkFrame):
         c.box_x, c.box_y, c.box_w, c.box_h = snap["box"]
         if "sub_on" in snap:
             c.enable_subtitle = bool(snap["sub_on"])
+        if "size" in snap:
+            c.sub_size = int(snap["size"])
+        if "follow" in snap:
+            c.follow_hardsub = bool(snap["follow"])
         self.state.config_changed("blur")
         self.state.config_changed("subtitle")
         self.window.notify_box_edit("blur")
@@ -920,9 +1254,101 @@ class PreviewPanel(ctk.CTkFrame):
     def start_play(self) -> None:
         if self.item is None or self.info is None:
             return
-        self._cues_cache = self.window.pipeline.subtitle_cues(self.item)
+        self._configure_spec(announce=True)
         self._play_from(self.t)
         self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+
+    def _configure_spec(self, announce: bool = False) -> None:
+        """Chụp cấu hình hiện tại cho lần phát: hình qua đủ filter, tiếng = âm gốc + giọng lồng + nhạc nền."""
+        from app.services.live_preview import LiveSpec
+
+        pipe = self.window.pipeline
+        voice, fresh, trimmed = pipe.current_voice_track(self.item, self.info.duration)
+        cues = pipe.preview_sub_cues(self.item, voice) if self.show_sub else []
+        self._cues_cache = cues
+        self.player.effects_failed = ""
+        try:
+            self.player.spec = LiveSpec(self.state, self.item, self.info, self.window.ffmpeg,
+                                        cues=cues if (self.fx_play and self.state.subtitle.enable_subtitle) else [],
+                                        voice=voice, voice_trimmed=trimmed,
+                                        effects=self.fx_play, show_blur=self.show_blur)
+        except Exception:
+            logger.warning("Không dựng được cấu hình phát xem trước", exc_info=True)
+            self.player.spec = None
+        if not announce:
+            return
+        tts, vcfg = self.state.tts, self.state.video
+        if tts.enable_tts and not vcfg.mute:
+            if voice is None:
+                self.window.progress.notice("Chưa có giọng lồng cho video này",
+                                            "bấm «Render thử» để tạo giọng cho đoạn đang xem, hoặc «Tạo giọng» ở tab TTS")
+            elif not fresh:
+                self.window.progress.notice("Đang nghe giọng lồng cũ",
+                                            "cài đặt đã đổi — bấm «Render thử» để nghe đúng bản mới")
+
+    def _config_changed(self, section: str = "") -> None:
+        """Đổi cài đặt lúc đang phát → phát lại từ chỗ đang xem với cài đặt mới (gom các thay đổi liên tiếp).
+        Đổi phụ đề ở bất kỳ đâu → nút vị trí / cỡ chữ trên thanh khung video theo ngay."""
+        if section in ("subtitle", "") and hasattr(self, "sub_chips"):
+            self.refresh_sub_chips()
+        if not self.player.playing or self._clip is not None or self.item is None:
+            return
+        if self._restart_id is not None:
+            try:
+                self.after_cancel(self._restart_id)
+            except Exception:
+                pass
+        self._restart_id = self.after(400, self._restart_live)
+
+    def _restart_live(self) -> None:
+        self._restart_id = None
+        if self.player.playing and self._clip is None and self.item is not None and self.info is not None:
+            self._configure_spec()
+            self._play_from(self.t)
+
+    def toggle_fx(self) -> None:
+        self.fx_play = not self.fx_play
+        relabel(self.fx_btn, "" if self._compact else ("Hiệu ứng" if self.fx_play else "Hiệu ứng tắt"),
+                width=32 if self._compact else self._full_w[self.fx_btn])
+        self.fx_btn.configure(image=button_icon("eye" if self.fx_play else "hide", size="sm", with_text=not self._compact))
+        if self.player.playing and self._clip is None:
+            self._configure_spec()
+            self._play_from(self.t)
+
+    # ── Bản render thử ───────────────────────────────────────────────────
+    def render_clip(self) -> None:
+        if self.item is None or self.info is None:
+            return
+        self.stop_play()
+        item, t = self.item, self.t
+
+        def work(cancel):
+            return self.window.pipeline.preview_clip(item, t, CLIP_SECONDS, progress=self.window.set_busy_progress,
+                                                     log=self.window.log_bg, cancel=cancel)
+
+        def done(result, error):
+            if error or result is None or self.item is not item:
+                return
+            path, window = result
+            self._clip = {"path": str(path), "window": window, "t": t}
+            self.player.spec = None
+            self.player.set_source(str(path))
+            self._cues_cache = []
+            self._live = None
+            self._play_from(0.0)
+            self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+            self.window.progress.notice("Đang phát bản render thử", "giống hệt file sẽ xuất · bấm Dừng ở thanh phát để quay lại")
+
+        self.window.run_task("Xem thử bản render", work, done)
+
+    def _exit_clip(self) -> None:
+        clip, self._clip = self._clip, None
+        if clip is None:
+            return
+        self.player.set_source(self.item.path if self.item else None)
+        self.t = clip["t"]
+        self.slider.set(self.t)
+        self._update_time()
 
     def _play_from(self, t: float) -> None:
         self._kill_frame_proc()
@@ -934,6 +1360,8 @@ class PreviewPanel(ctk.CTkFrame):
     def stop_play(self) -> None:
         if self.player.playing:
             self.player.stop()
+        if self._clip is not None:
+            self._exit_clip()
         if self._poll_id is not None:
             try:
                 self.after_cancel(self._poll_id)
@@ -951,7 +1379,16 @@ class PreviewPanel(ctk.CTkFrame):
         if not self.player.playing:
             return
         f = self.player.take_frame()
-        if f is not None:
+        if f is not None and self._clip is not None:
+            img, t = f
+            self._live = img
+            if abs(t - self._last_slider_t) >= 0.2 or t < self._last_slider_t:
+                self._last_slider_t = t
+                total = self._clip["window"]
+                dur = sum(b - a for a, b in total) / max(0.25, self.state.video.speed / 100.0)
+                self._set_text(self.time_label, f"{format_ts(t, '.')[:8]} / {format_ts(dur, '.')[:8]}")
+            self._redraw()
+        elif f is not None:
             img, t = f
             self._live = img
             self.t = t
@@ -1053,7 +1490,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _open_external(self) -> None:
         if self.item and Path(self.item.path).exists():
-            os.startfile(self.item.path)
+            open_path(self.item.path)
 
     def fullscreen(self) -> None:
         img = self._current_image()

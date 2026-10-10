@@ -1,17 +1,23 @@
-"""Module STT: tạo SRT từ video trong hàng đợi (Whisper local / Gemini cloud) hoặc từ file media bất kỳ."""
+"""Module STT: lấy lời thoại thành phụ đề — AI nghe giọng nói (Qwen3-ASR, chạy trên máy) hoặc đọc chữ in sẵn trên
+video (OCR); nhận diện cả file media bất kỳ."""
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from app.config import theme as T
-from app.core.state import STT_DEVICES, STT_ENGINES, STT_LANGUAGES, STT_MODELS, SRT_SOURCES
+from app.core.languages import language_label
+from app.core.state import STT_ENGINES, STT_LABELS, STT_LANGUAGES, SRT_SOURCES
+from app.services.qwen_asr import INSTALL_GB
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
+
+ENGINE_INFO = ("Giọng nói trong video: AI Qwen3-ASR nghe lời thoại, chạy trên máy (có GPU NVIDIA thì nhanh hơn nhiều), "
+               "không tốn lượt AI. Tên riêng hiếm có thể sai — sửa ở tab «Lời thoại» › «Nhờ AI sửa».\n\n"
+               "Chữ in sẵn trên video: đọc phụ đề có sẵn trên hình (video Douyin…) — đúng từng chữ, kể cả tên riêng. "
+               "Video không có chữ in sẵn thì báo lỗi.")
 
 
 class STTModule(BaseModule):
@@ -23,38 +29,31 @@ class STTModule(BaseModule):
     def build(self) -> None:
         cfg = self.state.subtitle
         s = self.setter
-        hint(self, "Tạo SRT từ video đang chọn trong hàng đợi.").pack(fill="x", pady=(0, 4))
+        hint(self, "Tạo phụ đề từ lời thoại của video đang chọn.").pack(fill="x", pady=(0, 4))
 
-        sec = Section(self, "Dịch vụ")
+        sec = Section(self, "Nhận diện lời thoại")
         sec.pack(fill="x", pady=4)
-        self.engine = OptionRow(sec.body, "Nhận dạng", STT_ENGINES, on_change=self._engine_changed)
-        self.engine_hint = hint(sec.body, "Model chạy trên máy, không cần mạng")
-        self.model = OptionRow(sec.body, "Model Whisper", STT_MODELS, on_change=s(cfg, "stt_model", preview=False))
-        self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False))
-        self.device = OptionRow(sec.body, "Thiết bị", STT_DEVICES, on_change=s(cfg, "stt_device", preview=False))
-        self.weak = SwitchRow(sec.body, "PC yếu", on_change=s(cfg, "weak_pc", preview=False))
-        self.auto = SwitchRow(sec.body, "Tự nhận diện khi render nếu chưa có SRT", on_change=self._auto_changed)
-        self.engine.pack(fill="x", pady=3)
-        self.engine_hint.pack(fill="x")
-        pack_rows(sec.body, [self.model, self.lang, self.device, self.weak, self.auto])
-        hint(sec.body, "tiny/base: nhanh, hợp tiếng Anh · small: khá · large-v3-turbo: chính xác gần large mà nhanh gần small — "
-                       "khuyên dùng khi có GPU, nhất là tiếng Trung/Nhật. Gemini (cloud): không cần GPU, cần API key, "
-                       "nhận diện theo câu có dấu câu.").pack(fill="x")
-        self.cuda_hint = hint(sec.body, "")
-        self.cuda_hint.pack(fill="x", pady=(4, 0))
-        cuda_label = "⬇ Tải CUDA runtime cho Whisper GPU (~1.3 GB, một lần)" if getattr(sys, "frozen", False) \
-            else "⬇ Cài CUDA runtime cho Whisper GPU (~1.5 GB)"
-        self.cuda_btn = ButtonRow(sec.body, [(cuda_label, self._install_cuda, None)])
-        self.cuda_btn.pack(fill="x", pady=(2, 0))
-        self._update_cuda_hint()
+        self.engine = OptionRow(sec.body, "Lấy lời từ", STT_ENGINES, labels=STT_LABELS, on_change=self._engine_changed,
+                                info=ENGINE_INFO)
+        self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False),
+                              labels={c: language_label(c) for c in STT_LANGUAGES},
+                              info="Ngôn ngữ người nói trong video. «Tự nhận diện» thường đúng; chọn hẳn khi video lẫn "
+                                   "nhiều thứ tiếng.")
+        self.auto = SwitchRow(sec.body, "Tự nhận diện khi chuẩn bị video", on_change=self._auto_changed,
+                              info="Video chưa có phụ đề thì bước «Chuẩn bị» tự nhận diện. Tắt khi bạn luôn dùng file SRT "
+                                   "có sẵn.")
+        pack_rows(sec.body, [self.engine, self.lang, self.auto])
+        self.engine_status = StatusLabel(sec.body, "")
+        self.engine_status.pack(fill="x", pady=(4, 0))
+        self.qwen_btn = ButtonRow(sec.body, [(f"⬇ Cài bộ nghe lời thoại (một lần, ~{INSTALL_GB} GB)", self._install_qwen,
+                                              T.primary_button())])
 
         sec = Section(self, "Chạy")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("Tạo SRT từ Video trong hàng đợi", self._run_active, T.primary_button())]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("🎞 Nhận dạng từ File Media (Audio/Video)…", self._run_file, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Mở SRT", self._open_srt, None),
-                             ("⬇ Tải trước model Whisper", self._download_model, None)]).pack(fill="x", pady=2)
-        self.status = StatusLabel(sec.body, "Chưa có file SRT — tạo xong rồi bấm «Mở SRT».")
+        ButtonRow(sec.body, [("Tạo phụ đề cho video đang chọn", self._run_active, T.primary_button())]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("🎞 Nhận diện từ file khác (audio / video)…", self._run_file, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Xem / sửa lời thoại", self._open_srt, None)]).pack(fill="x", pady=2)
+        self.status = StatusLabel(sec.body, "Chưa có phụ đề — tạo xong rồi bấm «Xem / sửa lời thoại».")
         self.status.pack(fill="x", pady=(4, 0))
 
     def refresh(self) -> None:
@@ -62,10 +61,7 @@ class STTModule(BaseModule):
         self._loading = True
         try:
             self.engine.set(cfg.stt_engine if cfg.stt_engine in STT_ENGINES else STT_ENGINES[0])
-            self.model.set(cfg.stt_model)
             self.lang.set(cfg.stt_language)
-            self.device.set(cfg.stt_device)
-            self.weak.set(cfg.weak_pc)
             self.auto.set(cfg.srt_source == SRT_SOURCES[0])
         finally:
             self._loading = False
@@ -78,80 +74,42 @@ class STTModule(BaseModule):
             self.status.info("Chưa có video được chọn.")
         elif it.srt_path and Path(it.srt_path).exists():
             try:
-                self.status.ok(f"SRT: {Path(it.srt_path).name} ({stats(load_srt(it.srt_path))})")
+                self.status.ok(f"Phụ đề: {Path(it.srt_path).name} ({stats(load_srt(it.srt_path))})")
             except Exception:
-                self.status.ok(f"SRT: {Path(it.srt_path).name}")
+                self.status.ok(f"Phụ đề: {Path(it.srt_path).name}")
         else:
-            self.status.info("Chưa có file SRT — tạo xong rồi bấm «Mở SRT».")
-
-    def _update_cuda_hint(self, ready: bool | None = None) -> None:
-        """Dò GPU (nvidia-smi/PowerShell) + nạp thử DLL CUDA trong nền — không làm đơ giao diện khi mở module."""
-        def work():
-            from app.services.sysinfo import gpu_name
-            from app.services.whisper_stt import cuda_ready
-
-            name = gpu_name()
-            if "NVIDIA" not in name.upper():
-                return name, False, False
-            return name, True, (cuda_ready() if ready is None else ready)
-
-        self.window.run_bg(work, self._show_cuda_hint)
-
-    def _show_cuda_hint(self, result, error) -> None:
-        if error or result is None:
-            return
-        name, nvidia, ready = result
-        if not nvidia:
-            self.cuda_hint.configure(text="Không có GPU NVIDIA → Whisper chạy trên CPU (int8).")
-            self.cuda_btn.pack_forget()
-            return
-        if ready:
-            self.cuda_hint.configure(text=f"✓ CUDA sẵn sàng — Whisper chạy trên {name}.")
-            self.cuda_btn.pack_forget()
-        elif getattr(sys, "frozen", False):
-            self.cuda_hint.configure(text=f"⚠ Có {name} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
-                                          "Bấm nút dưới để tải về (một lần, ~1.3 GB, cần Internet) — hoặc cài bản Setup đủ (có sẵn CUDA).")
-        else:
-            self.cuda_hint.configure(text=f"⚠ Có {name} nhưng thiếu cuBLAS/cuDNN nên Whisper đang chạy CPU. "
-                                          "Bấm nút dưới để cài (pip, không cần CUDA Toolkit).")
-
-    def _install_cuda(self) -> None:
-        from app.services.whisper_stt import install_cuda_runtime
-
-        self.cuda_hint.configure(text="Đang tải cuBLAS + cuDNN… xem Nhật ký / thanh trạng thái (vài phút).")
-
-        def done(result, error):
-            if error:
-                self.cuda_hint.configure(text=f"✖ Tải CUDA lỗi: {str(error)[:160]} — kiểm tra mạng rồi bấm lại (tải tiếp phần dở).")
-                return
-            self._update_cuda_hint(bool(result))
-            if not result:
-                self.cuda_hint.configure(text="⚠ Đã tải nhưng chưa nạp được cuBLAS/cuDNN — mở lại phần mềm rồi thử lại.")
-
-        self.window.run_task("Tải CUDA runtime", lambda cancel: install_cuda_runtime(self.window.log_bg, cancel), done)
-
-    def _download_model(self) -> None:
-        from app.services.whisper_stt import download_whisper_model
-
-        size = self.state.subtitle.stt_model
-        self.status.info(f"Đang tải model Whisper '{size}'… (xem Nhật ký)")
-
-        def done(result, error):
-            if error:
-                self.status.error(f"Tải model lỗi: {str(error)[:200]}")
-            else:
-                self.status.ok(f"Model '{size}' đã có sẵn trên máy — nhận dạng không cần tải nữa.")
-
-        self.window.run_task(f"Tải model Whisper {size}", lambda _cancel: download_whisper_model(size, self.window.log_bg), done)
+            self.status.info("Chưa có phụ đề — tạo xong rồi bấm «Xem / sửa lời thoại».")
 
     def _layout_engine(self) -> None:
-        cloud = self.state.subtitle.stt_engine.startswith("Gemini")
-        self.engine_hint.configure(text="Gửi audio lên Gemini, không cần GPU (cần Gemini API key trong Cài đặt)"
-                                   if cloud else "Model chạy trên máy, không cần mạng")
-        for r in (self.model, self.device, self.weak):
-            r.menu.configure(state="disabled") if hasattr(r, "menu") and cloud else None
-            if hasattr(r, "menu") and not cloud:
-                r.menu.configure(state="normal")
+        if self.state.subtitle.stt_engine == "ocr":
+            self.engine_status.info("Đọc chữ in sẵn trên hình — chạy trên máy, không cần mạng.")
+            self.qwen_btn.pack_forget()
+            return
+        from app.services.qwen_asr import is_installed
+
+        if is_installed():
+            self.engine_status.ok("✓ Bộ nghe lời thoại (Qwen3-ASR) đã cài — chạy trên máy, không tốn lượt AI.")
+            self.qwen_btn.pack_forget()
+        else:
+            self.engine_status.warn("Chưa cài bộ nghe lời thoại (Qwen3-ASR) — cài một lần rồi dùng mãi, không cần mạng.")
+            if not self.qwen_btn.winfo_ismapped():
+                self.qwen_btn.pack(fill="x", pady=(4, 0), after=self.engine_status)
+
+    def _install_qwen(self) -> None:
+        from app.ui.local_ai import install_qwen
+
+        def done(ok: bool, error: Exception | None) -> None:
+            if not self.winfo_exists():
+                return
+            if not ok:
+                self.engine_status.error(f"Cài Qwen3-ASR thất bại: {error or 'xem log'}")
+                return
+            self.set_value(self.state.subtitle, "stt_engine", STT_ENGINES[0], preview=False)
+            self.engine.set(STT_ENGINES[0])
+            self._layout_engine()
+
+        if install_qwen(self.window, done):
+            self.engine_status.warn("Đang cài bộ nghe lời thoại (vài chục phút)… xem log")
 
     def _engine_changed(self, v: str) -> None:
         self.set_value(self.state.subtitle, "stt_engine", v, preview=False)
@@ -166,7 +124,7 @@ class STTModule(BaseModule):
         if item is None:
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
-        pipe = self.window.pipeline
+        pipe = self.window.pipeline_for(item)
         self.status.warn("Đang nhận diện… (xem log)")
 
         def work(cancel):
@@ -180,7 +138,7 @@ class STTModule(BaseModule):
                 self.window.queue_update(item)
                 self.window.preview.schedule_refresh(0)
                 self.state.mark_dirty()
-                self.window.add_notification("Nhận diện xong", f"{item.name}: {len(result)} cue", "ok")
+                self.window.add_notification("Nhận diện xong", f"{item.name}: {len(result)} câu", "ok")
                 for k in ("srt", "tts"):
                     if k in self.window.modules:
                         self.window.modules[k].on_active_changed()
@@ -207,8 +165,8 @@ class STTModule(BaseModule):
             if error:
                 self.status.error(f"Lỗi: {error}")
             else:
-                self.status.ok(f"Đã tạo {Path(tmp.srt_path).name} ({len(result)} cue) trong output/subs")
-                if messagebox.askyesno("Edit Studio", "Gán SRT vừa tạo cho video đang chọn?") and self.state.active:
+                self.status.ok(f"Đã tạo {Path(tmp.srt_path).name} ({len(result)} câu) trong output/subs")
+                if messagebox.askyesno("Edit Studio", "Gán phụ đề vừa tạo cho video đang chọn?") and self.state.active:
                     self.state.active.srt_path = tmp.srt_path
                     self.state.active.srt_translated_path = None
                     self.state.mark_dirty()
@@ -220,6 +178,6 @@ class STTModule(BaseModule):
     def _open_srt(self) -> None:
         it = self.state.active
         if it and it.srt_path and Path(it.srt_path).exists():
-            os.startfile(it.srt_path)
+            self.window.show_module("srt")          # xem / sửa ngay ở tab «Lời thoại»
         else:
-            messagebox.showinfo("Edit Studio", "Chưa có file SRT cho video này.")
+            messagebox.showinfo("Edit Studio", "Chưa có phụ đề cho video này.")

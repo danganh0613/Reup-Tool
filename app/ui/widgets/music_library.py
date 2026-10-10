@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import customtkinter as ctk
@@ -11,6 +10,7 @@ from app.config import theme as T
 from app.ui.widgets.ui import button
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import ASSETS_DIR
+from app.core.platform import open_path
 
 MUSIC_LIB = ASSETS_DIR / "music"
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
@@ -73,4 +73,4 @@ class MusicLibraryDialog(ctk.CTkToplevel):
 
     def _open_dir(self) -> None:
         MUSIC_LIB.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(MUSIC_LIB))
+        open_path(str(MUSIC_LIB))

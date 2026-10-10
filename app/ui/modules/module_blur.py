@@ -13,7 +13,8 @@ from app.services.ffmpeg import MediaInfo, parse_hhmmss
 from app.ui.modules.base_module import BaseModule
 from app.ui.preview_panel import new_region
 from app.ui.widgets.ui import Select, button
-from app.ui.widgets.common import ButtonRow, OptionRow, Section, SliderRow, SwitchRow, TimeEntry, hint, pack_rows
+from app.ui.widgets.common import (ButtonRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, TimeEntry, hint,
+                                  pack_rows)
 
 
 class BlurModule(BaseModule):
@@ -26,7 +27,17 @@ class BlurModule(BaseModule):
         cfg = self.state.blur
         self.enable = SwitchRow(self, "Bật che chữ", on_change=self.setter(cfg, "enable"))
         self.enable.pack(fill="x", pady=(0, 2))
-        hint(self, "Làm mờ vùng để che phụ đề cứng có sẵn trên video gốc.").pack(fill="x", pady=(0, 6))
+        hint(self, "Làm mờ chữ in sẵn, logo… trên video gốc.").pack(fill="x", pady=(0, 6))
+
+        sec = Section(self, "Tự dò chữ cứng")
+        sec.pack(fill="x", pady=4)
+        self.auto = SwitchRow(sec.body, "Tự dò & che chữ cứng cho từng video", on_change=self._auto_toggled,
+                              info="Mỗi video chữ in sẵn nằm một chỗ: máy tự tìm dải chữ đổi liên tục và che mờ (bỏ qua "
+                                   "logo / watermark đứng yên). Lưu vào mẫu được.")
+        self.auto.pack(fill="x")
+        ButtonRow(sec.body, [("🔍 Dò lại cho video đang chọn", self._detect_now, None)]).pack(fill="x", pady=(4, 2))
+        self.auto_status = StatusLabel(sec.body, "")
+        self.auto_status.pack(fill="x")
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", pady=2)
@@ -55,8 +66,7 @@ class BlurModule(BaseModule):
             e.bind("<Return>", lambda _e: self._apply_pixels())
             e.bind("<FocusOut>", lambda _e: self._apply_pixels())
             self.px_vars[key] = var
-        hint(sec.body, "Kéo trực tiếp khung màu cam trên vùng xem trước (công cụ B) để chỉnh nhanh; bấm ✕ ở góc khung "
-                       "hoặc phím Delete để xóa vùng đang chọn.").pack(fill="x", pady=(2, 0))
+        hint(sec.body, "Kéo khung cam trên hình (phím B) · ✕ hoặc Delete để xoá.").pack(fill="x", pady=(2, 0))
 
         sec = Section(self, "Cường độ")
         sec.pack(fill="x", pady=4)
@@ -71,7 +81,6 @@ class BlurModule(BaseModule):
         self.rounded = SliderRow(sec.body, "Bo góc", from_=0, to=100, step=5, suffix="%",
                                  on_change=lambda v: self._set("rounded", float(v), preview=False), on_release=rel)
         pack_rows(sec.body, [self.style, self.strength, self.feather, self.opacity, self.rounded])
-        hint(sec.body, "Độ mờ cao + mềm mép vừa phải giúp vùng che hòa tự nhiên vào khung hình.").pack(fill="x")
 
         sec = Section(self, "Thời gian hiệu lực")
         sec.pack(fill="x", pady=4)
@@ -104,6 +113,7 @@ class BlurModule(BaseModule):
         self._loading = True
         try:
             self.enable.set(cfg.enable)
+            self.auto.set(cfg.auto_detect)
             self._refresh_menu()
             r = self._active()
             W, H = self._frame_size()
@@ -122,9 +132,64 @@ class BlurModule(BaseModule):
                     self.px_vars[k].set("0")
         finally:
             self._loading = False
+        self._update_auto_status()
 
     def on_active_changed(self) -> None:
         self.refresh()
+
+    # ── Tự dò chữ cứng ───────────────────────────────────────────────────
+    def _auto_toggled(self, on: bool) -> None:
+        if self._loading:
+            return
+        self.set_value(self.state.blur, "auto_detect", bool(on))
+        self._update_auto_status()
+        if on:
+            self.window.preview.ensure_hardsub()
+
+    def _update_auto_status(self) -> None:
+        from app.services.hardsub import cached_region
+
+        it = self.state.active
+        if not self.state.blur.auto_detect:
+            self.auto_status.info("")
+        elif it is None:
+            self.auto_status.info("Chọn một video.")
+        else:
+            r = cached_region(it)
+            if r is False:
+                self.auto_status.info("Chưa dò video này — máy sẽ tự dò khi xem trước / chuẩn bị / render.")
+            elif r is None:
+                self.auto_status.warn(f"{it.name}: không thấy chữ cứng (không che thêm).")
+            else:
+                self.auto_status.ok(f"{it.name}: che dải {r['y'] * 100:.0f}–{(r['y'] + r['h']) * 100:.0f}% chiều cao, "
+                                    f"rộng {r['w'] * 100:.0f}% (chữ có ở {r.get('confidence', 0) * 100:.0f}% khung).")
+
+    def _detect_now(self) -> None:
+        from app.services.hardsub import ensure_region, forget
+
+        it = self.state.active
+        if it is None:
+            return
+        forget(it)
+        self.auto_status.warn("Đang dò chữ cứng…")
+        ff, win = self.window.ffmpeg, self.window
+
+        def work():
+            info = ff.probe(it.path)
+            return ensure_region(it, ff, info.duration, log=win.log_bg)
+
+        def done(_r, error):
+            if error:
+                self.auto_status.error(f"Lỗi: {error}")
+                return
+            if not self.state.blur.auto_detect:
+                self.state.blur.auto_detect = True
+                self.state.config_changed("blur")
+                self.refresh()
+            self._update_auto_status()
+            win.preview.schedule_refresh(0)
+
+        win.run_bg(work, done)
 
     def _refresh_menu(self) -> None:
         rs = self._regions()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -10,8 +9,8 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.widgets.ui import button
-from app.core.state import STORY_RATIOS, STORY_RESOLUTIONS
-from app.services.gemini_client import IMAGE_MODELS, TEXT_MODELS, VIDEO_MODELS
+from app.core.state import STORY_RATIOS, STORY_RESOLUTIONS, provider_or_default
+from app.services.gemini_models import image_models, text_models, video_models
 from app.services.story.engine import StoryEngine
 from app.services.story.project import StoryProject
 from app.services.story.prompts import LANGUAGES, LENGTHS, MASTER_PROMPTS, TONES, load_competitors, master_prompt_text
@@ -19,6 +18,7 @@ from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import (ButtonRow, ComboRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel,
                                    SwitchRow, hint, pack_rows)
 from app.ui.widgets.voice_picker import VoicePicker
+from app.core.platform import open_path
 
 _LENGTH_LABELS = {v[0]: k for k, v in LENGTHS.items()}
 _PROMPT_LABELS = {v[0]: k for k, v in MASTER_PROMPTS.items()}
@@ -65,7 +65,7 @@ class StoryModule(BaseModule):
         self.genre = EntryRow(sec.body, "Thể loại", placeholder="vd: chuyện đời, trinh thám, cổ tích…",
                               on_change=s(cfg, "genre", preview=False))
         self.competitor = OptionRow(sec.body, "Phong cách kênh", ["(không)"], on_change=self._competitor_changed)
-        self.text_model = ComboRow(sec.body, "Model viết", TEXT_MODELS, on_change=s(cfg, "text_model", preview=False))
+        self.text_model = ComboRow(sec.body, "Model viết", text_models(), on_change=s(cfg, "text_model", preview=False))
         pack_rows(sec.body, [self.language, self.length, self.tone, self.genre, self.competitor, self.text_model])
         ButtonRow(sec.body, [("🏷 Quản lý phong cách kênh…", self._manage_competitors, None)]).pack(fill="x", pady=(4, 0))
 
@@ -76,7 +76,7 @@ class StoryModule(BaseModule):
                                        on_change=self._prompt_preset_changed)
         self.prompt_custom = EntryRow(sec.body, "Thêm vào prompt", placeholder="vd: Vietnamese village, 1990s",
                                       on_change=s(cfg, "master_prompt_custom", preview=False))
-        self.image_model = ComboRow(sec.body, "Model ảnh", IMAGE_MODELS, on_change=s(cfg, "image_model", preview=False))
+        self.image_model = ComboRow(sec.body, "Model ảnh", image_models(), on_change=s(cfg, "image_model", preview=False))
         self.ratio = OptionRow(sec.body, "Khung hình", STORY_RATIOS, on_change=s(cfg, "ratio", preview=False))
         self.resolution = OptionRow(sec.body, "Độ phân giải", STORY_RESOLUTIONS, on_change=s(cfg, "resolution", preview=False))
         self.kenburns = SliderRow(sec.body, "Chuyển động ảnh", from_=0, to=25, step=1, suffix="%",
@@ -91,11 +91,11 @@ class StoryModule(BaseModule):
         sec = Section(self, "Video AI (Veo)", subtitle="tuỳ chọn, tốn phí API")
         sec.pack(fill="x", pady=4)
         self.use_video = SwitchRow(sec.body, "Tạo clip AI thay cho ảnh tĩnh", on_change=s(cfg, "use_ai_video", preview=False))
-        self.video_model = ComboRow(sec.body, "Model video", VIDEO_MODELS, on_change=s(cfg, "video_model", preview=False))
+        self.video_model = ComboRow(sec.body, "Model video", video_models(), on_change=s(cfg, "video_model", preview=False))
         self.video_dur = SliderRow(sec.body, "Thời lượng clip", from_=4, to=8, step=1, suffix="s",
                                    on_change=s(cfg, "video_duration", cast=int, preview=False))
         pack_rows(sec.body, [self.use_video, self.video_model, self.video_dur])
-        hint(sec.body, "Clip AI được tạo từ ảnh của cảnh (image-to-video) và lặp cho đủ thời lượng lời kể.").pack(fill="x")
+        hint(sec.body, "Clip AI làm từ ảnh của cảnh, lặp cho đủ lời kể.").pack(fill="x")
 
         # ── Giọng kể ─────────────────────────────────────────────────────
         sec = Section(self, "Giọng kể mặc định", subtitle="nhân vật có giọng riêng: xem Phân vai")
@@ -131,8 +131,7 @@ class StoryModule(BaseModule):
         self.auto_queue.pack(fill="x", pady=2)
         self.run_status = StatusLabel(sec.body, "")
         self.run_status.pack(fill="x")
-        hint(sec.body, "Video ghép xong được đưa vào hàng đợi cùng SRT — dùng các module Phụ đề, Nhạc nền, "
-                       "Logo, Màu sắc rồi bấm Render như video thường.").pack(fill="x", pady=(2, 0))
+        hint(sec.body, "Video ghép xong vào hàng đợi kèm phụ đề — chỉnh tiếp như video thường.").pack(fill="x", pady=(2, 0))
 
         self._load_last_project()
 
@@ -200,7 +199,7 @@ class StoryModule(BaseModule):
             if c.get("master_prompt_custom"):
                 cfg.master_prompt_custom = c["master_prompt_custom"]
             if c.get("voice_id"):
-                cfg.provider = c.get("voice_provider", cfg.provider)
+                cfg.provider = provider_or_default(c.get("voice_provider", cfg.provider))
                 cfg.voice_id = c["voice_id"]
                 cfg.voice_language = "-".join(c["voice_id"].split("-")[:2]) if c["voice_id"].count("-") >= 2 else cfg.voice_language
             if c.get("voice_speed"):
@@ -298,7 +297,7 @@ class StoryModule(BaseModule):
     def _open_folder(self) -> None:
         if self.project:
             self.project.dir.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(self.project.dir))
+            open_path(str(self.project.dir))
 
     def _name_changed(self, v: str) -> None:
         if self.project and v.strip():

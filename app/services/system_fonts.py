@@ -11,8 +11,15 @@ _cache: list[str] | None = None
 _registry: dict[str, str] | None = None
 _PREFERRED = ["Arial", "Segoe UI", "Roboto", "Montserrat", "Open Sans", "Times New Roman", "Tahoma",
               "Verdana", "Calibri", "Impact", "Bahnschrift", "Consolas", "Georgia"]
-_FONT_DIRS = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts",
-              Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts"]
+if sys.platform == "win32":
+    _FONT_DIRS = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts",
+                  Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts"]
+elif sys.platform == "darwin":
+    _FONT_DIRS = [Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"), Path("/Library/Fonts"),
+                  Path.home() / "Library" / "Fonts"]
+else:
+    _FONT_DIRS = [Path("/usr/share/fonts"), Path("/usr/local/share/fonts"), Path.home() / ".local" / "share" / "fonts",
+                  Path.home() / ".fonts"]
 
 
 def list_fonts(root=None) -> list[str]:
@@ -51,7 +58,33 @@ def _load_registry() -> dict[str, str]:
                     break
                 out[name] = str(val)
                 i += 1
+    else:
+        out = _scan_font_files()
     _registry = out
+    return out
+
+
+def _scan_font_files() -> dict[str, str]:
+    """macOS/Linux không có registry font → đọc tên (family + style) trong từng file .ttf/.otf/.ttc."""
+    from PIL import ImageFont
+
+    out: dict[str, str] = {}
+    for d in _FONT_DIRS:
+        if not d.is_dir():
+            continue
+        for f in d.rglob("*"):
+            ext = f.suffix.lower()
+            if ext not in (".ttf", ".otf", ".ttc"):
+                continue
+            for index in range(8 if ext == ".ttc" else 1):       # .ttc chứa nhiều kiểu (Regular, Bold…)
+                try:
+                    fam, style = ImageFont.truetype(str(f), 12, index=index).getname()
+                except Exception:
+                    break
+                if not fam:
+                    continue
+                key = fam if (style or "").lower() in ("", "regular", "normal", "roman") else f"{fam} {style}"
+                out.setdefault(key, str(f))
     return out
 
 
@@ -91,7 +124,7 @@ def font_file(family: str, *, bold: bool = False, italic: bool = False) -> Path 
             p = _resolve(v)
             if p:
                 return p
-    for fallback in ("arial", "segoe ui", "tahoma"):
+    for fallback in ("arial", "segoe ui", "tahoma", "helvetica neue", "helvetica", "dejavu sans"):
         if fallback in normalized:
             p = _resolve(normalized[fallback])
             if p:

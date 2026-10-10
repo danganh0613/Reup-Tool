@@ -28,8 +28,7 @@ class BGMModule(BaseModule):
     def build(self) -> None:
         cfg = self.state.bgm
         s = self.setter
-        hint(self, "Xếp từng đoạn nhạc đúng vị trí trên video. Chỉ dùng nhạc bạn có quyền sử dụng; timeline giúp thay "
-                   "hoặc bỏ đúng vùng cần.").pack(fill="x", pady=(0, 4))
+        hint(self, "Xếp từng đoạn nhạc đúng chỗ trên video. Chỉ dùng nhạc bạn có quyền dùng.").pack(fill="x", pady=(0, 4))
         self.enable = SwitchRow(self, "Thêm nhạc nền vào video", on_change=s(cfg, "enable", preview=False))
         self.enable.pack(fill="x", pady=(0, 4))
 
@@ -56,7 +55,7 @@ class BGMModule(BaseModule):
                              pick_time=lambda: self.window.preview.t)
         self.offset = TimeEntry(sec.body, "Cắt đầu bài (s)", on_change=lambda v: self._set("offset", max(0.0, parse_hhmmss(v))))
         pack_rows(sec.body, [self.start, self.end, self.offset])
-        hint(sec.body, "Kết thúc = 0: chơi tới hết video. «⌖ Đang xem» lấy vị trí đang xem trước.").pack(fill="x")
+        hint(sec.body, "Kết thúc = 0: tới hết video.").pack(fill="x")
 
         sec = Section(self, "Trộn âm")
         sec.pack(fill="x", pady=4)
@@ -69,7 +68,7 @@ class BGMModule(BaseModule):
         self.loop = SwitchRow(sec.body, "Lặp nhạc để phủ kín khoảng đã chọn", on_change=lambda v: self._set("loop", bool(v)))
         self.duck = SwitchRow(sec.body, "Tự hạ nhạc khi có tiếng nói / giọng đọc", on_change=s(cfg, "ducking", preview=False))
         pack_rows(sec.body, [self.volume, self.fade_in, self.fade_out, self.loop, self.duck])
-        hint(sec.body, "Bật Lặp + Kết thúc = 0: lặp tới hết video. Fade 0.2–0.5s giúp chuyển êm.").pack(fill="x")
+        hint(sec.body, "Lặp + Kết thúc = 0: lặp hết video · Fade 0.2–0.5 s cho êm.").pack(fill="x")
 
     # ── Trạng thái ───────────────────────────────────────────────────────
     def _clips(self) -> list[dict]:
@@ -131,7 +130,7 @@ class BGMModule(BaseModule):
             x0, x1 = int(w * min(dur, s0) / dur), int(w * min(dur, e0) / dur)
             col = T.ACCENT if i == getattr(self, "_idx", 0) else T.ACCENT_SOFT
             cv.create_rectangle(x0, 8 + (i % 2) * 14, max(x0 + 3, x1), 22 + (i % 2) * 14, fill=col, outline="")
-            cv.create_text(x0 + 4, 15 + (i % 2) * 14, text=Path(c.get("path", "")).stem[:24], fill="#0B1220" if i == getattr(self, "_idx", 0) else T.TEXT,
+            cv.create_text(x0 + 4, 15 + (i % 2) * 14, text=Path(c.get("path", "")).stem[:24], fill=T.ON_ACCENT if i == getattr(self, "_idx", 0) else T.TEXT,
                            anchor="w", font=(T.UI_FONT, 9))
         t = self.window.preview.t
         x = int(w * min(dur, t) / dur)

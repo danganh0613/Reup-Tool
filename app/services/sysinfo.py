@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import threading
 from functools import lru_cache
 
 
+def _mac_chip() -> str | None:
+    """macOS: «Apple M2 Pro» (GPU nằm chung chip)."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
+                             timeout=5).stdout.strip()
+        return out if out.startswith("Apple") else None
+    except Exception:
+        return None
+
+
 @lru_cache(maxsize=1)
 def gpu_name() -> str:
+    if sys.platform == "darwin":
+        return _mac_chip() or "GPU không xác định"
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],

@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 from app.core.state import (BLUR_STYLES, KENBURNS, MOTIONS, SAFE_ZONES, AppState, BGMConfig, BlurConfig,
-                            BrandConfig, ColorConfig, TrimConfig, VideoItem)
+                            BrandConfig, ColorConfig, SubtitleConfig, TrimConfig, VideoItem)
 from app.services.ffmpeg import MediaInfo, ffescape_path, parse_hhmmss
 from app.services.render_pipeline import AudioExtra, Graph, RenderContext, Stage, TrimSpec
 from app.services.system_fonts import font_file
@@ -142,12 +142,12 @@ def blur_stage(cfg: BlurConfig) -> Stage:
             g.add(f"{cur}split=2{base}{reg}")
             f = [f"crop={w}:{h}:{x}:{y}"]
             if style == BLUR_STYLES[1]:
-                p = 4 + strength * 0.36
+                p = max(1.5, (4 + strength * 0.36) * ctx.px)
                 f += [f"scale=iw/{p:.2f}:ih/{p:.2f}:flags=area", f"scale={w}:{h}:flags=neighbor"]
             elif style == BLUR_STYLES[2]:
                 f += ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill"]
             else:
-                f += [f"gblur=sigma={1 + strength * 0.5:.1f}:steps=2"]
+                f += [f"gblur=sigma={(1 + strength * 0.5) * ctx.px:.1f}:steps=2"]
             blurred = g.chain(reg, f)
             rounded = float(r.get("rounded", 0) or 0)
             if feather > 0 or opacity < 100 or rounded > 0:
@@ -411,16 +411,24 @@ def bgm_extras(cfg: BGMConfig) -> Callable[[Graph, RenderContext], list[AudioExt
             idx = g.add_input(args)
             end = max(0.0, float(clip.get("end", 0) or 0)) / ctx.speed
             span = max(0.1, (min(D, end) - start) if end > start else (D - start))
+            # xem trước từ giữa video (ctx.t0): bỏ phần nhạc đã qua, dời phần chưa tới
+            skip = max(0.0, ctx.t0 - start) if ctx.preview else 0.0
+            if skip >= span:
+                continue
+            delay = max(0.0, start - ctx.t0) if ctx.preview else start
+            left = span - skip
             f: list[str] = []
-            if offset > 0:
-                f += [f"atrim=start={offset:.3f}", "asetpts=PTS-STARTPTS"]
-            f += [f"atrim=end={span:.3f}", "asetpts=PTS-STARTPTS"]
-            if fi > 0:
-                f.append(f"afade=t=in:st=0:d={fi:.2f}")
+            if offset + skip > 0:
+                f += [f"atrim=start={offset + skip:.3f}", "asetpts=PTS-STARTPTS"]
+            f += [f"atrim=end={left:.3f}", "asetpts=PTS-STARTPTS"]
+            if fi > skip:
+                f.append(f"afade=t=in:st=0:d={fi - skip:.2f}")
             if fo > 0 and span > fo:
-                f.append(f"afade=t=out:st={span - fo:.3f}:d={fo:.2f}")
-            if start > 0:
-                ms = int(start * 1000)
+                st_out = span - fo - skip
+                f.append(f"afade=t=out:st={st_out:.3f}:d={fo:.2f}" if st_out >= 0 else
+                         f"afade=t=out:st=0:d={left:.2f}")
+            if delay > 0:
+                ms = int(delay * 1000)
                 f.append(f"adelay={ms}|{ms}")
             f.append(f"volume={vol:.3f}")
             out.append(AudioExtra(label=f"[{idx}:a]", filters=f, duck=cfg.ducking))
@@ -445,6 +453,69 @@ class ModuleStages:
         self.audio_orig_filters: list[str] = []
 
 
+def subtitle_for(state: AppState, item: VideoItem, info: MediaInfo) -> SubtitleConfig:
+    """Cấu hình phụ đề thực dùng cho ``item``: bật «đặt lên chữ cứng» + đã dò được vùng chữ cứng → khung phụ đề mới
+    nằm GIỮA vùng chữ gốc đã che (mỗi video một chỗ), khối chữ căn giữa khung — câu 1 hay 2 dòng đều nằm đúng chỗ chữ
+    cũ (trước: bám đáy dòng chữ cũ nên câu 2 dòng lấn lên trên vùng che); không thì giữ nguyên khung chung."""
+    scfg = state.subtitle
+    if not (scfg.follow_hardsub and scfg.use_box and state.blur.auto_detect and info.width and info.height):
+        return scfg
+    deg = float(state.color.rotate) % 360 if state.color.enable else 0.0
+    if abs(deg - 90) < 0.01 or abs(deg - 270) < 0.01:
+        return scfg
+    from app.services.hardsub import cached_region
+    from app.services.render_pipeline import output_geometry, source_to_output
+    from app.services.subtitle_style import box_height_px
+
+    region = cached_region(item)
+    if not isinstance(region, dict):
+        return scfg
+    try:
+        x, y, w, h = float(region["x"]), float(region["y"]), float(region["w"]), float(region["h"])
+    except (KeyError, TypeError, ValueError):
+        return scfg
+    # vùng che nới lề trên / dưới bằng nhau → tâm vùng = tâm dòng chữ gốc
+    cx, cy = source_to_output(info, state.video, x + w / 2, y + h / 2)
+    if not (0.05 < cy < 0.98 and 0.0 < cx < 1.0):
+        return scfg                                    # chữ gốc nằm ngoài khung ra (bị cắt) → giữ khung chung
+    geo = output_geometry(info, state.video)
+    bh = min(0.9, box_height_px(scfg, geo.width, geo.height) / max(1, geo.height))
+    bw = min(1.0, scfg.box_w)
+    bx = max(0.0, min(1.0 - bw, cx - bw / 2))
+    by = max(0.0, min(1.0 - bh, cy - bh / 2))
+    return replace(scfg, box_x=round(bx, 4), box_w=round(bw, 4), box_y=round(by, 4), box_h=round(bh, 4),
+                   box_center=True)
+
+
+def hardsub_blur_region(state: AppState, item: VideoItem, info: MediaInfo) -> dict | None:
+    """Vùng che chữ cứng của ``item`` (toạ độ nguồn) — None nếu chưa dò / không có. Phụ đề mới đang đặt lên chỗ chữ
+    cứng → nới vùng che phủ trọn khối chữ mới (2 dòng, căn giữa vùng cũ) + lề bằng độ mềm mép, để chữ mới luôn nằm
+    trên nền đã che, không lấn ra phần video còn rõ."""
+    from app.services.hardsub import cached_region
+    from app.services.render_pipeline import output_to_source
+
+    region = cached_region(item)
+    if not isinstance(region, dict):
+        return None
+    sub = subtitle_for(state, item, info)
+    if not sub.box_center:                             # không bám chỗ chữ cứng → che đúng vùng đã dò
+        return region
+    try:
+        x, y, w, h = float(region["x"]), float(region["y"]), float(region["w"]), float(region["h"])
+        feather = float(region.get("feather", 18.0))
+    except (KeyError, TypeError, ValueError):
+        return region
+    pts = [output_to_source(info, state.video, px, py)
+           for px in (sub.box_x, sub.box_x + sub.box_w) for py in (sub.box_y, sub.box_y + sub.box_h)]
+    sx0, sx1 = min(p[0] for p in pts), max(p[0] for p in pts)
+    sy0, sy1 = min(p[1] for p in pts), max(p[1] for p in pts)
+    pad_y = feather / max(1, info.height) + (sy1 - sy0) * 0.08     # mép mềm của vùng che không được ăn vào chữ
+    pad_x = feather / max(1, info.width)
+    x0, x1 = max(0.0, min(x, sx0 - pad_x)), min(1.0, max(x + w, sx1 + pad_x))
+    y0, y1 = max(0.0, min(y, sy0 - pad_y)), min(1.0, max(y + h, sy1 + pad_y))
+    return {**region, "x": round(x0, 4), "y": round(y0, 4), "w": round(x1 - x0, 4), "h": round(y1 - y0, 4)}
+
+
 def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: bool = True,
             trim_override: TrimSpec | None = None) -> ModuleStages:
     eff = info
@@ -454,7 +525,13 @@ def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: 
     stages = [kenburns_stage(state.color), texture_stage(state.color)]
     src_stages: list[Stage] = []
     if include_blur:
-        src_stages.append(blur_stage(state.blur))
+        blur = state.blur
+        if blur.auto_detect:
+            # vùng chữ cứng đã dò của video này (dò ở bước chuẩn bị), nới cho phủ trọn phụ đề mới đặt lên đó
+            region = hardsub_blur_region(state, item, info)
+            if isinstance(region, dict):
+                blur = replace(blur, enable=True, regions=[r for r in blur.regions if blur.enable] + [region])
+        src_stages.append(blur_stage(blur))
     stages.append(brand_stage(state.brand))
     ms = ModuleStages(
         info=eff,

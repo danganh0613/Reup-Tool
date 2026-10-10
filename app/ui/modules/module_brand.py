@@ -97,7 +97,7 @@ class BrandModule(BaseModule):
                                 on_change=s(cfg, "safe_margin", cast=int, preview=False), on_release=rel)
         self.zone = OptionRow(tb, "Vùng chạy", SAFE_ZONES, on_change=s(cfg, "safe_zone"))
         pack_rows(tb, [self.cycle, self.margin, self.zone])
-        hint(tb, "Chu kỳ gốc càng lớn thì chuyển động càng chậm. Lề an toàn tránh chạm viền.").pack(fill="x")
+        hint(tb, "Chu kỳ lớn = chuyển động chậm · Lề an toàn: tránh sát viền.").pack(fill="x")
         sec = Section(tb, "Khung viền trang trí")
         sec.pack(fill="x", pady=(8, 4))
         self.frame_enable = SwitchRow(sec.body, "Bật khung viền", on_change=s(cfg, "frame_enable"))

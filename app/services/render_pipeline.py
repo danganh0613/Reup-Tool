@@ -13,12 +13,18 @@ tên tương đối, tránh vấn đề escape đường dẫn Windows trong fil
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import subprocess
+import sys
 import threading
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.platform import NO_WINDOW
 from app.core.state import (ENCODE_PRESETS, FIT_MODES, RATIO_VALUES, RESOLUTIONS, VIDEO_CODECS, VideoConfig,
                             VideoItem)
 from app.services.ffmpeg import FFmpeg, MediaInfo, atempo_chain
@@ -28,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 _RATIO_VALUE = {k: v for k, v in RATIO_VALUES.items() if v}
 _RES_SHORT = {RESOLUTIONS[1]: 720, RESOLUTIONS[2]: 1080, RESOLUTIONS[3]: 1440, RESOLUTIONS[4]: 2160}
+
+MASTER_TP = -1.5        # trần true-peak của phần tiếng trước khi nén AAC (AAC đẩy đỉnh thêm ~0,3–0,5 dB → file ≤ −1 dBTP)
+DUCK_DB = -15.0         # nhạc nền / âm gốc hạ bấy nhiêu dB khi có giọng
+DUCK_HOLD = 1.0         # khoảng nghỉ giữa hai câu ngắn hơn → giữ nguyên mức hạ (không «bơm» theo từng câu)
+DUCK_ATTACK = 0.15      # bắt đầu hạ trước câu
+DUCK_RELEASE = 0.40     # trả lại sau câu
 
 
 def _even(n: float) -> int:
@@ -136,6 +148,7 @@ class RenderContext:
     src_width: int = 0       # kích thước khung nguồn (stage chạy trước khi đổi khung dùng cái này)
     src_height: int = 0
     src_t0: float = 0.0      # mốc thời gian theo nguồn (trước khi đổi tốc độ / cắt)
+    px: float = 1.0          # hệ số cỡ điểm ảnh so với bản render (phát xem trước ở cỡ nhỏ: độ mờ… co theo)
 
     def t(self) -> str:
         """Biểu thức thời gian tuyệt đối dùng trong filter."""
@@ -189,20 +202,53 @@ def source_rect_in_output(info: MediaInfo, cfg: VideoConfig) -> tuple[float, flo
     return (W - dw) / 2 / W, (H - dh) / 2 / H, dw / W, dh / H
 
 
+def source_to_output(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
+    """Điểm (x, y) theo tỉ lệ khung NGUỒN → tỉ lệ khung RA (qua lật gương, phóng to, đổi khung)."""
+    zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
+    if cfg.flip_h:
+        x = 1.0 - x
+    x, y = (x - 0.5) * zoom + 0.5, (y - 0.5) * zoom + 0.5
+    ox, oy, sx, sy = source_rect_in_output(info, cfg)
+    return ox + x * sx, oy + y * sy
+
+
+def output_to_source(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
+    """Ngược của ``source_to_output``: điểm theo tỉ lệ khung RA → tỉ lệ khung NGUỒN (có thể nằm ngoài 0..1)."""
+    zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
+    ox, oy, sx, sy = source_rect_in_output(info, cfg)
+    x, y = (x - ox) / max(1e-9, sx), (y - oy) / max(1e-9, sy)
+    x, y = (x - 0.5) / zoom + 0.5, (y - 0.5) / zoom + 0.5
+    if cfg.flip_h:
+        x = 1.0 - x
+    return x, y
+
+
 def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_name: str | None = None,
                       stages: list[Stage] | None = None, pre_stages: list[Stage] | None = None,
                       src_stages: list[Stage] | None = None,
                       trim: TrimSpec | None = None, include_fps: bool = True, t0: float = 0.0,
-                      preview: bool = False, first_extra_input: int = 1) -> VideoGraph:
+                      preview: bool = False, first_extra_input: int = 1, preview_scale: float = 1.0,
+                      extend: float = 0.0) -> VideoGraph:
     """Dựng toàn bộ nhánh video. ``src_stages`` áp thẳng lên khung nguồn (che mờ — toạ độ theo video gốc, đi theo
-    mọi kiểu khung ra); ``pre_stages`` chạy sau lật/phóng nhưng trước khi đổi khung (màu, hiệu ứng)."""
+    mọi kiểu khung ra); ``pre_stages`` chạy sau lật/phóng nhưng trước khi đổi khung (màu, hiệu ứng).
+    ``extend``: giữ khung cuối thêm bấy nhiêu giây (giọng dài hơn video → kéo dài hình, không cắt giọng).
+
+    ``preview_scale`` < 1 (chỉ khi ``preview``): xử lý cả chuỗi ở cỡ nhỏ (phát xem trước theo thời gian thực) —
+    nguồn thu nhỏ trước, khung ra cùng tỉ lệ; vị trí/cỡ của các lớp phủ tính theo tỉ lệ khung nên không đổi."""
     g = Graph(first_extra_input)
     geo = output_geometry(info, cfg)
+    k = preview_scale if preview and 0.05 < preview_scale < 0.999 else 1.0
+    if k < 1.0:
+        geo = OutputGeometry(_even(geo.width * k), _even(geo.height * k), geo.mode)
     speed = max(0.25, min(4.0, cfg.speed / 100.0))
     zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
     src_dur = info.duration
     input_args: list[str] = []
     vsrc, asrc = "[0:v]", ("[0:a]" if info.has_audio else None)
+    src_w, src_h = max(2, info.width), max(2, info.height)
+    if k < 1.0:
+        src_w, src_h = _even(src_w * k), _even(src_h * k)
+        vsrc = g.chain(vsrc, [f"scale={src_w}:{src_h}"])
 
     # ── Cắt ──────────────────────────────────────────────────────────────
     src_offset = 0.0
@@ -230,10 +276,11 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
                 vsrc = "[tvcat]"
             src_dur = sum(e - s for s, e in segs)
 
+    extend = max(0.0, extend) if not preview else 0.0
     ctx = RenderContext(width=geo.width, height=geo.height, fps=info.fps or 30.0,
-                        duration=src_dur / speed if speed else src_dur, work_dir=work_dir, t0=t0,
-                        preview=preview, speed=speed, src_width=max(2, info.width), src_height=max(2, info.height),
-                        src_t0=t0 * speed + src_offset)
+                        duration=(src_dur / speed if speed else src_dur) + extend, work_dir=work_dir, t0=t0,
+                        preview=preview, speed=speed, src_width=src_w, src_height=src_h,
+                        src_t0=t0 * speed + src_offset, px=k)
 
     # ── Stage trên khung nguồn (che mờ) ──────────────────────────────────
     cur = vsrc
@@ -259,7 +306,7 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
         bg_src, fg_src = g.label("bgsrc"), g.label("fgsrc")
         g.add(f"{cur}split=2{bg_src}{fg_src}")
         bg = g.chain(bg_src, [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}",
-                              "gblur=sigma=28", "eq=brightness=-0.08"])
+                              f"gblur=sigma={28 * k:.1f}", "eq=brightness=-0.08"])
         fg = g.chain(fg_src, [f"scale={W}:{H}:force_original_aspect_ratio=decrease"])
         cur = g.label()
         g.add(f"{bg}{fg}overlay=(W-w)/2:(H-h)/2{cur}")
@@ -284,7 +331,7 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
     for st in stages or []:
         cur = st(g, cur, ctx)
 
-    tail: list[str] = []
+    tail: list[str] = [f"tpad=stop_mode=clone:stop_duration={extend:.3f}"] if extend > 0.001 else []
     if ass_name:
         tail.append(f"ass={ass_name}")
     tail.append("format=yuv420p")
@@ -325,10 +372,81 @@ class AudioExtra:
     duck: bool = False           # tự hạ khi track chính có tiếng
 
 
+def voice_timeline_speed(voice: Path | str | None) -> float:
+    """Track giọng được dựng theo tốc độ video nào (ghi trong .json đi kèm). Track cũ dựng theo mốc NGUỒN → 1.0:
+    khi render / xem trước, giọng cần atempo = tốc độ hiện tại ÷ giá trị này."""
+    if not voice:
+        return 1.0
+    try:
+        data = json.loads(Path(voice).with_suffix(".json").read_text(encoding="utf-8"))
+        return max(0.25, min(4.0, float(data.get("timeline_speed") or 1.0)))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 1.0
+
+
+def duck_envelope(voice: Path, out: Path, *, duration: float, tempo: float = 1.0, depth_db: float = DUCK_DB) -> Path | None:
+    """Đường bao hạ nhạc nền / âm gốc theo chỗ có giọng (WAV stereo 8 kHz, giá trị mẫu = hệ số nhân, dùng với
+    ``amultiply``): hạ từ ``DUCK_ATTACK`` giây trước câu, trả lại trong ``DUCK_RELEASE`` giây sau câu, giữ nguyên mức
+    hạ qua khoảng nghỉ < ``DUCK_HOLD`` → nền không nhấp nhô theo từng câu như sidechaincompress.
+    ``tempo``: atempo sẽ áp cho giọng khi render (track cũ theo mốc nguồn) — mốc giọng ÷ tempo = mốc video ra."""
+    import numpy as np
+
+    from app.services.tts import postprocess
+
+    r = postprocess.decode_any(Path(voice))
+    if r is None or duration <= 0:
+        return None
+    pcm, sr = r
+    env = postprocess.envelope(np.frombuffer(pcm, "<i2").astype(np.float32) / 32768, sr)       # khung 10 ms
+    if len(env) == 0 or env.max() <= 0:
+        return None
+    on = env > max(env.max() * 10 ** (-40 / 20), 10 ** (-55 / 20))
+    spans: list[list[float]] = []
+    i = 0
+    while i < len(on):
+        if not on[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(on) and on[j]:
+            j += 1
+        s, e = i * postprocess.FRAME / tempo, j * postprocess.FRAME / tempo
+        if spans and s - spans[-1][1] < DUCK_HOLD:
+            spans[-1][1] = e
+        else:
+            spans.append([s, e])
+        i = j
+    rate = 1000                                                    # tính ở 1 ms rồi nội suy lên 8 kHz
+    t = np.arange(int(duration * rate) + 1) / rate
+    act = np.zeros_like(t)
+    for s, e in spans:
+        up = np.clip((t - (s - DUCK_ATTACK)) / DUCK_ATTACK, 0, 1)
+        down = np.clip(1 - (t - e) / DUCK_RELEASE, 0, 1)
+        a = np.minimum(0.5 - 0.5 * np.cos(np.pi * up), 0.5 - 0.5 * np.cos(np.pi * down))
+        np.maximum(act, a, out=act)
+    gain = 10 ** (depth_db * act / 20)
+    n8 = int(duration * 8000)
+    g8 = (np.clip(np.interp(np.arange(n8) / 8000, t, gain), 0, 32767 / 32768) * 32768).astype("<i2")
+    with wave.open(str(out), "wb") as wf:
+        wf.setnchannels(2)              # stereo sẵn: ffmpeg nâng mono → stereo nhân 0,707 (−3 dB) vào hệ số
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(np.repeat(g8, 2).tobytes())
+    return out
+
+
 def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src: str | None,
                       voice_label: str | None, extras: list[AudioExtra] | None = None,
-                      duration: float = 0.0, orig_filters: list[str] | None = None) -> str | None:
-    """Thêm nhánh audio vào ``g``; trả về nhãn ra (hoặc None nếu không có audio)."""
+                      duration: float = 0.0, orig_filters: list[str] | None = None,
+                      voice_tempo: float | None = None, duck_label: str | None = None,
+                      preview_loudness: float | None = None) -> str | None:
+    """Thêm nhánh audio vào ``g``; trả về nhãn ra (hoặc None nếu không có audio). Chưa chuẩn hoá độ to — bản render
+    làm 2 lượt riêng ở ``master_audio``.
+
+    ``voice_tempo``: atempo cho giọng (None = theo tốc độ video, track cũ dựng theo mốc nguồn); track mới đã dựng theo
+    mốc video ra → 1.0 (không time-stretch lần hai). ``duck_label``: đường bao ``duck_envelope`` (48 kHz stereo) —
+    có thì hạ âm gốc / nhạc nền theo đó, không có thì sidechaincompress như trước. ``preview_loudness``: phát xem
+    trước — chuẩn hoá nhanh 1 lượt cho gần độ to bản render."""
     speed = max(0.25, min(4.0, cfg.speed / 100.0))
     use_orig = bool(audio_src) and cfg.keep_original_audio and not cfg.mute
     use_voice = bool(voice_label) and not cfg.mute
@@ -348,37 +466,51 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
         f.append(f"volume={max(0.0, cfg.original_volume) / 100:.3f}")
         orig = g.chain(audio_src, f, "[orig]")
     if use_voice:
+        vt = speed if voice_tempo is None else voice_tempo
         f = ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"]
-        if abs(speed - 1.0) > 0.001:
-            f.append(atempo_chain(speed))
+        if abs(vt - 1.0) > 0.001:
+            f.append(atempo_chain(vt))
         f.append(f"volume={max(0.0, cfg.tts_volume) / 100:.3f}")
         if not use_orig and duration > 0:
             f.append(f"apad=whole_dur={duration:.3f}")
         voice = g.chain(voice_label, f, "[voice]")
 
+    duck_orig = bool(orig and voice and cfg.adaptive_ducking)
+    ducked = [i for i, ex in enumerate(extras) if ex.duck] if (orig or voice) else []
+    envs: list[str] = []
+    if duck_label and voice and (duck_orig or ducked):
+        n = int(duck_orig) + len(ducked)
+        envs = [f"[duk{k}]" for k in range(n)]
+        g.add(f"{duck_label}asplit={n}{''.join(envs)}" if n > 1 else f"{duck_label}anull{envs[0]}")
+
     if orig and voice:
-        if cfg.adaptive_ducking:
+        if duck_orig and envs:
+            g.add(f"{orig}{envs.pop(0)}amultiply[ducked]")
+            orig = "[ducked]"
+        elif duck_orig:
             # sidechaincompress kết thúc khi nhánh sidechain (giọng) hết → đệm giọng vô hạn để âm gốc không bị cụt
             g.add(f"{voice}asplit=2[voice_a][voice_b0]")
             g.add("[voice_b0]apad[voice_b]")
-            g.add(f"{orig}[voice_b]sidechaincompress=threshold=0.035:ratio=7:attack=12:release=420:makeup=1[ducked]")
-            g.add("[ducked][voice_a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]")
-        else:
-            g.add(f"{orig}{voice}amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]")
+            g.add(f"{orig}[voice_b]sidechaincompress=threshold=0.035:ratio=6:attack=25:release=900:makeup=1[ducked]")
+            orig, voice = "[ducked]", "[voice_a]"
+        # duration=longest: giọng dài hơn âm gốc không bị cắt cứng ở cuối
+        g.add(f"{orig}{voice}amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]")
         main = "[mix]"
     else:
         main = orig or voice
 
-    ducked = [i for i, ex in enumerate(extras) if ex.duck] if main else []
-    if ducked:
+    if ducked and not envs:
         g.add(f"{main}asplit={len(ducked) + 1}[mainA]{''.join(f'[sc{i}]' for i in ducked)}")
         main = "[mainA]"
     for i, ex in enumerate(extras):
         f = ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo", *ex.filters]
         lab = g.chain(ex.label, f, f"[extra{i}]")
         if i in ducked:
-            g.add(f"[sc{i}]apad[scp{i}]")
-            g.add(f"{lab}[scp{i}]sidechaincompress=threshold=0.05:ratio=6:attack=25:release=600:makeup=1[extraD{i}]")
+            if envs:
+                g.add(f"{lab}{envs.pop(0)}amultiply[extraD{i}]")
+            else:
+                g.add(f"[sc{i}]apad[scp{i}]")
+                g.add(f"{lab}[scp{i}]sidechaincompress=threshold=0.05:ratio=6:attack=25:release=600:makeup=1[extraD{i}]")
             lab = f"[extraD{i}]"
         tracks.append(lab)
 
@@ -391,17 +523,64 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
             g.add(f"{''.join(tracks)}amix=inputs={len(tracks)}:duration=longest:dropout_transition=0:normalize=0[mixall]")
         main = "[mixall]"
 
-    if cfg.normalize_audio:
-        g.add(f"{main}loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    if preview_loudness is not None and cfg.normalize_audio:
+        g.add(f"{main}loudnorm=I={preview_loudness:.1f}:TP=-1.5:LRA=11[aout]")
     else:
         g.add(f"{main}anull[aout]")
     return "[aout]"
 
 
+def _isnum(v) -> bool:
+    try:
+        float(v)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def measure_loudness(ffmpeg: FFmpeg, path: Path) -> dict:
+    """Đo độ to (loudnorm print_format=json, chỉ đo): input_i (LUFS), input_tp (dBTP), input_lra…"""
+    res = subprocess.run([ffmpeg.ffmpeg, "-hide_banner", "-nostats", "-nostdin", "-i", str(path), "-vn",
+                          "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json", "-f", "null", "-"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+                         timeout=1800)
+    m = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", res.stderr, re.S)
+    if not m:
+        return {}
+    return {k: float(v) for k, v in json.loads(m[-1]).items() if _isnum(v)}
+
+
+def master_audio(ffmpeg: FFmpeg, src: Path, dst: Path, *, target: float | None, tp: float = MASTER_TP,
+                 cancel: threading.Event | None = None) -> dict:
+    """Bước cuối phần tiếng, 2 lượt: đo độ to → khuếch đại TUYẾN TÍNH đúng ``target`` LUFS (None = giữ nguyên) →
+    giới hạn đỉnh ở 192 kHz (≈ true peak) ≤ ``tp`` dBTP → về 48 kHz bằng soxr (resample đúng một lần).
+    Giới hạn đỉnh luôn chạy, kể cả khi tắt chuẩn hoá. Khác loudnorm 1 lượt: không «bơm», câu đầu không to vọt."""
+    st = measure_loudness(ffmpeg, src)
+    i_in = st.get("input_i")
+    gain = target - i_in if target is not None and i_in is not None and i_in > -70 else 0.0
+    limit = max(0.0625, min(1.0, 10 ** (tp / 20)))
+    out: dict = {}
+    for _attempt in range(2):
+        chain = (f"volume={gain:.2f}dB,aresample=192000:resampler=soxr,"
+                 f"alimiter=limit={limit:.4f}:attack=1:release=60:level=false:latency=true,"
+                 "aresample=48000:resampler=soxr")
+        ffmpeg.run(["-i", str(src), "-af", chain, "-c:a", "pcm_f32le", str(dst)], cancel=cancel, log_tag="master")
+        out = measure_loudness(ffmpeg, dst)
+        if target is None or "input_i" not in out or abs(out["input_i"] - target) <= 0.4:
+            break
+        gain += target - out["input_i"]               # bộ giới hạn đỉnh ăn bớt độ to → bù lại một lần
+    info = {"input_i": i_in, "gain_db": round(gain, 2), "output_i": out.get("input_i"), "output_tp": out.get("input_tp")}
+    logger.info("Chuẩn hoá âm thanh: %s", info)
+    return info
+
+
 # ── Encoder ───────────────────────────────────────────────────────────────
 
-HW_BACKENDS = ("nvenc", "qsv", "amf")     # NVIDIA · Intel (kể cả iGPU) · AMD (kể cả APU)
-BACKEND_LABEL = {"nvenc": "NVENC (NVIDIA)", "qsv": "QSV (Intel)", "amf": "AMF (AMD)"}
+if sys.platform == "darwin":
+    HW_BACKENDS: tuple[str, ...] = ("videotoolbox",)       # chip Apple: bộ mã hóa phần cứng của macOS
+else:
+    HW_BACKENDS = ("nvenc", "qsv", "amf")     # NVIDIA · Intel (kể cả iGPU) · AMD (kể cả APU)
+BACKEND_LABEL = {"nvenc": "NVENC (NVIDIA)", "qsv": "QSV (Intel)", "amf": "AMF (AMD)", "videotoolbox": "VideoToolbox (Apple)"}
 
 
 def available_encoders(ffmpeg: FFmpeg, codec: str = "h264") -> dict[str, bool]:
@@ -437,6 +616,11 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
         elif backend == "qsv":
             p = ["veryfast", "medium", "slower"][preset_idx]
             args = ["-c:v", enc, "-preset", p, "-global_quality", str(q)]
+        elif backend == "videotoolbox":
+            # -q:v 1–100 (cao = đẹp): quy đổi gần đúng từ thang CRF — 18 → 65, 23 → 55, 28 → 45
+            args = ["-c:v", enc, "-q:v", str(max(1, min(100, 101 - 2 * q))), "-allow_sw", "1"]
+            if not hevc:
+                args += ["-profile:v", "high"]
         else:
             p = ["speed", "balanced", "quality"][preset_idx]
             args = ["-c:v", enc, "-quality", p, "-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q)]
@@ -462,6 +646,25 @@ class RenderPlan:
     duration: float
     out_path: Path
     notes: list[str] = field(default_factory=list)
+    audio_cmd: list[str] | None = None         # dựng riêng phần tiếng → mix_path (chạy trước lệnh hình)
+    mix_path: Path | None = None
+    master_path: Path | None = None
+    loudness: float | None = None              # LUFS đích; None = giữ độ to (vẫn giới hạn đỉnh)
+    master_info: dict = field(default_factory=dict)
+
+
+def _audio_source(g: Graph, info: MediaInfo, trim: TrimSpec | None) -> str | None:
+    """Âm nguồn cho lệnh chỉ-có-tiếng: cắt nhiều đoạn → atrim + concat (một đoạn thì đã cắt bằng -ss/-to ở input)."""
+    if not info.has_audio:
+        return None
+    segs = [(max(0.0, s), min(info.duration or e, e)) for s, e in trim.segments if e > s] \
+        if trim is not None and trim.active else []
+    if len(segs) <= 1:
+        return "[0:a]"
+    labels = [g.chain("[0:a]", [f"atrim=start={s:.3f}:end={e:.3f}", "asetpts=PTS-STARTPTS"], f"[at{i}]")
+              for i, (s, e) in enumerate(segs)]
+    g.add(f"{''.join(labels)}concat=n={len(segs)}:v=0:a=1[atcat]")
+    return "[atcat]"
 
 
 def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: FFmpeg, job_dir: Path,
@@ -471,67 +674,109 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
                 audio_extras: Callable[[Graph, RenderContext], list[AudioExtra]] | None = None,
                 audio_override: Path | None = None, voice_duration: float = 0.0,
                 audio_only: bool = False, audio_orig_filters: list[str] | None = None,
-                log: Callable[[str], None] | None = None) -> RenderPlan:
-    """``audio_override``: file audio thay cho tiếng gốc (vd đã tách giọng bằng Demucs).
-    ``voice_duration`` + ``vcfg.loop_to_voice``: lặp video cho đủ thời lượng giọng đọc."""
+                log: Callable[[str], None] | None = None, voice_tempo: float | None = None,
+                loudness: float | None = None) -> RenderPlan:
+    """``audio_override``: file audio thay cho tiếng gốc (vd âm gốc đã khử giọng nói bằng AI).
+    ``voice_duration``: độ dài giọng theo mốc video RA (sau ``voice_tempo``); + ``vcfg.loop_to_voice``: lặp video cho
+    đủ giọng, không thì giọng dài hơn video → giữ khung cuối (không cắt giọng).
+
+    Phần tiếng dựng bằng lệnh riêng (không giải mã hình) → mix.wav → ``master_audio`` 2 lượt (``loudness`` LUFS,
+    giới hạn đỉnh) → master.wav, rồi ghép thẳng vào hình. Hình và tiếng cắt đúng một độ dài (số khung ÷ fps)."""
     job_dir.mkdir(parents=True, exist_ok=True)
+    speed = max(0.25, min(4.0, vcfg.speed / 100.0))
+    src_len = trim.kept_duration if trim is not None and trim.active else info.duration
     loop_video = bool(vcfg.loop_to_voice and voice_path is not None and voice_duration > 0
                       and (trim is None or not trim.active))
+    looped = loop_video and voice_duration * speed > info.duration
     eff_info = info
-    if loop_video and voice_duration > info.duration:
+    if looped:
         from dataclasses import replace as _replace
-        eff_info = _replace(info, duration=voice_duration + 0.5)
+        eff_info = _replace(info, duration=voice_duration * speed + 0.5)
+    extend = 0.0
+    if voice_path is not None and not loop_video and src_len > 0 and voice_duration > src_len / speed + 0.05:
+        extend = voice_duration - src_len / speed + 0.3
+        if log:
+            log(f"⚠ Giọng dài hơn video {voice_duration - src_len / speed:.1f}s → giữ khung cuối thêm {extend:.1f}s "
+                "(không cắt giọng). Nên rút gọn bản dịch.")
     vg = build_video_graph(eff_info, vcfg, work_dir=job_dir, ass_name=ass_name, stages=stages,
-                           pre_stages=pre_stages, src_stages=src_stages, trim=trim, first_extra_input=1)
-    g = vg.graph
-    voice_label = None
-    if voice_path is not None:
-        voice_label = f"[{g.add_input(['-i', str(voice_path)])}:a]"
-    audio_src = vg.audio_src
-    if audio_override is not None and audio_override.exists():
-        audio_src = f"[{g.add_input(['-i', str(audio_override)])}:a]"
-    extras = audio_extras(g, vg.ctx) if audio_extras else []
-    aout = build_audio_graph(g, info if not loop_video else eff_info, vcfg, audio_src=audio_src,
-                             voice_label=voice_label, extras=extras, duration=vg.ctx.duration,
-                             orig_filters=audio_orig_filters)
+                           pre_stages=pre_stages, src_stages=src_stages, trim=trim, first_extra_input=1,
+                           extend=extend)
+    dur = vg.ctx.duration
+    if vg.ctx.fps > 0:
+        dur = max(1.0 / vg.ctx.fps, round(dur * vg.ctx.fps) / vg.ctx.fps)     # đúng số khung → tiếng = hình
+    in_args = [*vg.input_args] + (["-stream_loop", "-1"] if looped else [])
 
-    cmd: list[str] = [*vg.input_args]
-    if loop_video and voice_duration > info.duration:
-        cmd += ["-stream_loop", "-1"]
-    cmd += ["-i", item.path]
+    # ── Phần tiếng: lệnh riêng ────────────────────────────────────────────
+    ga = Graph(1)
+    a_src = _audio_source(ga, info, trim)
+    if audio_override is not None and audio_override.exists():
+        a_src = f"[{ga.add_input(['-i', str(audio_override)])}:a]"
+    voice_label = f"[{ga.add_input(['-i', str(voice_path)])}:a]" if voice_path is not None else None
+    extras = audio_extras(ga, vg.ctx) if audio_extras else []
+    duck = None
+    wants_duck = voice_path is not None and not vcfg.mute and (
+        (vcfg.adaptive_ducking and vcfg.keep_original_audio and a_src is not None) or any(ex.duck for ex in extras))
+    if wants_duck:
+        env = duck_envelope(voice_path, job_dir / "duck.wav", duration=dur,
+                            tempo=speed if voice_tempo is None else voice_tempo)
+        if env is not None:
+            duck = ga.chain(f"[{ga.add_input(['-i', str(env)])}:a]",
+                            ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckenv]")
+    mix = build_audio_graph(ga, eff_info if looped else info, vcfg, audio_src=a_src, voice_label=voice_label,
+                            extras=extras, duration=dur, orig_filters=audio_orig_filters, voice_tempo=voice_tempo,
+                            duck_label=duck)
+    audio_cmd = mix_path = master_path = None
+    if mix:
+        ga.add(f"{mix}apad=whole_dur={dur:.3f},atrim=end={dur:.3f},asetpts=PTS-STARTPTS[am]")
+        a_script = job_dir / "filters_audio.txt"
+        a_script.write_text(ga.text(), encoding="utf-8")
+        mix_path, master_path = job_dir / "mix.wav", job_dir / "master.wav"
+        audio_cmd = [*in_args, "-i", item.path]
+        for extra in ga.extra_inputs:
+            audio_cmd += extra
+        audio_cmd += ["-/filter_complex", a_script.name, "-map", "[am]", "-c:a", "pcm_f32le", "-ar", "48000",
+                      str(mix_path)]
+    target = loudness if vcfg.normalize_audio else None
+    if audio_only:
+        if not audio_cmd:
+            raise RuntimeError("Video không có âm thanh để xuất MP3.")
+        cmd = ["-i", str(master_path), "-c:a", "libmp3lame", "-q:a", "2", "-t", f"{dur:.3f}", str(out_path)]
+        return RenderPlan(cmd=cmd, cwd=job_dir, duration=dur, out_path=out_path, audio_cmd=audio_cmd,
+                          mix_path=mix_path, master_path=master_path, loudness=target)
+
+    # ── Hình (+ ghép tiếng đã master) ─────────────────────────────────────
+    g = vg.graph
+    if vg.audio_src and vg.audio_src != "[0:a]":
+        g.add(f"{vg.audio_src}anullsink")          # nhánh tiếng của concat (cắt nhiều đoạn) không dùng ở lệnh này
+    m_idx = g.add_input(["-i", str(master_path)]) if audio_cmd else None
+    cmd = [*in_args, "-i", item.path]
     for extra in g.extra_inputs:
         cmd += extra
-
     script = job_dir / "filters.txt"
     script.write_text(g.text(), encoding="utf-8")
     # FFmpeg ≥ 7: "-/option file" đọc giá trị option từ file (thay cho -filter_complex_script đã bỏ)
-    if audio_only:
-        if not aout:
-            raise RuntimeError("Video không có âm thanh để xuất MP3.")
-        # nhánh video không dùng tới → đổ vào nullsink để filtergraph hợp lệ
-        g.add(f"{vg.vout}nullsink")
-        script.write_text(g.text(), encoding="utf-8")
-        cmd += ["-/filter_complex", script.name, "-map", aout, "-vn", "-c:a", "libmp3lame", "-q:a", "2"]
-        if loop_video and voice_duration > info.duration:
-            cmd += ["-t", f"{vg.ctx.duration:.3f}"]
-        cmd += [str(out_path)]
-        return RenderPlan(cmd=cmd, cwd=job_dir, duration=vg.ctx.duration, out_path=out_path)
     cmd += ["-/filter_complex", script.name, "-map", vg.vout]
-    if aout:
-        cmd += ["-map", aout, "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+    if m_idx is not None:
+        cmd += ["-map", f"{m_idx}:a", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
     else:
         cmd += ["-an"]
     cmd += pick_encoder(ffmpeg, vcfg, log)
     if vcfg.gop_size and vcfg.gop_size > 0:
         cmd += ["-g", str(int(vcfg.gop_size)), "-keyint_min", str(max(1, int(vcfg.gop_size) // 2))]
-    if loop_video and voice_duration > info.duration:
-        cmd += ["-t", f"{vg.ctx.duration:.3f}"]
-    cmd += ["-movflags", "+faststart", str(out_path)]
-    return RenderPlan(cmd=cmd, cwd=job_dir, duration=vg.ctx.duration, out_path=out_path)
+    cmd += ["-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_path)]
+    return RenderPlan(cmd=cmd, cwd=job_dir, duration=dur, out_path=out_path, audio_cmd=audio_cmd,
+                      mix_path=mix_path, master_path=master_path, loudness=target)
 
 
 def run_plan(plan: RenderPlan, ffmpeg: FFmpeg, *, on_progress: Callable[[float], None] | None = None,
              cancel: threading.Event | None = None) -> Path:
-    ffmpeg.run(plan.cmd, duration=plan.duration, on_progress=on_progress, cancel=cancel, cwd=plan.cwd,
-               log_tag="render")
+    v_prog = on_progress
+    if plan.audio_cmd:
+        ffmpeg.run(plan.audio_cmd, duration=plan.duration, on_progress=(lambda p: on_progress(0.15 * p))
+                   if on_progress else None, cancel=cancel, cwd=plan.cwd, log_tag="audio")
+        plan.master_info = master_audio(ffmpeg, plan.mix_path, plan.master_path, target=plan.loudness, cancel=cancel)
+        if on_progress:
+            on_progress(0.2)
+            v_prog = lambda p: on_progress(0.2 + 0.8 * p)      # noqa: E731
+    ffmpeg.run(plan.cmd, duration=plan.duration, on_progress=v_prog, cancel=cancel, cwd=plan.cwd, log_tag="render")
     return plan.out_path

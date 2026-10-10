@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +26,7 @@ _RUNTIME_DEPS = ["sea-g2p>=0.9.1", "onnxruntime>=1.20.0", "numpy", "soundfile", 
 
 _model = None
 _model_lock = threading.Lock()
+_last_used = 0.0
 
 
 def is_installed() -> bool:
@@ -40,7 +42,7 @@ def install_vieneu(log: Callable[[str], None] | None = None) -> bool:
     """pip install vieneu (không kéo gradio). Chạy trong thread nền."""
     if getattr(sys, "frozen", False):
         if log:
-            log("Bản đóng gói .exe không cài thêm được gói Python — chạy bản mã nguồn (run.bat) để cài, hoặc dùng tính năng thay thế.")
+            log("Bản đóng gói (.exe / .app) không cài thêm được gói Python — chạy bản mã nguồn (run.bat / run.command) để cài, hoặc dùng tính năng thay thế.")
         return False
     cmds = [
         [sys.executable, "-m", "pip", "install", "--upgrade", *_RUNTIME_DEPS],
@@ -58,14 +60,29 @@ def install_vieneu(log: Callable[[str], None] | None = None) -> bool:
     return is_installed()
 
 
-def load_model(precision: str = "int8", log: Callable[[str], None] | None = None):
+def release_idle(max_idle: float) -> bool:
+    """Bỏ model VieNeu đã nạp (vài trăm MB RAM) nếu ``max_idle`` giây chưa dùng. Lần đọc sau nạp lại (~7 s)."""
     global _model
     with _model_lock:
+        if _model is None or time.monotonic() - _last_used < max_idle:
+            return False
+        _model = None
+    import gc
+
+    gc.collect()
+    logger.info("Đã giải phóng model VieNeu (lâu không dùng)")
+    return True
+
+
+def load_model(precision: str = "int8", log: Callable[[str], None] | None = None):
+    global _model, _last_used
+    with _model_lock:
+        _last_used = time.monotonic()
         if _model is not None:
             return _model
         if not is_installed():
             if getattr(sys, "frozen", False):
-                raise RuntimeError("Bản đóng gói .exe không có VieNeu (cần torch) — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat).")
+                raise RuntimeError("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS, hoặc chạy bản mã nguồn (run.bat / run.command).")
             raise RuntimeError("Chưa cài VieNeu — bấm “Cài VieNeu” trong module Lồng tiếng.")
         os.environ.setdefault("HF_HOME", str(MODELS_DIR / "hf"))
         from vieneu import Vieneu
@@ -82,6 +99,14 @@ class VieNeuTTS(TTSEngine):
     ext = ".wav"
     native_speed_range = (1.0, 1.0)      # không chỉnh tốc độ gốc → dùng atempo
     workers = 1                          # CPU-bound
+    # v3 Turbo (int8 lẫn fp32) hay đọc lặp / nói thêm / nuốt chữ đầu ở câu ngắn (~1/3 số lần đọc) — mỗi lần đọc
+    # một kết quả khác → câu không đạt kiểm tra thì đọc lại (local, không tốn tiền)
+    qc_retries = 3
+    # đọc liền vài câu kề nhau cùng giọng (VieNeu tự gộp thành một khối) rồi tách lại: câu ngắn có ngữ cảnh — đo trên
+    # 77 câu (audit_out/vieneu_q): câu ≤ 4 chữ Whisper nghe đúng 66% → 82% số lần đọc, câu dài 92% → 98%
+    batch_lines = 6
+    batch_chars = 160
+    batch_adjacent = True
 
     def __init__(self, precision: str = "int8", log: Callable[[str], None] | None = None) -> None:
         self.precision = precision
@@ -128,15 +153,33 @@ class VieNeuTTS(TTSEngine):
         return list(self._voices)
 
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
+        global _last_used
         import soundfile as sf
 
         model = load_model(self.precision, self.log)
         out_path = out_path.with_suffix(".wav")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with _model_lock:
+            _last_used = time.monotonic()          # đang đọc cũng tính là đang dùng
             if voice_id.startswith("ref:"):
                 audio = model.infer(text, ref_audio=voice_id[4:], denoise=True)
             else:
                 audio = model.infer(text, voice=voice_id or None)
         sf.write(str(out_path), audio, int(getattr(model, "sample_rate", 48000)))
         return out_path
+
+    def synthesize_batch(self, lines: list[str], voice_id: str) -> tuple[bytes, int]:
+        global _last_used
+        import numpy as np
+
+        model = load_model(self.precision, self.log)
+        # mỗi câu một dấu kết câu → VieNeu ngắt nghỉ giữa các câu (chỗ cắt khi tách lại)
+        text = " ".join(t.strip() if t.strip()[-1:] in ".!?…" else t.strip().rstrip(",;:") + "." for t in lines)
+        with _model_lock:
+            _last_used = time.monotonic()
+            if voice_id.startswith("ref:"):
+                audio = model.infer(text, ref_audio=voice_id[4:], denoise=True)
+            else:
+                audio = model.infer(text, voice=voice_id or None)
+        pcm = (np.clip(np.asarray(audio, dtype=np.float32), -1, 1) * 32767).astype("<i2").tobytes()
+        return pcm, int(getattr(model, "sample_rate", 48000))

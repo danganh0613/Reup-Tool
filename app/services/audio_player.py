@@ -1,17 +1,17 @@
-"""Phát thử âm thanh (nghe thử giọng) bằng winsound — không cần thư viện ngoài.
+"""Phát thử âm thanh (nghe thử giọng, nhạc nền) — winsound (Windows) / afplay (macOS), không cần thư viện ngoài.
 
-winsound chỉ chơi WAV, nên mp3 được chuyển qua ffmpeg vào thư mục cache trước.
+Chỉ phát WAV cho đồng nhất, nên mp3… được chuyển qua ffmpeg vào thư mục cache trước (trong thread nền).
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-import sys
 import threading
 from pathlib import Path
 
 from app.config.paths import PREVIEW_CACHE_DIR
+from app.core.platform import WavPlayer
 from app.services.ffmpeg import FFmpeg
 
 logger = logging.getLogger(__name__)
@@ -20,20 +20,20 @@ logger = logging.getLogger(__name__)
 class AudioPlayer:
     def __init__(self, ffmpeg: FFmpeg) -> None:
         self.ffmpeg = ffmpeg
-        self._playing = False
+        self._sound = WavPlayer()
         self._token = 0            # tăng mỗi lần play/stop: bản chuyển đổi chạy nền của lần bấm cũ sẽ không phát
 
     def play(self, path: str | Path) -> None:
         """Phát ngay nếu là WAV / đã có trong cache; mp3… được chuyển sang WAV trong thread nền (không đơ giao diện)."""
-        if sys.platform != "win32":
-            logger.warning("Nghe thử chỉ hỗ trợ Windows")
+        if not WavPlayer.available():
+            logger.warning("Máy này không có trình phát âm thanh để nghe thử")
             return
         self.stop()
         self._token += 1
         token = self._token
         p = Path(path)
         if p.suffix.lower() == ".wav":
-            self._play_wav(p)
+            self._sound.play(p)
             return
         PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -42,7 +42,7 @@ class AudioPlayer:
             mtime = 0
         wav = PREVIEW_CACHE_DIR / f"play_{hashlib.sha1(f'{p}|{mtime}'.encode()).hexdigest()[:10]}.wav"
         if wav.exists():
-            self._play_wav(wav)
+            self._sound.play(wav)
             return
 
         def convert() -> None:
@@ -55,22 +55,10 @@ class AudioPlayer:
                 logger.warning("Không chuyển được %s sang WAV để nghe thử", p.name, exc_info=True)
                 return
             if token == self._token and wav.exists():
-                self._play_wav(wav)
+                self._sound.play(wav)
 
         threading.Thread(target=convert, name="AudioPreview", daemon=True).start()
 
-    def _play_wav(self, wav: Path) -> None:
-        import winsound
-
-        winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
-        self._playing = True
-
     def stop(self) -> None:
-        if sys.platform != "win32":
-            return
-        import winsound
-
         self._token += 1
-        if self._playing:
-            winsound.PlaySound(None, winsound.SND_PURGE)
-            self._playing = False
+        self._sound.stop()

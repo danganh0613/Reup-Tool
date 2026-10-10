@@ -30,11 +30,31 @@ class TTSEngine:
     native_speed_range: tuple[float, float] = (0.5, 2.0)
     #: số luồng gọi song song hợp lý
     workers: int = 4
+    #: số lần tối đa được đọc lại một câu không đạt kiểm tra chất lượng (0 = không đọc lại: engine trả phí…)
+    qc_retries: int = 0
+    #: câu dài hơn thì tách đoạn đọc riêng rồi ghép (0 = engine tự chia câu dài)
+    max_chars: int = 0
+    #: đọc lại cả câu chỉ có lỗi nhẹ (vd «chữ đầu nghe thành…» — Whisper hay nghe nhầm). Engine tính tiền / lượt gọi
+    #: đặt False: chỉ đọc lại khi lỗi nặng (đọc lặp, sai chữ, cụt…)
+    reread_soft: bool = True
+    #: đọc gộp tối đa bấy nhiêu câu trong một lượt gọi rồi tách lại (``synthesize_batch``; 0 = không gộp)
+    batch_lines: int = 0
+    #: tổng ký tự tối đa mỗi lô đọc gộp
+    batch_chars: int = 1500
+    #: chỉ gộp các câu liền nhau (đọc liền cho có ngữ cảnh) — False: gộp mọi câu cùng giọng (né giới hạn lượt gọi)
+    batch_adjacent: bool = False
 
     def list_voices(self, locale: str | None = None) -> list[Voice]:
         raise NotImplementedError
 
+    def repair_cached(self, path: Path) -> None:
+        """Sửa file cache do bản cũ ghi sai định dạng (mặc định: không làm gì)."""
+
     def synthesize(self, text: str, voice_id: str, out_path: Path, *, speed: float = 1.0, pitch: int = 0) -> Path:
+        raise NotImplementedError
+
+    def synthesize_batch(self, lines: list[str], voice_id: str) -> tuple[bytes, int]:
+        """Đọc liền nhiều câu trong một lượt gọi (nghỉ rõ giữa các câu) → (PCM s16 mono, tần số)."""
         raise NotImplementedError
 
     def cache_signature(self, voice_id: str, speed: float, pitch: int) -> str:

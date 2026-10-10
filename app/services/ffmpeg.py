@@ -17,10 +17,11 @@ from collections.abc import Callable
 from PIL import Image
 
 from app.config.paths import BIN_DIR
+from app.core.platform import IS_MAC, NO_WINDOW, exe_name
 
 logger = logging.getLogger(__name__)
 
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_NO_WINDOW = NO_WINDOW
 
 
 class FFmpegNotFound(RuntimeError):
@@ -49,16 +50,21 @@ class MediaInfo:
 
 def find_binary(name: str, preferred: str = "") -> str | None:
     """Thứ tự ưu tiên: đường dẫn trong cài đặt → bin/ cạnh app → PATH."""
-    exe = name if name.lower().endswith(".exe") else f"{name}.exe"
+    exe = exe_name(name)
     candidates: list[Path] = []
     if preferred:
         p = Path(preferred)
-        candidates.append(p if p.suffix else p / exe)
+        candidates.append(p if p.is_file() else p / exe)       # file cụ thể, hoặc thư mục chứa nó
     candidates.append(BIN_DIR / exe)
     for c in candidates:
         if c.is_file():
             return str(c)
     found = shutil.which(name)
+    if found is None and IS_MAC:
+        # app mở từ Finder không có PATH của Terminal → tự tìm chỗ Homebrew hay cài
+        for d in ("/opt/homebrew/bin", "/usr/local/bin"):
+            if Path(d, name).is_file():
+                return str(Path(d, name))
     return found
 
 
@@ -75,7 +81,7 @@ class FFmpeg:
 
     def require(self) -> None:
         if not self.available:
-            raise FFmpegNotFound("Không tìm thấy ffmpeg/ffprobe. Đặt ffmpeg.exe + ffprobe.exe vào thư mục bin/ "
+            raise FFmpegNotFound(f"Không tìm thấy ffmpeg/ffprobe. Đặt {exe_name('ffmpeg')} + {exe_name('ffprobe')} vào thư mục bin/ "
                                  "hoặc chọn đường dẫn trong Cài đặt.")
 
     def version(self) -> str:
@@ -210,10 +216,11 @@ class FFmpeg:
             tail = "\n".join(stderr_lines[-12:])
             raise RuntimeError(f"ffmpeg thoát mã {proc.returncode}:\n{tail}")
 
-    def run_simple(self, args: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
+    def run_simple(self, args: list[str], timeout: float = 600, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
         self.require()
         cmd = [self.ffmpeg, "-hide_banner", "-y", "-nostdin", "-loglevel", "error", *args]
-        return subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW, timeout=timeout,
+                              cwd=str(cwd) if cwd else None)
 
     # ── Khung hình xem trước ──────────────────────────────────────────────
     def extract_frame(self, path: str | Path, t: float, *, vf: str = "", max_width: int = 1280,
@@ -282,9 +289,9 @@ class FFmpeg:
             raise RuntimeError(res.stderr.decode("utf-8", "replace")[-300:])
         return res.stdout
 
-    def extract_audio_wav(self, src: str | Path, dst: str | Path, *, sample_rate: int = 16000) -> Path:
-        """Tách audio ra WAV mono (dùng cho Whisper)."""
-        res = self.run_simple(["-i", str(src), "-vn", "-ac", "1", "-ar", str(sample_rate),
+    def extract_audio_wav(self, src: str | Path, dst: str | Path, *, sample_rate: int = 16000, channels: int = 1) -> Path:
+        """Tách audio ra WAV (mặc định mono — dùng cho Whisper)."""
+        res = self.run_simple(["-i", str(src), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
                                "-acodec", "pcm_s16le", str(dst)])
         if res.returncode != 0:
             raise RuntimeError(res.stderr.decode("utf-8", "replace")[-300:])
