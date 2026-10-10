@@ -45,6 +45,13 @@ def speaker_name(n: int) -> str:
     return f"{SPEAKER_PREFIX} {n}"
 
 
+def is_question(text: str | None) -> bool:
+    """Câu hỏi (để chia vai hỏi – đáp): dấu «?» / «？», hoặc câu gốc tiếng Trung kết thúc bằng 吗 / 呢 / 嘛 (OCR / ASR hay
+    bỏ dấu hỏi)."""
+    t = (text or "").strip().rstrip("。.!！… ")
+    return t.endswith(("?", "？", "吗", "呢", "嘛"))
+
+
 @dataclass
 class SpeakerInfo:
     name: str

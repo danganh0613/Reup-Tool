@@ -12,7 +12,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.config.paths import CACHE_DIR
 from app.core.state import VideoItem
-from app.services.diarize import SpeakerInfo, SpeakerMap, speaker_name
+from app.services.diarize import SpeakerInfo, SpeakerMap, is_question, speaker_name
 from app.services.tts.generator import main_locale
 from app.services.srt_utils import format_ts, load_srt
 from app.ui.widgets.common import SliderRow, StatusLabel
@@ -233,6 +233,9 @@ class SpeakerAssignDialog(ctk.CTkToplevel):
                      font=T.font(12), anchor="w").pack(side="left", padx=10, pady=8)
         button(head, "Thêm người nói", icon_name="add", size="sm", command=self._add_speaker).pack(side="right", padx=4)
         button(head, "Gán cho câu đã tick", size="sm", command=self._apply_checked).pack(side="right", padx=4)
+        button(head, "Chia hỏi / đáp", icon_name="list", size="sm", command=self._split_qa,
+               tip="Video hỏi – đáp: mọi câu hỏi → Người 1, các câu còn lại → Người 2 (xem lại rồi bấm «Lưu»)").pack(
+            side="right", padx=4)
         self.bulk = Select(head, self.names, value=self.names[0], width=130, height=32)
         self.bulk.pack(side="right", padx=4)
 
@@ -343,6 +346,24 @@ class SpeakerAssignDialog(ctk.CTkToplevel):
                 n += 1
         self._show_page(self.page, sync=False)
         self.status.info(f"Đã gán {n} câu cho {who}." if n else "Chưa tick câu nào.")
+
+    def _split_qa(self) -> None:
+        """Video hỏi – đáp (người hỏi «Bắt về nuôi được không?», người đáp giải thích): chia theo câu hỏi, không cần
+        nhận diện giọng gốc."""
+        self._sync_page()
+        ask, ans = speaker_name(1), speaker_name(2)
+        for n in (ask, ans):
+            if n not in self.names:
+                self.names.append(n)
+        self._set_names()
+        q = 0
+        for i, c in enumerate(self.cues):
+            is_q = is_question(c.plain) or is_question(self.translated[i])
+            self.labels[i] = ask if is_q else ans
+            q += int(is_q)
+        self._show_page(self.page, sync=False)
+        self.status.ok(f"{q} câu hỏi → {ask} · {len(self.cues) - q} câu còn lại → {ans} — xem lại rồi bấm «Lưu», sau đó "
+                       "chọn giọng cho từng người ở bảng «Nhiều giọng» (vd Người 1 «Trúc Ly», Người 2 «Thanh Bình»).")
 
     def _play_row(self, r: int) -> None:
         idxs = self._page_range()

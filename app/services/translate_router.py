@@ -38,7 +38,7 @@ GROQ_BATCH = 16
 def max_out(lines: int) -> int:
     """Số token trả ra tối đa cho một lô ``lines`` câu (JSON id + text)."""
     return 100 + 50 * max(1, lines)
-DEFAULT_MODELS = {"Gemini": "gemini-3.5-flash-lite", "Groq": groq_models.DEFAULT_TEXT[0], "DeepSeek": "deepseek-chat",
+DEFAULT_MODELS = {"Gemini": "gemini-3.8-flash", "Groq": groq_models.DEFAULT_TEXT[0], "DeepSeek": "deepseek-chat",
                   "OpenAI": "gpt-4o-mini"}
 OPENAI_COMPAT = {"Groq": "https://api.groq.com/openai/v1/chat/completions",
                  "DeepSeek": "https://api.deepseek.com/chat/completions",
@@ -120,7 +120,8 @@ def _keys(text: str) -> list[str]:
 #: model dự phòng cùng nhà cung cấp — dùng khi model chính quá tải (503) hoặc hết quota riêng của model đó
 #: Gemini gói miễn phí (AI Studio › Rate limit, 10/2026): Flash Lite 3.5 / 3.1 = 15 lượt/phút · 500 lượt/ngày; các model
 #: Flash chỉ 5 / phút · 20 / ngày; Gemma 4 31B 30 / phút · 14.400 / ngày (16K token/phút). Dịch thử video mẫu: 3.5 Flash
-#: Lite 12 s / 4 lượt, đúng tên con vật hơn Groq qwen (双角犀鸟 → hồng hoàng, 钳嘴鹳 → cò nhạn)
+#: Lite 12 s / 4 lượt, đúng tên con vật hơn Groq qwen (双角犀鸟 → hồng hoàng, 钳嘴鹳 → cò nhạn); 3.8 Flash văn nói tự
+#: nhiên nhất + tên đúng nhất (黑冠麻鹭 → vạc rừng, 大鸨 → ô tác), 3 lượt / video → mặc định; hết 20 lượt / ngày tự sang Lite
 ALT_MODELS = {"Gemini": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.5-flash",
                          "gemma-4-31b-it"],
               "Groq": ["qwen/qwen3.8-27b"], "DeepSeek": [], "OpenAI": ["gpt-4o-mini"]}
