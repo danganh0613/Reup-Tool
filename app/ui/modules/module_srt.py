@@ -1,9 +1,12 @@
-"""Module Lời thoại: sửa từng câu (+ Nhờ AI sửa), phụ đề trên video (kiểu, chữ hiện, tuỳ chỉnh khi cần), dịch AI,
-tệp phụ đề (chọn / sửa thời gian / xuất / dán bản dịch ngoài)."""
+"""Module Lời thoại — hai tab trên cùng:
+- «Lời thoại»: sửa từng câu (+ Nhờ AI sửa), dịch AI, tệp phụ đề (chọn / sửa thời gian / xuất / dán bản dịch ngoài);
+- «Phụ đề»: chữ hiện trên video — bật, kiểu dựng sẵn, chữ hiện; chỉnh tay (chữ, nền & chữ nổi, khung, thời gian) bấm
+  mới mở."""
 
 from __future__ import annotations
 
 import shutil
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -17,12 +20,13 @@ from app.services.subtitle_presets import CUSTOM as SUB_CUSTOM, STYLES as SUB_ST
 from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, pack_rows, row_label
-from app.ui.widgets.ui import button, button_width, relabel, set_variant
+from app.ui.widgets.ui import button, button_width, set_variant
 from app.core.platform import open_path
 
 MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MODES[2]: "Song ngữ (dịch trên, gốc dưới)"}
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
                 "ไทย", "Bahasa Indonesia", "Русский"]
+TAB_TEXT, TAB_SUB = "Lời thoại", "Phụ đề"
 
 
 class SRTModule(BaseModule):
@@ -35,33 +39,24 @@ class SRTModule(BaseModule):
         cfg = self.state.subtitle
         s = self.setter
 
-        # ── Lời thoại của video đang chọn: sửa ngay, gắn với khung xem trước (nơi DUY NHẤT sửa từng câu) ──
+        self.tab_var = tk.StringVar(value=TAB_TEXT)
+        self.tabs = ctk.CTkSegmentedButton(self, values=[TAB_TEXT, TAB_SUB], variable=self.tab_var,
+                                           command=self.show_tab, font=T.font(12))
+        self.tabs.pack(fill="x", pady=(0, 6))
+        self.pages = {k: ctk.CTkFrame(self, fg_color="transparent") for k in (TAB_TEXT, TAB_SUB)}
+
+        # ══ Tab «Lời thoại» ═════════════════════════════════════════════════
+        page = self.pages[TAB_TEXT]
+        # lời thoại của video đang chọn: sửa ngay, gắn với khung xem trước (nơi DUY NHẤT sửa từng câu)
         from app.ui.widgets.cue_editor import CueEditor
 
-        sec = Section(self, "Lời thoại của video đang chọn")
+        sec = Section(page, "Lời thoại của video đang chọn")
         sec.pack(fill="x", pady=4)
         self.editor = CueEditor(sec.body, self.window, on_saved=lambda it: (self.on_active_changed(),
                                                                              self.window.queue_update(it)))
         self.editor.pack(fill="x")
 
-        # ── Phụ đề trên video: bật / kiểu / chữ hiện; chỉnh chi tiết khi cần mới mở ──
-        sec = Section(self, "Phụ đề trên video", info="Mặc định kiểu TikTok: chữ đậm trắng viền đen, tối đa 2 dòng, "
-                                                      "nằm trên vùng nút của TikTok. Vị trí và cỡ chữ chỉnh nhanh trên "
-                                                      "thanh của khung video.")
-        sec.pack(fill="x", pady=4)
-        self.sub_section = sec
-        self.sub_on = SwitchRow(sec.body, "Hiện phụ đề", on_change=self._sub_on_changed)
-        self.sub_style = OptionRow(sec.body, "Kiểu", [*SUB_STYLES, SUB_CUSTOM], on_change=self._style_picked)
-        self.sub_mode = OptionRow(sec.body, "Chữ hiện", SRT_MODES, labels=MODE_LABELS, on_change=s(cfg, "srt_mode"))
-        pack_rows(sec.body, [self.sub_on, self.sub_style, self.sub_mode])
-        self.detail_btn = button(sec.body, "Tuỳ chỉnh chi tiết  ▾", variant="ghost", size="sm",
-                                 command=self.toggle_style)
-        self.detail_btn.pack(anchor="w", pady=(4, 0))
-        self.detail_box = ctk.CTkFrame(sec.body, fg_color="transparent")
-        self.style_panel = None                  # dựng lần đầu mở (~40 widget)
-        self.state.on("config_changed", self._config_changed)
-
-        sec = Section(self, "Dịch", info="AI Gemini dịch 2 bước: dịch sát nghĩa rồi tự đọc lại cho tự nhiên; có lồng "
+        sec = Section(page, "Dịch", info="AI Gemini dịch 2 bước: dịch sát nghĩa rồi tự đọc lại cho tự nhiên; có lồng "
                                          "tiếng thì tự rút gọn câu đọc không kịp. Lỗi giữa chừng thì «Thử lại» dịch "
                                          "tiếp. Key và model: Cài đặt › AI dùng API key.")
         sec.pack(fill="x", pady=4)
@@ -88,7 +83,7 @@ class SRTModule(BaseModule):
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
-        sec = Section(self, "Tệp phụ đề", collapsed=True)
+        sec = Section(page, "Tệp phụ đề", collapsed=True)
         sec.pack(fill="x", pady=4)
         self.file_section = sec
         ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
@@ -96,6 +91,23 @@ class SRTModule(BaseModule):
         ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None), ("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
         self.file_status = StatusLabel(sec.body, "")
         self.file_status.pack(fill="x", pady=(4, 0))
+
+        # ══ Tab «Phụ đề»: bật / kiểu / chữ hiện; chỉnh tay ở các khối thu gọn bên dưới ═══════════════════
+        page = self.pages[TAB_SUB]
+        sec = Section(page, "Phụ đề trên video", info="Mặc định kiểu TikTok: chữ đậm trắng viền đen, tối đa 2 dòng, "
+                                                      "nằm trên vùng nút của TikTok. Vị trí và cỡ chữ chỉnh nhanh trên "
+                                                      "thanh của khung video.")
+        sec.pack(fill="x", pady=4)
+        self.sub_section = sec
+        self.sub_on = SwitchRow(sec.body, "Hiện phụ đề", on_change=self._sub_on_changed)
+        self.sub_style = OptionRow(sec.body, "Kiểu", [*SUB_STYLES, SUB_CUSTOM], on_change=self._style_picked)
+        self.sub_mode = OptionRow(sec.body, "Chữ hiện", SRT_MODES, labels=MODE_LABELS, on_change=s(cfg, "srt_mode"))
+        pack_rows(sec.body, [self.sub_on, self.sub_style, self.sub_mode])
+        self.style_box = ctk.CTkFrame(page, fg_color="transparent")
+        self.style_box.pack(fill="x")
+        self.style_panel = None                  # chỉnh tay: dựng lần đầu mở tab «Phụ đề» (~40 widget)
+        self.state.on("config_changed", self._config_changed)
+        self.show_tab(TAB_TEXT)
 
     def refresh(self) -> None:
         cfg = self.state.subtitle
@@ -123,38 +135,33 @@ class SRTModule(BaseModule):
         finally:
             self._loading = loading
 
-    # ── Phụ đề trên video ────────────────────────────────────────────────
-    def toggle_style(self, show: bool | None = None) -> None:
-        """Mở / thu gọn «Tuỳ chỉnh chi tiết» (dựng bảng lần đầu mở)."""
-        show = not self.detail_box.winfo_ismapped() if show is None else show
-        if show and self.style_panel is None:
+    # ── Hai tab ──────────────────────────────────────────────────────────
+    def show_tab(self, name: str) -> None:
+        """«Lời thoại» · «Phụ đề» (bảng chỉnh tay phụ đề dựng lần đầu mở tab)."""
+        name = name if name in self.pages else TAB_TEXT
+        if self.tab_var.get() != name:
+            self.tab_var.set(name)
+        if name == TAB_SUB and self.style_panel is None:
             from app.ui.widgets.subtitle_panel import SubtitleStylePanel
 
             loading, self._loading = self._loading, True
             try:
-                self.style_panel = SubtitleStylePanel(self.detail_box, self)
+                self.style_panel = SubtitleStylePanel(self.style_box, self)
                 self.style_panel.pack(fill="x")
                 self.style_panel.refresh()
             finally:
                 self._loading = loading
-        if show:
-            self.detail_box.pack(fill="x", pady=(4, 0))
-        else:
-            self.detail_box.pack_forget()
-        relabel(self.detail_btn, "Thu gọn  ▴" if show else "Tuỳ chỉnh chi tiết  ▾")
+        for k, page in self.pages.items():
+            if k != name:
+                page.pack_forget()
+        self.pages[name].pack(fill="x")
+        if name == TAB_TEXT:
+            self.editor.start_tick()               # tô câu đang phát (tự dừng khi tab bị ẩn)
+        self.scroll_top()
 
     def open_style(self) -> None:
-        """Từ nơi khác (tab Duyệt «Sửa ›», mục cũ «Phụ đề»): mở phần kiểu phụ đề và cuộn tới đó."""
-        self.toggle_style(True)
-
-        def scroll() -> None:
-            try:
-                canvas = self._parent_canvas
-                total = max(1, self.winfo_height())
-                canvas.yview_moveto(max(0.0, (self.sub_section.winfo_y() - 8) / total))
-            except Exception:
-                pass
-        self.after(80, scroll)
+        """Từ nơi khác (tab Duyệt «Sửa ›», mục cũ «Phụ đề»): mở tab «Phụ đề»."""
+        self.show_tab(TAB_SUB)
 
     def _config_changed(self, section: str = "") -> None:
         """Phụ đề đổi ở chỗ khác (bảng chi tiết, thanh khung video, kéo khung) → ô «Hiện phụ đề» / «Kiểu» theo ngay."""
@@ -170,6 +177,8 @@ class SRTModule(BaseModule):
         try:
             self.sub_on.set(cfg.enable_subtitle)
             self.sub_style.set(style_of(cfg))
+            if self.style_panel is not None:
+                self.style_panel.summarize()
         finally:
             self._loading = loading
 
@@ -180,9 +189,10 @@ class SRTModule(BaseModule):
     def _style_picked(self, name: str) -> None:
         if self._loading:
             return
-        if name == SUB_CUSTOM:                  # «Tuỳ chỉnh» = mở bảng chỉnh tay
+        if name == SUB_CUSTOM:                  # «Tuỳ chỉnh» = mở khối chỉnh chữ bên dưới
             self.sub_style.set(style_of(self.state.subtitle))
-            self.toggle_style(True)
+            self.show_tab(TAB_SUB)
+            self.style_panel.text_sec.set_open(True)
             return
         cfg = self.state.subtitle
         if not apply_style(cfg, name):
@@ -195,7 +205,8 @@ class SRTModule(BaseModule):
 
     def on_shown(self) -> None:
         super().on_shown()
-        self.editor.start_tick()
+        if self.tab_var.get() == TAB_TEXT:
+            self.editor.start_tick()
 
     def on_hidden(self) -> None:
         self.editor.stop_tick()

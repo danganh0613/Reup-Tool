@@ -118,13 +118,15 @@ TOPICS: list[dict] = [
         ("steps", [
             "Đổi chỗ / cỡ chữ: dùng 2 nút trên khung video — «Dưới · Giữa · Trên · Đè chữ cũ» và «Nhỏ · Vừa · Lớn».",
             "Video gốc có chữ in sẵn: chọn «Đè chữ cũ» — máy tự dò, che mờ chữ cũ rồi đặt phụ đề mới vào giữa đúng chỗ đó.",
-            "Đổi kiểu (trắng, vàng, hộp nền…): tab «Lời thoại» › «Phụ đề trên video» › «Kiểu». Kiểu «Nổi chữ đang "
-            "đọc»: chữ đang đọc đổi màu và to lên theo đúng nhịp giọng, giống CapCut — cài «Căn chữ nổi» (Cài đặt › "
-            "AI trên máy) để khớp từng tiếng.",
-            "Muốn chỉnh tay (phông, màu, viền, nền…): bấm «Tuỳ chỉnh chi tiết» ngay dưới đó.",
-            "Kéo tay: ở tab «Lời thoại» bấm vào khung xanh trên video rồi kéo; «Căn giữa» / «Rộng hết» trên thanh để căn nhanh.",
+            "Đổi kiểu (trắng, vàng, hộp nền…): mục «Lời thoại» › tab «Phụ đề» › «Kiểu». Kiểu «Nổi chữ đang đọc»: "
+            "chữ đang đọc đổi màu và to lên theo đúng nhịp giọng, giống CapCut — cài «Căn chữ nổi» (Cài đặt › AI "
+            "trên máy) để khớp từng tiếng.",
+            "Muốn chỉnh tay (phông, màu, viền, nền…): các khối «Chữ», «Nền & chữ nổi», «Khung» ngay dưới — bấm tiêu đề "
+            "để mở.",
+            "Kéo tay: ở mục «Lời thoại» bấm vào khung xanh trên video rồi kéo; «Căn giữa» / «Rộng hết» trên thanh để căn "
+            "nhanh.",
         ]),
-        ("tip", "Chữ hiện sớm / muộn hơn tiếng: «Tuỳ chỉnh chi tiết» › «Trễ phụ đề»."),
+        ("tip", "Chữ hiện sớm / muộn hơn tiếng: tab «Phụ đề» › «Thời gian» › «Trễ phụ đề»."),
     ]},
     {"key": "review", "title": "Duyệt: xem từng video, chỗ nào chưa ổn thì sửa", "group": "Từng mục", "blocks": [
         ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Video là trung tâm: khung xem trước bên phải luôn "

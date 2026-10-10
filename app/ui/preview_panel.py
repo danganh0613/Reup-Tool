@@ -609,7 +609,7 @@ class PreviewPanel(ctk.CTkFrame):
             c.refresh()
 
     def _sub_changed(self) -> None:
-        """Đổi phụ đề từ thanh khung video → lưu, vẽ lại, đồng bộ phần «Phụ đề trên video» của tab Lời thoại."""
+        """Đổi phụ đề từ thanh khung video → lưu, vẽ lại, đồng bộ tab «Phụ đề» của mục Lời thoại."""
         self.state.config_changed("subtitle")
         self.refresh_sub_chips()
         m = self.window.modules.get("srt")

@@ -1,6 +1,7 @@
-"""Tuỳ chỉnh chi tiết phụ đề trên video (mở trong tab «Lời thoại» khi cần): chữ, viền, nền, chữ nổi, khung, thời gian.
+"""Chỉnh tay phụ đề trên video (tab «Phụ đề» của mục Lời thoại): 4 khối thu gọn — Chữ · Nền & chữ nổi · Khung ·
+Thời gian; bấm tiêu đề mới mở, tiêu đề tóm tắt giá trị đang dùng.
 
-Vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước; kiểu dựng sẵn ở ô «Kiểu» của tab — ở đây chỉ là phần chỉnh tay."""
+Vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước; kiểu dựng sẵn ở ô «Kiểu» phía trên — ở đây chỉ là phần chỉnh tay."""
 
 from __future__ import annotations
 
@@ -14,12 +15,14 @@ from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
 from app.services import subtitle_style as sst
 from app.services.ffmpeg import MediaInfo
+from app.services.subtitle_presets import PLACE_SHORT, place_of
 from app.services.system_fonts import list_fonts
-from app.ui.widgets.common import ColorRow, ComboRow, OptionRow, SliderRow, SwitchRow, hint, pack_rows
+from app.ui.widgets.common import ColorRow, ComboRow, OptionRow, Section, SliderRow, SwitchRow, hint, pack_rows
 
 QUICK_COLORS = ["#FFFFFF", "#FFE45C", "#22D3EE", "#EF4444", "#22C55E", "#F472B6"]
 WORD_ANIMS = ["off", "pop", "fill", "reveal"]
 WORD_ANIM_LABELS = {"off": "Không", "pop": "Nổi bật (kiểu CapCut)", "fill": "Tô màu dần", "reveal": "Hiện dần từng chữ"}
+WORD_ANIM_SHORT = {"pop": "chữ nổi", "fill": "tô màu dần", "reveal": "hiện dần"}
 EFFECT_LABELS = {TEXT_EFFECTS[0]: "Không"}
 
 
@@ -32,48 +35,52 @@ class SubtitleStylePanel(ctk.CTkFrame):
         s = module.setter
         rel = lambda _v: self.window.preview.schedule_refresh()  # noqa: E731
 
-        self._title("Chữ")
-        self.font = ComboRow(self, "Phông chữ", ["Arial"], on_change=s(cfg, "sub_font"))
-        self.size = SliderRow(self, "Cỡ chữ", from_=12, to=120, step=1, suffix="px", on_change=self._size_changed,
+        self.text_sec = self._section("Chữ")
+        b = self.text_sec.body
+        self.font = ComboRow(b, "Phông chữ", ["Arial"], on_change=s(cfg, "sub_font"))
+        self.size = SliderRow(b, "Cỡ chữ", from_=12, to=120, step=1, suffix="px", on_change=self._size_changed,
                               on_release=rel)
-        self.color = ColorRow(self, "Màu chữ", on_change=s(cfg, "sub_color"))
-        swatches = ctk.CTkFrame(self, fg_color="transparent")
+        self.color = ColorRow(b, "Màu chữ", on_change=s(cfg, "sub_color"))
+        swatches = ctk.CTkFrame(b, fg_color="transparent")
         ctk.CTkLabel(swatches, text="", width=120).pack(side="left")
         for c in QUICK_COLORS:
             ctk.CTkButton(swatches, text="", width=26, height=22, fg_color=c, hover_color=c, border_width=1,
                           border_color=T.BORDER, command=lambda col=c: self._quick_color(col)).pack(side="left", padx=2)
-        self.stroke = SliderRow(self, "Viền", from_=0, to=10, step=0.5, fmt="{:.1f}", suffix="px",
+        self.stroke = SliderRow(b, "Viền", from_=0, to=10, step=0.5, fmt="{:.1f}", suffix="px",
                                 on_change=s(cfg, "sub_stroke_width", cast=float, preview=False), on_release=rel)
-        self.stroke_color = ColorRow(self, "Màu viền", value="#000000", on_change=s(cfg, "sub_stroke_color"))
-        self.shadow = SliderRow(self, "Bóng", from_=0, to=10, step=0.5, fmt="{:.1f}", suffix="px",
+        self.stroke_color = ColorRow(b, "Màu viền", value="#000000", on_change=s(cfg, "sub_stroke_color"))
+        self.shadow = SliderRow(b, "Bóng", from_=0, to=10, step=0.5, fmt="{:.1f}", suffix="px",
                                 on_change=s(cfg, "sub_shadow", cast=float, preview=False), on_release=rel)
-        self.opacity = SliderRow(self, "Độ đục", from_=10, to=100, step=5, suffix="%",
+        self.opacity = SliderRow(b, "Độ đục", from_=10, to=100, step=5, suffix="%",
                                  on_change=s(cfg, "sub_opacity", cast=float, preview=False), on_release=rel)
-        self.spacing = SliderRow(self, "Giãn chữ", from_=-2, to=10, step=0.5, fmt="{:.1f}", suffix="px",
+        self.spacing = SliderRow(b, "Giãn chữ", from_=-2, to=10, step=0.5, fmt="{:.1f}", suffix="px",
                                  on_change=s(cfg, "sub_letter_spacing", cast=float, preview=False), on_release=rel)
-        self.effect = OptionRow(self, "Hiệu ứng", TEXT_EFFECTS, labels=EFFECT_LABELS, on_change=s(cfg, "text_effect"))
-        flags = ctk.CTkFrame(self, fg_color="transparent")
+        self.effect = OptionRow(b, "Hiệu ứng", TEXT_EFFECTS, labels=EFFECT_LABELS, on_change=s(cfg, "text_effect"))
+        flags = ctk.CTkFrame(b, fg_color="transparent")
         self.bold = SwitchRow(flags, "Đậm", on_change=s(cfg, "sub_bold"))
         self.italic = SwitchRow(flags, "Nghiêng", on_change=s(cfg, "sub_italic"))
         self.upper = SwitchRow(flags, "IN HOA", on_change=s(cfg, "sub_uppercase"))
         for w in (self.bold, self.italic, self.upper):
             w.pack(side="left", padx=(0, 14))
-        pack_rows(self, [self.font, self.size, self.color, swatches, self.stroke, self.stroke_color, self.shadow,
-                         self.opacity, self.spacing, self.effect, flags])
+        pack_rows(b, [self.font, self.size, self.color, swatches, self.stroke, self.stroke_color, self.shadow,
+                      self.opacity, self.spacing, self.effect, flags])
 
-        self._title("Nền & chữ nổi")
-        self.bg_style = OptionRow(self, "Nền chữ", SUB_BG_STYLES, on_change=self._bg_changed)
-        self.bg_color = ColorRow(self, "Màu nền", value="#000000", on_change=s(cfg, "sub_bg_color"))
-        self.bg_opacity = SliderRow(self, "Độ đậm nền", from_=0, to=100, step=5, suffix="%",
+        self.bg_sec = self._section("Nền & chữ nổi")
+        b = self.bg_sec.body
+        self.bg_style = OptionRow(b, "Nền chữ", SUB_BG_STYLES, on_change=self._bg_changed)
+        self.bg_color = ColorRow(b, "Màu nền", value="#000000", on_change=s(cfg, "sub_bg_color"))
+        self.bg_opacity = SliderRow(b, "Độ đậm nền", from_=0, to=100, step=5, suffix="%",
                                     on_change=s(cfg, "sub_bg_opacity", cast=float, preview=False), on_release=rel)
-        self.karaoke = OptionRow(self, "Chữ đang đọc", WORD_ANIMS, labels=WORD_ANIM_LABELS, on_change=self._anim_changed,
+        self.karaoke = OptionRow(b, "Chữ đang đọc", WORD_ANIMS, labels=WORD_ANIM_LABELS, on_change=self._anim_changed,
                                  info="Nổi bật: chữ đang đọc đổi màu và to lên rồi trở lại (kiểu CapCut). Tô màu dần: chữ "
-                                      "đã đọc giữ màu nổi. Hiện dần: chữ hiện ra đúng lúc được đọc.")
-        self.karaoke_color = ColorRow(self, "Màu chữ nổi", value="#FFE45C", on_change=s(cfg, "karaoke_color"))
-        pack_rows(self, [self.bg_style, self.bg_color, self.bg_opacity, self.karaoke, self.karaoke_color])
+                                      "đã đọc giữ màu nổi. Hiện dần: chữ hiện ra đúng lúc được đọc. Khớp từng tiếng: "
+                                      "cài «Căn chữ nổi» (Cài đặt › AI trên máy).")
+        self.karaoke_color = ColorRow(b, "Màu chữ nổi", value="#FFE45C", on_change=s(cfg, "karaoke_color"))
+        pack_rows(b, [self.bg_style, self.bg_color, self.bg_opacity, self.karaoke, self.karaoke_color])
 
-        self._title("Khung")
-        grid = ctk.CTkFrame(self, fg_color="transparent")
+        self.box_sec = self._section("Khung")
+        b = self.box_sec.body
+        grid = ctk.CTkFrame(b, fg_color="transparent")
         grid.pack(fill="x")
         grid.grid_columnconfigure((1, 3), weight=1)
         self.px_vars: dict[str, tk.StringVar] = {}
@@ -87,26 +94,38 @@ class SubtitleStylePanel(ctk.CTkFrame):
             e.bind("<Return>", lambda _e: self._apply_pixels())
             e.bind("<FocusOut>", lambda _e: self._apply_pixels())
             self.px_vars[key] = var
-        hint(self, "Đơn vị px theo video xuất. Kéo khung trên hình (phím T) cũng được.").pack(fill="x", pady=(2, 0))
-        self.follow = SwitchRow(self, "Đè lên chỗ chữ cũ", on_change=self._follow_changed,
+        hint(b, "Đơn vị px theo video xuất. Kéo khung trên hình (phím T) cũng được.").pack(fill="x", pady=(2, 0))
+        self.follow = SwitchRow(b, "Đè lên chỗ chữ cũ", on_change=self._follow_changed,
                                 info="Video có phụ đề in sẵn: máy dò chỗ chữ cũ, che mờ rồi đặt phụ đề mới vào giữa "
                                      "đúng chỗ đó — mỗi video tự theo chỗ của nó.")
         self.follow.pack(fill="x", pady=(4, 0))
-        self.follow_hint = hint(self, "")
+        self.follow_hint = hint(b, "")
         self.follow_hint.pack(fill="x")
 
-        self._title("Thời gian")
-        self.delay = SliderRow(self, "Trễ phụ đề", from_=-5, to=5, step=0.05, fmt="{:+.2f}", suffix="s",
+        self.time_sec = self._section("Thời gian")
+        b = self.time_sec.body
+        self.delay = SliderRow(b, "Trễ phụ đề", from_=-5, to=5, step=0.05, fmt="{:+.2f}", suffix="s",
                                on_change=s(cfg, "sub_delay", cast=float, preview=False), on_release=rel,
                                info="Âm = hiện sớm hơn. Chỉ cần khi chữ lệch so với giọng.")
-        self.sec_scale = SliderRow(self, "Cỡ dòng phụ", from_=40, to=100, step=5, suffix="%",
+        self.sec_scale = SliderRow(b, "Cỡ dòng phụ", from_=40, to=100, step=5, suffix="%",
                                    on_change=lambda v: module.set_value(cfg, "secondary_scale", v / 100, preview=False),
                                    on_release=rel, info="Cỡ dòng chữ gốc khi chọn «Song ngữ».")
-        pack_rows(self, [self.delay, self.sec_scale])
+        pack_rows(b, [self.delay, self.sec_scale])
 
-    def _title(self, text: str) -> None:
-        ctk.CTkLabel(self, text=text, font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w").pack(
-            fill="x", pady=(10, 2))
+    def _section(self, title: str) -> Section:
+        sec = Section(self, title, collapsed=True)
+        sec.pack(fill="x", pady=4)
+        return sec
+
+    def summarize(self) -> None:
+        """Tiêu đề từng khối tóm tắt giá trị đang dùng — đọc được cả khi khối đang thu gọn."""
+        cfg = self.state.subtitle
+        self.text_sec.set_subtitle(f"{cfg.sub_font} · {cfg.sub_size}px")
+        bg = cfg.bg_style if cfg.bg_style in SUB_BG_STYLES else SUB_BG_STYLES[0]
+        anim = WORD_ANIM_SHORT.get(cfg.karaoke_mode, "") if cfg.karaoke else ""
+        self.bg_sec.set_subtitle(f"{bg} · {anim}" if anim else bg)
+        self.box_sec.set_subtitle(PLACE_SHORT.get(place_of(cfg), ""))
+        self.time_sec.set_subtitle(f"trễ {cfg.sub_delay:+.2f}s" if abs(cfg.sub_delay) >= 0.005 else "")
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:
@@ -134,6 +153,7 @@ class SubtitleStylePanel(ctk.CTkFrame):
         self.sec_scale.set(cfg.secondary_scale * 100)
         self.follow_status()
         self.fill_pixels()
+        self.summarize()
 
     # ── Hành động ────────────────────────────────────────────────────────
     def _bg_changed(self, v: str) -> None:
