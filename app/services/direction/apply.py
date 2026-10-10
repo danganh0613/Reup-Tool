@@ -40,6 +40,14 @@ def compiled_for(direction: dict, *, faster: bool = False) -> Compiled:
     return c
 
 
+def effective(direction: dict | None, cfg: TTSConfig) -> dict | None:
+    """Direction được dùng khi lồng tiếng: câu chỉnh tay (``manual``) luôn dùng; gợi ý AI chỉ khi bật ``emotion_auto``
+    (mặc định tắt = một giọng xuyên suốt cả video)."""
+    if direction and (direction.get("manual") or cfg.emotion_auto):
+        return direction
+    return None
+
+
 def is_gemini_voice(voice_id: str | None) -> bool:
     from app.services.tts.gemini_tts import VOICES
 
@@ -108,7 +116,7 @@ def preview_cue(cues: list, i: int, direction: dict | None, cfg: TTSConfig, sett
     nxt = next((x for x in cues[i + 1:] if x.plain), None)
     slot = (nxt.start - c.start) / sp - cfg.min_gap if nxt is not None else c.duration / sp
     plan = (eng, vid, cfg.tts_speed, pitch)
-    if direction and cfg.emotion_direction:
+    if direction:                                    # nghe thử trên bánh xe = người dùng đang tự đặt → luôn dùng
         fast = needs_faster(c.plain, slot, cfg.tts_speed)
         plan = Director(settings).plan(cfg, eng, vid, cfg.tts_speed, pitch, direction, faster=fast)
     e, v, s, p = plan

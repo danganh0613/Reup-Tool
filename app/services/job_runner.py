@@ -143,8 +143,9 @@ class Pipeline:
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")
-        if self.state.settings.direction_suggest and self.state.tts.enable_tts:
-            # gợi ý cảm xúc / kiểu nói cho từng câu (1 lượt gọi thêm) → bánh xe Đạo diễn âm thanh nạp sẵn
+        if self.state.settings.direction_suggest and self.state.tts.enable_tts and self.state.tts.emotion_auto:
+            # gợi ý cảm xúc / kiểu nói cho từng câu (1–2 lượt gọi thêm) — chỉ khi bật «AI tự đặt cảm xúc từng câu»;
+            # mặc định tắt: một giọng xuyên suốt, không tốn lượt gợi ý
             from app.services.direction import suggest
 
             try:
@@ -252,7 +253,8 @@ class Pipeline:
         except OSError:
             mtime = 0
         # cảm xúc từng câu: chỉ thêm vào chữ ký khi có file direction (track cũ không có thì giữ nguyên chữ ký)
-        dsig = direction_apply.signature(srt_path) if t.emotion_direction else ""
+        dsig = direction_apply.signature(srt_path)
+        dsig += "|auto" if dsig and t.emotion_auto else ""
         multi = ""
         if t.multi_voice:
             try:
@@ -282,8 +284,7 @@ class Pipeline:
             cues = load_srt(srt_path)
             self.ensure_speakers(item, log=log, cancel=cancel)
             self.annotate_speakers(item, cues)
-            if self.state.tts.emotion_direction:
-                direction_apply.annotate(cues, srt_path)
+            direction_apply.annotate(cues, srt_path)          # cảm xúc câu chỉnh tay (+ gợi ý AI nếu bật)
         srt_path = srt_path or item.srt_path or ""
         out = (out_dir or VOICE_DIR) / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
         if out.exists() and not force:
@@ -616,8 +617,7 @@ class Pipeline:
                 if tcfg.multi_voice:
                     self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
                     self.annotate_speakers(item, src_cues)
-                if tcfg.emotion_direction:
-                    direction_apply.annotate(src_cues, src_path)     # cảm xúc từng câu (Đạo diễn âm thanh)
+                direction_apply.annotate(src_cues, src_path)     # cảm xúc câu chỉnh tay (+ gợi ý AI nếu bật)
                 src_cues = rp.remap_cues_for_trim(src_cues, trim)
                 fit = trim.kept_duration if trim.active else info.duration      # thời lượng nguồn (÷ tốc độ khi dựng)
                 return self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,

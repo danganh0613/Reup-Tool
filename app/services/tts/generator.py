@@ -27,7 +27,7 @@ from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration
 from app.services.tts import batch, postprocess, quality
 from app.services.tts.base import TTSEngine
-from app.services.direction.apply import Director, compiled_for, emotion_label, needs_faster
+from app.services.direction.apply import Director, compiled_for, effective, emotion_label, needs_faster
 from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
 logger = logging.getLogger(__name__)
@@ -428,7 +428,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     engines: dict[str, TTSEngine] = {cfg.tts_provider: engine}
     plan: dict[int, tuple[TTSEngine, str, float, int]] = {}      # cue → (engine, giọng, tốc độ, cao độ)
     used: dict[str, int] = {}
-    director = Director(settings) if cfg.emotion_direction else None
+    director = Director(settings)            # chỉ câu có direction được dùng (chỉnh tay / bật AI tự đặt cảm xúc)
     faster = 0
     for pos, (i, c, text) in enumerate(items):
         sc = spk_cfgs.get(str(c.meta.get("speaker", "")), cfg)
@@ -438,7 +438,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         pitch_i = sc.tts_pitch if sc.tts_provider == "Edge TTS" else 0
         vid = voice_id_for(sc)
         plan[i] = (eng, vid, sc.tts_speed, pitch_i)
-        d = c.meta.get("direction") if director else None
+        d = effective(c.meta.get("direction"), cfg)
         if d:
             slot = items[pos + 1][1].start - c.start - cfg.min_gap if pos + 1 < len(items) else c.duration
             # cả chế độ «Voice tự nhiên»: không nén nên câu dài đẩy lùi cả đoạn sau (đo: trễ tới 1,75 s)
@@ -472,7 +472,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
-        if director is not None and director.styles:
+        if director.styles:
             log(f"Cảm xúc từng câu: {sum(director.styles.values())} câu · {len(director.styles)} kiểu lời dặn "
                 "(câu cùng kiểu đọc gộp chung một lượt)"
                 + (f" · {faster} câu chật khung → dặn nói nhanh hơn" if faster else ""))
@@ -519,7 +519,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 eng = fb_engines.get(fcfg.tts_provider) or fb_engines.setdefault(fcfg.tts_provider, make_engine(fcfg, settings))
                 vid = voice_id_for(fcfg)
                 sp_f, pt_f = plan[i][2], 0
-                d = cue_i.meta.get("direction") if director is not None else None
+                d = effective(cue_i.meta.get("direction"), cfg)
                 if d and fcfg.tts_provider == "Edge TTS":       # dự phòng Edge vẫn giữ nhịp / cao độ của cảm xúc
                     comp = compiled_for(d)
                     sp_f, pt_f = sp_f * (1.0 + comp.edge_rate / 100.0), comp.edge_pitch
@@ -690,7 +690,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                            "engine": eng.name, "giong": vid, "tempo": round(residual_of(idx) * tempo, 3),
                            "so_lan_doc": int(mark.get("tries", 1)), "loi_qc": "; ".join(mark.get("problems") or []),
                            "du_phong": idx in fallback_used,
-                           "cam_xuc": emotion_label(cue.meta.get("direction")) if director is not None else "",
+                           "cam_xuc": emotion_label(effective(cue.meta.get("direction"), cfg)),
                            "loi_dan": getattr(eng, "style", "") or "",
                            "chu": cue.plain})
     tmp.replace(out_wav)

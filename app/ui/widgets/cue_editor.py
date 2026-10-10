@@ -220,7 +220,11 @@ class CueEditor(ctk.CTkFrame):
     def _paint_chip(self, chip: ctk.CTkButton, i: int) -> None:
         from app.ui.widgets.segment_director import emotion_of
 
-        lbl, color = emotion_of(self.directions.get(i))
+        d = self.directions.get(i)
+        auto = self.item is not None and self.app_state.state_for(self.item).tts.emotion_auto
+        if d and not (d.get("manual") or auto):
+            d = None                              # gợi ý AI không dùng (một giọng xuyên suốt) → như chưa đặt
+        lbl, color = emotion_of(d)
         chip.configure(text=f"● {lbl}" if lbl else "＋ cảm xúc", text_color=color or T.TEXT_MUTED)
 
     def _direct_row(self, r: int) -> None:

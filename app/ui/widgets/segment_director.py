@@ -168,9 +168,7 @@ class SegmentDirector(ctk.CTkToplevel):
 
     def _engine_note(self) -> None:
         t = self.st.tts
-        if not t.emotion_direction:
-            self.status.warn("Đang tắt «Đọc theo cảm xúc từng câu» ở tab Lồng tiếng — bật lên thì cảm xúc mới được dùng.")
-        elif not (t.tts_provider.startswith("Gemini") or t.tts_provider == "Edge TTS"):
+        if not (t.tts_provider.startswith("Gemini") or t.tts_provider == "Edge TTS"):
             self.status.warn(f"{t.tts_provider} không đọc theo lời dặn cảm xúc — chọn Gemini TTS (đủ cảm xúc) hoặc "
                              "Edge TTS (chỉ nhịp / cao độ) ở tab Lồng tiếng.")
 
@@ -187,6 +185,8 @@ class SegmentDirector(ctk.CTkToplevel):
         for k, c in enumerate(self.cues):
             d = self.items.get(k)
             _lbl, color = emotion_of(d)
+            if d and not (d.get("manual") or self.st.tts.emotion_auto):
+                color = _EMPTY                        # gợi ý AI chưa dùng (một giọng xuyên suốt) → ô xám
             x0, x1 = self._x(c.start, w), max(self._x(c.start, w) + 3, self._x(c.end, w) - 1)
             cur = k == self.i
             y0, y1 = (4, 42) if cur else (10, 36)
@@ -220,7 +220,14 @@ class SegmentDirector(ctk.CTkToplevel):
             self.emo_lbl.configure(text="Chưa có cảm xúc — đọc theo phong cách chung của video", text_color=T.TEXT_MUTED)
             return
         sty = self._style_vi.get((d.get("speaking_style") or {}).get("a", ""), "")
-        src = "chỉnh tay" if d.get("manual") else "gợi ý AI"
+        if d.get("manual"):
+            src = "chỉnh tay"
+        elif self.st.tts.emotion_auto:
+            src = "gợi ý AI"
+        else:
+            self.emo_lbl.configure(text=f"○ {lbl}/5 · {sty} (gợi ý AI — chưa dùng; «Áp dụng» để đọc theo)",
+                                   text_color=T.TEXT_MUTED)
+            return
         self.emo_lbl.configure(text=f"● {lbl}/5 · {sty} ({src})", text_color=color)
 
     def _set_targets(self, text: str) -> None:
