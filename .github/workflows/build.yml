@@ -1,17 +1,14 @@
 # Đóng gói Edit Studio cho Windows (ZIP) và macOS chip Apple (DMG) — build song song trên máy của GitHub.
 # Bản macOS Intel đã ngừng phát triển (PyTorch / PaddlePaddle không còn bản cho Mac Intel).
-#   • Pull request: dựng + chạy thử đầy đủ nhưng KHÔNG tải file lên (bộ nhớ Artifacts của tài khoản có hạn — mỗi
-#     bản vài trăm MB, hết chỗ là cả lần chạy báo lỗi dù dựng thành công).
-#   • Push lên main / chạy tay: file nằm ở mục «Artifacts» của lần chạy (giữ 2 ngày; hết chỗ thì bỏ qua, không lỗi).
+#   • KHÔNG tự chạy theo pull request / push: repo riêng tư chỉ có số phút Actions miễn phí mỗi tháng (máy macOS tính
+#     ×10, Windows ×2) — hết là GitHub chặn mọi job. Bản cài dựng ngay trên máy (build.bat).
+#   • Chạy tay: tab Actions → Build → Run workflow — file nằm ở mục «Artifacts» (giữ 2 ngày; hết chỗ thì bỏ qua).
 #   • Đẩy tag v* (vd. v1.0.1): tạo GitHub Release kèm ZIP Windows + DMG macOS arm64 (tải lên bắt buộc thành công).
-#   • Chạy tay: tab Actions → Build → Run workflow.
 name: Build
 
 on:
   workflow_dispatch:
-  pull_request:
   push:
-    branches: [main]
     tags: ["v*"]
 
 permissions:

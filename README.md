@@ -100,8 +100,9 @@ Workflow `.github/workflows/build.yml` build song song trên máy của GitHub A
   30 giây; phiên bản macOS tối thiểu được đo từ các thư viện thật trong gói rồi ghi vào `Info.plist` và hướng dẫn trong DMG.
 - Cả hai: kiểm tra FFmpeg có libass và phụ đề hiện chữ thật (`tools/ci_check_ffmpeg.py`).
 
-- Pull request: chỉ dựng + chạy thử, không tải file lên (bộ nhớ Artifacts của tài khoản có hạn).
-- Push lên `main` / chạy tay: tab **Actions** → lần chạy **Build** → mục **Artifacts** → tải ZIP / DMG (giữ 2 ngày).
+- Không tự chạy theo pull request / push (repo riêng tư có hạn mức phút Actions mỗi tháng); bản cài dựng trên máy bằng
+  `build.bat`.
+- Chạy tay: tab **Actions** → **Build** → **Run workflow** → mục **Artifacts** → tải ZIP / DMG (giữ 2 ngày).
 - Đẩy tag `v*` (vd. `git tag v1.0.1 && git push origin v1.0.1`): tự tạo **Release** kèm ZIP + DMG, tải lâu dài.
 - Chạy tay: **Actions** → **Build** → **Run workflow**.
 
