@@ -95,7 +95,7 @@ class StoryModule(BaseModule):
         self.video_dur = SliderRow(sec.body, "Thời lượng clip", from_=4, to=8, step=1, suffix="s",
                                    on_change=s(cfg, "video_duration", cast=int, preview=False))
         pack_rows(sec.body, [self.use_video, self.video_model, self.video_dur])
-        hint(sec.body, "Clip AI được tạo từ ảnh của cảnh (image-to-video) và lặp cho đủ thời lượng lời kể.").pack(fill="x")
+        hint(sec.body, "Clip AI làm từ ảnh của cảnh, lặp cho đủ lời kể.").pack(fill="x")
 
         # ── Giọng kể ─────────────────────────────────────────────────────
         sec = Section(self, "Giọng kể mặc định", subtitle="nhân vật có giọng riêng: xem Phân vai")
@@ -131,8 +131,7 @@ class StoryModule(BaseModule):
         self.auto_queue.pack(fill="x", pady=2)
         self.run_status = StatusLabel(sec.body, "")
         self.run_status.pack(fill="x")
-        hint(sec.body, "Video ghép xong được đưa vào hàng đợi cùng SRT — dùng các module Phụ đề, Nhạc nền, "
-                       "Logo, Màu sắc rồi bấm Render như video thường.").pack(fill="x", pady=(2, 0))
+        hint(sec.body, "Video ghép xong vào hàng đợi kèm phụ đề — chỉnh tiếp như video thường.").pack(fill="x", pady=(2, 0))
 
         self._load_last_project()
 

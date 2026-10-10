@@ -74,7 +74,7 @@ TOPICS: list[dict] = [
             "Lần đầu cần cài bộ nghe lời thoại (Cài đặt › AI trên máy › «Cài», ~11 GB, một lần).",
             "Mục Lời thoại: chọn «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Cần có API key Gemini (miễn phí, lấy tại "
             "aistudio.google.com, dán vào Cài đặt › AI dùng API key). Muốn sửa câu nào thì sửa ngay ở đầu tab.",
-            "Mục Phụ đề: chọn «Sub đã dịch». Chữ Việt hiện trên video. Muốn dời chữ thì bấm T rồi kéo ô chữ.",
+            "Phụ đề tự hiện chữ Việt kiểu TikTok. Muốn dời / đổi cỡ: dùng 2 nút phụ đề trên khung video.",
             "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không.",
             "Mục Che mờ (nếu video có chữ tiếng nước ngoài dính sẵn trên hình): bấm B rồi vẽ một ô đè lên dòng chữ đó.",
             "Mục Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung/Anh, giữ nhạc nền & tiếng động), «Âm gốc / nền» "
@@ -114,20 +114,15 @@ TOPICS: list[dict] = [
         ]),
     ]},
     {"key": "subtitle", "title": "Phụ đề: chữ hiện trên video", "group": "Từng mục", "blocks": [
-        ("h", "Để làm gì?"),
-        ("p", "Chọn chữ nào hiện lên video (chữ gốc hay chữ đã dịch), chữ to nhỏ, màu gì, nằm ở đâu."),
-        ("h", "Làm thế nào?"),
+        ("p", "Mặc định đã giống phụ đề TikTok: chữ đậm trắng viền đen, tối đa 2 dòng, nằm trên vùng nút của TikTok."),
         ("steps", [
-            "Chưa có file chữ (.srt)? Để «Tự nhận diện»: khi bấm Render, máy tự nghe và tạo chữ. Có sẵn file .srt thì chọn «Chọn file SRT» hoặc kéo thả file .srt vào cửa sổ.",
-            "Chọn kiểu hiện: «Sub gốc» (tiếng gốc) · «Sub đã dịch» (tiếng Việt) · «Song ngữ» (Việt ở trên, gốc ở dưới).",
-            "Dời chữ: bấm nút T trên màn hình giữa, rồi kéo cái ô viền xanh. Ô luôn ôm vừa chữ (chữ bám đáy ô): kéo cạnh "
-            "trên/dưới = chữ to/nhỏ, kéo cạnh trái/phải = ô rộng/hẹp (ít/nhiều dòng), kéo giữa ô = dời chỗ.",
-            "Video gốc có phụ đề in sẵn? Bật «Đặt lên chỗ chữ cứng đã che»: mỗi video máy tự dò chỗ chữ cũ, che mờ rồi đặt "
-            "phụ đề mới đè đúng lên đó — áp mẫu hàng loạt không bị lệch mỗi video một kiểu. Kéo tay ô = tắt chế độ này.",
-            "Chỉnh chữ: chọn Font, Cỡ chữ, Màu, Viền, Nền. Muốn nổi bật thì bật «Nền» kiểu «Hộp mờ bo góc».",
-            "«Karaoke»: chữ đổi màu theo lời đọc, giống karaoke.",
+            "Đổi chỗ / cỡ chữ: dùng 2 nút trên khung video — «Dưới · Giữa · Trên · Đè chữ cũ» và «Nhỏ · Vừa · Lớn».",
+            "Video gốc có chữ in sẵn: chọn «Đè chữ cũ» — máy tự dò, che mờ chữ cũ rồi đặt phụ đề mới vào giữa đúng chỗ đó.",
+            "Đổi kiểu (trắng, vàng, hộp nền…): tab «Lời thoại» › «Phụ đề trên video» › «Kiểu».",
+            "Muốn chỉnh tay (phông, màu, viền, nền…): bấm «Tuỳ chỉnh chi tiết» ngay dưới đó.",
+            "Kéo tay: ở tab «Lời thoại» bấm vào khung xanh trên video rồi kéo; «Căn giữa» / «Rộng hết» trên thanh để căn nhanh.",
         ]),
-        ("tip", "Chữ hiện sớm hay muộn hơn tiếng? Chỉnh ô «Trễ phụ đề» (số dương = chữ hiện muộn hơn)."),
+        ("tip", "Chữ hiện sớm / muộn hơn tiếng: «Tuỳ chỉnh chi tiết» › «Trễ phụ đề»."),
     ]},
     {"key": "review", "title": "Duyệt: xem từng video, chỗ nào chưa ổn thì sửa", "group": "Từng mục", "blocks": [
         ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Video là trung tâm: khung xem trước bên phải luôn "

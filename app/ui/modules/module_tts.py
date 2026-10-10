@@ -89,10 +89,10 @@ class TTSModule(BaseModule):
 
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
-        self.multi = SwitchRow(sec.body, "Mỗi người nói một giọng", on_change=self._multi_changed)
+        self.multi = SwitchRow(sec.body, "Mỗi người nói một giọng", on_change=self._multi_changed,
+                               info="Máy nhận ra ai nói câu nào rồi lồng mỗi người một giọng. Người chưa chọn giọng dùng "
+                                    "giọng chính ở trên.")
         self.multi.pack(fill="x")
-        hint(sec.body, "Video có nhiều người nói: máy nhận ra ai nói câu nào rồi lồng tiếng mỗi người một giọng. "
-                       "Chọn giọng cho từng người bên dưới; người chưa chọn dùng giọng chính ở trên.").pack(fill="x")
         self.multi_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
         self.speaker_count = OptionRow(self.multi_frame, "Số người nói", SPEAKER_COUNTS,
                                        on_change=s(cfg, "speaker_count", preview=False))
@@ -127,7 +127,7 @@ class TTSModule(BaseModule):
                              ("Quản lý dự án TTS…", self._open_library, None)]).pack(fill="x", pady=2)
         self.track_status = StatusLabel(sec.body, "")
         self.track_status.pack(fill="x")
-        hint(sec.body, "Xem các track đã tạo, dùng lại hoặc nghe thử. Cue chưa đổi sẽ lấy từ cache nên tạo lại rất nhanh.").pack(fill="x")
+        hint(sec.body, "Câu không đổi lấy lại từ bộ nhớ nên tạo lại rất nhanh.").pack(fill="x")
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:

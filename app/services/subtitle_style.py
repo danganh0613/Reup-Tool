@@ -192,7 +192,14 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
     ]
 
     pos_tag = ""
-    if not cfg.use_box and cfg.sub_position == SUB_POSITIONS[3]:
+    band = None                           # (đỉnh, đáy) px của dải nền ngang khi khối chữ căn giữa khung
+    if cfg.use_box and cfg.box_center:
+        # khối chữ (1 hay nhiều dòng) căn giữa khung theo chiều dọc; lề trái / phải vẫn giới hạn bề rộng dòng
+        bx, bw = max(0.0, cfg.box_x), max(0.05, cfg.box_w)
+        by, bh = max(0.0, cfg.box_y), max(0.03, cfg.box_h)
+        pos_tag = f"{{\\an5\\pos({int(round((bx + bw / 2) * width))},{int(round((by + bh / 2) * height))})}}"
+        band = (int(round(by * height)), int(round((by + bh) * height)))
+    elif not cfg.use_box and cfg.sub_position == SUB_POSITIONS[3]:
         x = int(round(width * max(0, min(100, cfg.sub_x)) / 100))
         y = int(round(height * max(0, min(100, cfg.sub_y)) / 100))
         pos_tag = f"{{\\an5\\pos({x},{y})}}"
@@ -217,8 +224,11 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int) -> 
             lines.append(f"Dialogue: 0,{start},{end},Box,,0,0,0,,{pos_tag}{text}")
         elif bg_on and bg_style == SUB_BG_STYLES[3]:
             # dải ngang toàn khung: vẽ hình chữ nhật bằng drawing mode ASS
-            top = box_top if cfg.use_box else height - mv - int(font_size * 2.2)
-            bottom = height - mv if cfg.use_box else height - mv + int(font_size * 0.3)
+            if band is not None:
+                top, bottom = band
+            else:
+                top = box_top if cfg.use_box else height - mv - int(font_size * 2.2)
+                bottom = height - mv if cfg.use_box else height - mv + int(font_size * 0.3)
             top, bottom = max(0, top), min(height, max(top + 4, bottom))
             lines.append(f"Dialogue: 0,{start},{end},Box,,0,0,0,,{{\\an7\\pos(0,0)\\1c&H{box_c[4:]}&\\1a&H{box_c[2:4]}&"
                          f"\\bord0\\shad0\\p1}}m 0 {top} l {width} {top} l {width} {bottom} l 0 {bottom}{{\\p0}}")

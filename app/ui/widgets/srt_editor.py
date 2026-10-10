@@ -219,8 +219,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         self.status.pack(side="left", fill="x", expand=True, padx=(10, 0))
         button(foot, "Lưu bản dịch", icon_name="save", variant="primary", command=self._save).pack(side="right")
         button(foot, "AI dịch / dịch lại đã chọn", icon_name="sparkle", command=self._ai_selected,
-               tip="Câu chưa dịch → dịch mới. Câu đã có bản dịch → AI dịch lại theo «Yêu cầu AI», có xem bản cũ "
-                   "và các câu xung quanh.").pack(side="right", padx=8)
+               tip="Câu chưa dịch → dịch mới · câu đã dịch → AI dịch lại theo yêu cầu bên dưới.").pack(side="right", padx=8)
         ctk.CTkButton(foot, text="Đóng", width=90, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
         req = ctk.CTkFrame(self, fg_color="transparent")
         req.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))

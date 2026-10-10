@@ -212,6 +212,17 @@ def source_to_output(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> t
     return ox + x * sx, oy + y * sy
 
 
+def output_to_source(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
+    """Ngược của ``source_to_output``: điểm theo tỉ lệ khung RA → tỉ lệ khung NGUỒN (có thể nằm ngoài 0..1)."""
+    zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
+    ox, oy, sx, sy = source_rect_in_output(info, cfg)
+    x, y = (x - ox) / max(1e-9, sx), (y - oy) / max(1e-9, sy)
+    x, y = (x - 0.5) / zoom + 0.5, (y - 0.5) / zoom + 0.5
+    if cfg.flip_h:
+        x = 1.0 - x
+    return x, y
+
+
 def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_name: str | None = None,
                       stages: list[Stage] | None = None, pre_stages: list[Stage] | None = None,
                       src_stages: list[Stage] | None = None,

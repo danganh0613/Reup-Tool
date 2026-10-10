@@ -35,6 +35,9 @@ GPU_BACKENDS = ["auto", "videotoolbox", "cpu"] if sys.platform == "darwin" else 
 VIDEO_CODECS = ["H.264 / AVC", "H.265 / HEVC", "AV1"]
 ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 
+#: phông phụ đề mặc định kiểu TikTok: chữ đậm đủ dấu tiếng Việt (Arial Black / Impact thiếu dấu) — Segoe UI Black có sẵn
+#: trên Windows (đã là nét đậm, không bật «Đậm» kẻo libass tô đậm thêm); máy khác dùng Arial đậm
+SUB_FONT_DEFAULT, SUB_BOLD_DEFAULT = ("Segoe UI Black", False) if sys.platform == "win32" else ("Arial", True)
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
 #: lấy lời thoại từ: "asr" = AI nghe giọng nói (Qwen3-ASR, chạy trên máy) · "ocr" = đọc phụ đề in sẵn trên video
 #: (Douyin…) — đúng từng chữ, kể cả tên riêng
@@ -122,16 +125,17 @@ class SubtitleConfig:
     translate_target: str = TRANSLATE_TARGETS[0]
     translate_style: str = ""          # ghi chú phong cách dịch (tuỳ chọn)
     srt_mode: str = SRT_MODES[0]
-    sub_font: str = "Arial"
-    sub_size: int = 36
-    sub_bold: bool = True
+    # mặc định kiểu phụ đề video viral TikTok (xem services/subtitle_presets.py): chữ đậm trắng viền đen dày + bóng nhẹ
+    sub_font: str = SUB_FONT_DEFAULT
+    sub_size: int = 66
+    sub_bold: bool = SUB_BOLD_DEFAULT
     sub_italic: bool = False
     sub_uppercase: bool = False
     sub_color: str = "#FFFFFF"
     sub_opacity: float = 100.0
-    sub_stroke_width: float = 2.0
+    sub_stroke_width: float = 5.0
     sub_stroke_color: str = "#000000"
-    sub_shadow: float = 0.0
+    sub_shadow: float = 2.0
     sub_bg_enable: bool = False
     sub_bg_color: str = "#000000"
     sub_bg_opacity: float = 60.0
@@ -143,13 +147,17 @@ class SubtitleConfig:
     sub_y: int = 85                    # %
     sub_delay: float = 0.0             # giây, âm = sớm hơn
     secondary_scale: float = 0.8       # cỡ dòng phụ khi Song ngữ
-    # Khung phụ đề (tỉ lệ 0..1 theo khung ra): chữ tự xuống dòng theo bề rộng khung, căn đáy khung
+    # Khung phụ đề (tỉ lệ 0..1 theo khung ra): chữ tự xuống dòng theo bề rộng khung, căn đáy khung — đáy ở 76% chiều
+    # cao: trên vùng tên kênh / chú thích / nút của TikTok · Reels · Shorts
     use_box: bool = True
-    box_x: float = 0.05
-    box_y: float = 0.74
-    box_w: float = 0.90
-    box_h: float = 0.14
+    box_x: float = 0.08
+    box_y: float = 0.68
+    box_w: float = 0.84
+    box_h: float = 0.08
     follow_hardsub: bool = False       # đặt khung lên đúng chỗ chữ cứng đã dò & che (mỗi video một chỗ)
+    #: khối chữ căn giữa khung theo chiều dọc (máy tự đặt khi bám chỗ chữ cứng — câu 1 hay 2 dòng đều nằm giữa vùng
+    #: đã che); False = chữ bám đáy khung
+    box_center: bool = False
     text_effect: str = "Không có (Khuyên dùng)"
     bg_style: str = "Không nền"
     karaoke: bool = False

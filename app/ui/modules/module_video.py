@@ -39,13 +39,13 @@ class VideoModule(BaseModule):
         ButtonRow(self, [("＋ Thêm từ thư mục…", self._add_folder, None)]).pack(fill="x", pady=(0, 4))
         self.review = SwitchRow(self, "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)", on_change=self._review_toggled)
         self.review.pack(fill="x", pady=(2, 0))
-        self.review_hint = hint(self, "Bấm «Chuẩn bị» (thay cho Render) → máy làm phụ đề, dịch, giọng cho cả hàng đợi → "
-                                      "tab «Duyệt» (thanh bên trái) để xem / sửa / duyệt từng video → «Xuất». "
-                                      "Tắt = render một mạch như cũ.")
+        self.review_hint = hint(self, "«Chuẩn bị» → xem, sửa ở tab «Duyệt» → «Xuất». Tắt = xuất thẳng.")
 
         from app.services.watch_folder import SHARED, WATCH_ACTIONS
 
-        sec = Section(self, "Thư mục theo dõi (tự nạp video mới)")
+        sec = Section(self, "Thư mục theo dõi (tự nạp video mới)",
+                      info="Máy xem thư mục vài giây một lần, chỉ nhận file đã chép xong. «Tự chuẩn bị» hợp với Duyệt "
+                           "trước khi xuất; «Tự xuất» xuất luôn theo mẫu.")
         sec.pack(fill="x", pady=4)
         self.watch = SwitchRow(sec.body, "Theo dõi thư mục", on_change=self._watch_toggled)
         self.watch_dir = EntryRow(sec.body, "Thư mục", browse="dir", placeholder="chép video vào đây là tự vào hàng đợi",
@@ -56,10 +56,10 @@ class VideoModule(BaseModule):
         pack_rows(sec.body, [self.watch, self.watch_dir, self.watch_tpl, self.watch_action])
         self.watch_status = StatusLabel(sec.body, "")
         self.watch_status.pack(fill="x")
-        hint(sec.body, "Máy kiểm tra thư mục vài giây một lần, chỉ nhận file đã chép xong. «Tự chuẩn bị» hợp với chế độ "
-                       "Duyệt trước khi xuất; «Tự xuất» render luôn theo mẫu.").pack(fill="x")
 
-        sec = Section(self, "Cấu hình của video đang chọn")
+        sec = Section(self, "Cấu hình của video đang chọn",
+                      info="Mọi video dùng chung mẫu ở thanh trên cùng. Bật «Chỉnh riêng» khi video này cần khác (vd chữ "
+                           "cứng nằm chỗ khác): chỉnh gì lúc chọn video này chỉ áp cho nó.")
         sec.pack(fill="x", pady=4)
         self.own_status = StatusLabel(sec.body, "")
         self.own_status.pack(fill="x")
@@ -67,10 +67,9 @@ class VideoModule(BaseModule):
         self.own.pack(fill="x", pady=(4, 0))
         self.own_tpl = OptionRow(sec.body, "Áp mẫu riêng", ["Chọn mẫu…"], on_change=self._own_template)
         self.own_tpl.pack(fill="x", pady=3)
-        hint(sec.body, "Mặc định mọi video dùng chung mẫu chọn ở thanh trên cùng. Bật «Chỉnh riêng» khi video này cần khác "
-                       "(vd. chữ cứng nằm chỗ khác → che mờ chỗ khác): chỉnh gì lúc chọn video này chỉ áp cho nó.").pack(fill="x")
 
-        sec = Section(self, "Khung hình & tốc độ")
+        sec = Section(self, "Khung hình & tốc độ", info="9:16 = TikTok / Shorts · 16:9 = YouTube. Nền mờ: video nằm "
+                                                          "giữa, hai bên là chính nó phóng to và làm mờ.")
         sec.pack(fill="x", pady=4)
         set_ratio, set_fit = s(cfg, "ratio"), s(cfg, "fit_mode")
         self.ratio = OptionRow(sec.body, "Tỉ lệ", RATIOS, on_change=lambda v: (set_ratio(v), self.update_fit_hint()))
@@ -83,10 +82,9 @@ class VideoModule(BaseModule):
         # chỉ hiện khi «Cách vừa khung» không có tác dụng (video đã đúng tỉ lệ xuất) — tránh tưởng chọn mà không ăn
         self.fit_hint = hint(sec.body, "")
         self.fit_hint.configure(text_color=T.INFO)
-        hint(sec.body, "9:16 (Shorts/TikTok) · 16:9 (YouTube). Nền mờ: video nằm giữa, hai bên là chính nó phóng to "
-                       "và làm mờ.").pack(fill="x", pady=(2, 0))
 
-        sec = Section(self, "Hình ảnh & GPU")
+        sec = Section(self, "Hình ảnh & GPU", info="H.264: chạy mọi thiết bị · HEVC: nhẹ hơn ~40% · AV1: nén tốt nhất "
+                                                     "(cần GPU đời mới). CRF 18–23 hợp lý cho YouTube.")
         sec.pack(fill="x", pady=4)
         self.flip = SwitchRow(sec.body, "Lật ngang video (mirror)", on_change=s(cfg, "flip_h"))
         self.gpu = SwitchRow(sec.body, f"Tăng tốc GPU ({gpu_name_nowait() or 'đang dò…'})",
@@ -116,10 +114,9 @@ class VideoModule(BaseModule):
         pack_rows(sec.body, [self.backend, self.codec, self.quality, self.preset, self.gop, self.suffix, self.out_name,
                              self.out_sub])
         self.name_hint.pack(fill="x")
-        hint(sec.body, "H.264: tương thích mọi thiết bị · HEVC: nhỏ hơn ~40% · AV1: chuẩn mới, nén tốt nhất "
-                       "(cần GPU đời mới hoặc encode CPU chậm). CRF 18–23 hợp lý cho YouTube.").pack(fill="x", pady=(2, 0))
 
-        sec = Section(self, "Âm thanh")
+        sec = Section(self, "Âm thanh", info="Lồng tiếng: bật «Khử giọng nói gốc», âm nền 60–90%, lồng tiếng 120–160%. "
+                                               "«Tự hạ âm nền»: nhạc giảm mượt khi có lời đọc rồi lên lại.")
         sec.pack(fill="x", pady=4)
         self.keep = SwitchRow(sec.body, "Phát âm thanh gốc của video", on_change=s(cfg, "keep_original_audio", preview=False))
         self.novocal = SwitchRow(sec.body, "Khử giọng nói gốc (AI) — giữ nhạc nền & tiếng động", on_change=self._novocal_toggled)
@@ -134,8 +131,6 @@ class VideoModule(BaseModule):
         self.loop = SwitchRow(sec.body, "Lặp video cho đủ thời lượng giọng đọc", on_change=s(cfg, "loop_to_voice", preview=False))
         pack_rows(sec.body, [self.keep, self.novocal, self.novocal_hint, self.orig_vol, self.tts_vol, self.duck,
                              self.norm, self.mute, self.loop])
-        hint(sec.body, "Lồng tiếng: bật «Khử giọng nói gốc» rồi để âm nền 60–90% (chỉ còn nhạc & tiếng động) · lồng tiếng "
-                       "120–160%. Tự hạ nền: nhạc nền giảm mượt khi có lời đọc rồi lên lại.").pack(fill="x", pady=(2, 0))
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:

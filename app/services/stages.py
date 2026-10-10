@@ -454,8 +454,9 @@ class ModuleStages:
 
 
 def subtitle_for(state: AppState, item: VideoItem, info: MediaInfo) -> SubtitleConfig:
-    """Cấu hình phụ đề thực dùng cho ``item``: bật «đặt lên chữ cứng» + đã dò được vùng chữ cứng → dời khung phụ đề
-    mới đè đúng lên chỗ chữ gốc đã che (mỗi video một chỗ); không thì giữ nguyên khung chung."""
+    """Cấu hình phụ đề thực dùng cho ``item``: bật «đặt lên chữ cứng» + đã dò được vùng chữ cứng → khung phụ đề mới
+    nằm GIỮA vùng chữ gốc đã che (mỗi video một chỗ), khối chữ căn giữa khung — câu 1 hay 2 dòng đều nằm đúng chỗ chữ
+    cũ (trước: bám đáy dòng chữ cũ nên câu 2 dòng lấn lên trên vùng che); không thì giữ nguyên khung chung."""
     scfg = state.subtitle
     if not (scfg.follow_hardsub and scfg.use_box and state.blur.auto_detect and info.width and info.height):
         return scfg
@@ -473,16 +474,46 @@ def subtitle_for(state: AppState, item: VideoItem, info: MediaInfo) -> SubtitleC
         x, y, w, h = float(region["x"]), float(region["y"]), float(region["w"]), float(region["h"])
     except (KeyError, TypeError, ValueError):
         return scfg
-    # vùng che có nới lề trên/dưới ≈ 27% → đáy dòng chữ gốc ở ~73% chiều cao vùng
-    cx, bottom = source_to_output(info, state.video, x + w / 2, y + h * 0.73)
-    if not (0.05 < bottom <= 1.0 and 0.0 < cx < 1.0):
+    # vùng che nới lề trên / dưới bằng nhau → tâm vùng = tâm dòng chữ gốc
+    cx, cy = source_to_output(info, state.video, x + w / 2, y + h / 2)
+    if not (0.05 < cy < 0.98 and 0.0 < cx < 1.0):
         return scfg                                    # chữ gốc nằm ngoài khung ra (bị cắt) → giữ khung chung
     geo = output_geometry(info, state.video)
     bh = min(0.9, box_height_px(scfg, geo.width, geo.height) / max(1, geo.height))
     bw = min(1.0, scfg.box_w)
     bx = max(0.0, min(1.0 - bw, cx - bw / 2))
-    bottom = max(bh, bottom)
-    return replace(scfg, box_x=round(bx, 4), box_w=round(bw, 4), box_y=round(bottom - bh, 4), box_h=round(bh, 4))
+    by = max(0.0, min(1.0 - bh, cy - bh / 2))
+    return replace(scfg, box_x=round(bx, 4), box_w=round(bw, 4), box_y=round(by, 4), box_h=round(bh, 4),
+                   box_center=True)
+
+
+def hardsub_blur_region(state: AppState, item: VideoItem, info: MediaInfo) -> dict | None:
+    """Vùng che chữ cứng của ``item`` (toạ độ nguồn) — None nếu chưa dò / không có. Phụ đề mới đang đặt lên chỗ chữ
+    cứng → nới vùng che phủ trọn khối chữ mới (2 dòng, căn giữa vùng cũ) + lề bằng độ mềm mép, để chữ mới luôn nằm
+    trên nền đã che, không lấn ra phần video còn rõ."""
+    from app.services.hardsub import cached_region
+    from app.services.render_pipeline import output_to_source
+
+    region = cached_region(item)
+    if not isinstance(region, dict):
+        return None
+    sub = subtitle_for(state, item, info)
+    if not sub.box_center:                             # không bám chỗ chữ cứng → che đúng vùng đã dò
+        return region
+    try:
+        x, y, w, h = float(region["x"]), float(region["y"]), float(region["w"]), float(region["h"])
+        feather = float(region.get("feather", 18.0))
+    except (KeyError, TypeError, ValueError):
+        return region
+    pts = [output_to_source(info, state.video, px, py)
+           for px in (sub.box_x, sub.box_x + sub.box_w) for py in (sub.box_y, sub.box_y + sub.box_h)]
+    sx0, sx1 = min(p[0] for p in pts), max(p[0] for p in pts)
+    sy0, sy1 = min(p[1] for p in pts), max(p[1] for p in pts)
+    pad_y = feather / max(1, info.height) + (sy1 - sy0) * 0.08     # mép mềm của vùng che không được ăn vào chữ
+    pad_x = feather / max(1, info.width)
+    x0, x1 = max(0.0, min(x, sx0 - pad_x)), min(1.0, max(x + w, sx1 + pad_x))
+    y0, y1 = max(0.0, min(y, sy0 - pad_y)), min(1.0, max(y + h, sy1 + pad_y))
+    return {**region, "x": round(x0, 4), "y": round(y0, 4), "w": round(x1 - x0, 4), "h": round(y1 - y0, 4)}
 
 
 def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: bool = True,
@@ -496,9 +527,8 @@ def collect(state: AppState, item: VideoItem, info: MediaInfo, *, include_blur: 
     if include_blur:
         blur = state.blur
         if blur.auto_detect:
-            from app.services.hardsub import cached_region
-
-            region = cached_region(item)                 # vùng chữ cứng đã dò của video này (dò ở bước chuẩn bị)
+            # vùng chữ cứng đã dò của video này (dò ở bước chuẩn bị), nới cho phủ trọn phụ đề mới đặt lên đó
+            region = hardsub_blur_region(state, item, info)
             if isinstance(region, dict):
                 blur = replace(blur, enable=True, regions=[r for r in blur.regions if blur.enable] + [region])
         src_stages.append(blur_stage(blur))

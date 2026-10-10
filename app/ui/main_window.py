@@ -31,7 +31,6 @@ from app.ui.modules.module_color import ColorModule
 from app.ui.modules.module_srt import SRTModule
 from app.ui.modules.module_story import StoryModule
 from app.ui.modules.module_stt import STTModule
-from app.ui.modules.module_subtitle import SubtitleModule
 from app.ui.modules.module_trim import TrimModule
 from app.ui.modules.module_tts import TTSModule
 from app.ui.modules.module_video import VideoModule
@@ -64,10 +63,11 @@ except Exception:  # pragma: no cover
 
 RAIL_W = 72                      # thanh tính năng bên trái (gọn: chỉ icon + nhãn ngắn)
 #: tab dựng sẵn (ẩn) lúc người dùng rảnh, theo thứ tự hay dùng — mở lần đầu khỏi đứng hình 0,2–0,7 s (audit_out/perf)
-PREWARM = ["srt", "tts", "subtitle", "stt", "video", "blur", "color", "bgm", "brand", "trim", "story"]
+PREWARM = ["srt", "tts", "stt", "video", "blur", "color", "bgm", "brand", "trim", "story"]
 PREWARM_IDLE = 1.5               # giây không bấm / gõ / cuộn mới dựng sẵn
 RAIL_LABELS = {"story": "Truyện"}  # nhãn ngắn trên thanh bên (tiêu đề đầy đủ vẫn ở đầu bảng tính năng)
-MODULES: list[type[BaseModule]] = [VideoModule, SubtitleModule, STTModule, SRTModule, TTSModule, BlurModule,
+# «Phụ đề» (kiểu chữ) đã gộp vào «Lời thoại»; vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước
+MODULES: list[type[BaseModule]] = [VideoModule, STTModule, SRTModule, TTSModule, BlurModule,
                                    BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
 _FKEYS = {f"<F{i + 1}>": m.key for i, m in enumerate(MODULES)}
 
@@ -343,6 +343,10 @@ class MainWindow(_Root):
 
     # ── Module ────────────────────────────────────────────────────────────
     def show_module(self, key: str) -> None:
+        if key == "subtitle":                   # mục «Phụ đề» cũ (cấu hình / tab Duyệt «Sửa ›») → phần phụ đề ở Lời thoại
+            self.show_module("srt")
+            self.modules["srt"].open_style()
+            return
         if key == "review" and not self.review_mode:
             key = "video"                       # tab Duyệt chỉ có khi bật «Duyệt trước khi xuất»
         if key == "review":
@@ -374,10 +378,10 @@ class MainWindow(_Root):
         self.app_state.mark_dirty()
         if self._help_open and self.help.key not in ("start", "flow_dub", "flow_short", "faq", "settings", "shortcuts"):
             self.help.show(key)
-        self.preview.set_edit_tools(key in ("subtitle", "blur"))
+        self.preview.set_edit_tools(key in ("srt", "blur"))
         if key == "blur":
             self.preview.set_tool("B")
-        elif key == "subtitle":
+        elif key == "srt":
             self.preview.set_tool("T")
         else:
             self.preview._redraw()
@@ -424,9 +428,15 @@ class MainWindow(_Root):
             m.refresh()
 
     def notify_box_edit(self, kind: str) -> None:
-        m = self.modules.get("blur" if kind == "blur" else "subtitle")
+        if kind == "blur":
+            m = self.modules.get("blur")
+            if m is not None:
+                m.refresh()
+            return
+        m = self.modules.get("srt")
         if m is not None:
-            m.refresh()
+            m.refresh_subtitle()
+        self.preview.refresh_sub_chips()
 
     def queue_update(self, item: VideoItem) -> None:
         m = self.modules.get("video")

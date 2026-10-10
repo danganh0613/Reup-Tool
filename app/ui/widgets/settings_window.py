@@ -34,21 +34,20 @@ GUIDE = [
                               "bản Dựng truyện. Hết lượt / quá tải thì máy dừng và báo để bạn chọn model khác."),
         ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
     ]),
-    ("Bộ công cụ video (F1 – F5)", T.SUCCESS, [
-        ("F1 · Nạp video & hàng đợi", "Kéo thả hoặc mở video (MP4, MKV, MOV…). Ứng dụng tự đo độ phân giải, fps, kiểm tra luồng âm thanh."),
-        ("F2 · Phụ đề & kiểu dáng", "Font, cỡ, màu, viền, bóng, nền, karaoke từng từ; khung phụ đề kéo thả trực tiếp trên xem trước."),
-        ("F3 · Nhận diện lời thoại (STT)", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video (đúng tên riêng nhất)."),
-        ("F4 · Lời thoại & dịch", "Dịch 2 bước sát nghĩa rồi viết lại cho tự nhiên, giữ mốc thời gian; sửa từng câu, «Nhờ AI sửa» theo yêu cầu."),
-        ("F5 · Lồng tiếng AI (TTS)", "Đọc lời thoại theo phụ đề, tốc độ 0.8–2.0×, khớp mềm với hình, mỗi người nói một giọng."),
+    ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
+        ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
+        ("F2 · Nhận diện lời (STT)", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video."),
+        ("F3 · Lời thoại & phụ đề", "Sửa từng câu, «Nhờ AI sửa», dịch. Kiểu phụ đề mặc định giống TikTok; chỉnh chi tiết khi cần."),
+        ("F4 · Lồng tiếng (TTS)", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
     ]),
-    ("Bộ công cụ video (F6 – F10)", T.WARNING, [
-        ("F6 · Che mờ thông minh", "Vẽ nhiều vùng che (mờ / pixel / đen), bo góc, mềm mép, theo khoảng thời gian."),
-        ("F7 · Nhạc nền & tách vocal", "Nhiều đoạn nhạc trên timeline, tự hạ nhạc khi có giọng (ducking), khử giọng gốc bằng AI."),
-        ("F8 · Logo, khung viền & watermark", "Logo/chữ/watermark có chuyển động, vùng an toàn TikTok, khung viền trang trí."),
-        ("F9 · Cắt gọt & tỉ lệ khung hình", "Cắt đầu/cuối, nhiều đoạn (ghép liền hoặc xuất từng file); đổi 16:9 ↔ 9:16 ↔ 1:1 với nền mờ."),
-        ("F10 · Hiệu ứng hình ảnh", "Lật gương, preset màu, sáng/tương phản/bão hoà, khử rung, hạt phim, vignette, Ken Burns, texture."),
+    ("Bộ công cụ video (F5 – F9)", T.WARNING, [
+        ("F5 · Che mờ", "Che chữ cũ, logo… Tự dò phụ đề in sẵn của từng video."),
+        ("F6 · Nhạc nền", "Nhiều đoạn nhạc, tự hạ nhạc khi có giọng."),
+        ("F7 · Logo & chữ", "Logo, chữ, watermark có chuyển động, khung viền."),
+        ("F8 · Cắt", "Cắt đầu / cuối, nhiều đoạn (ghép liền hoặc xuất riêng)."),
+        ("F9 · Hiệu ứng", "Màu, khử rung, hạt phim, Ken Burns, texture."),
     ]),
-    ("Module Dựng Truyện AI (F11)", "#F472B6", [
+    ("Dựng Truyện AI (F10)", "#F472B6", [
         ("Tạo kịch bản phân cảnh tự động", "Nhập ý tưởng, AI viết dàn ý → từng chương → cảnh kèm lời kể và prompt ảnh."),
         ("Sinh ảnh minh hoạ đồng nhất phong cách", "Ảnh cho từng cảnh theo preset phong cách (điện ảnh, anime, màu nước…), giữ nhân vật đồng nhất; clip Veo tuỳ chọn."),
         ("Lồng tiếng đa nhân vật & ghép video", "Gán giọng riêng từng nhân vật, ghép ảnh + giọng + SFX thành MP4, tự tạo SRT và metadata YouTube."),

@@ -27,17 +27,17 @@ class BlurModule(BaseModule):
         cfg = self.state.blur
         self.enable = SwitchRow(self, "Bật che chữ", on_change=self.setter(cfg, "enable"))
         self.enable.pack(fill="x", pady=(0, 2))
-        hint(self, "Làm mờ vùng để che phụ đề cứng có sẵn trên video gốc.").pack(fill="x", pady=(0, 6))
+        hint(self, "Làm mờ chữ in sẵn, logo… trên video gốc.").pack(fill="x", pady=(0, 6))
 
         sec = Section(self, "Tự dò chữ cứng")
         sec.pack(fill="x", pady=4)
-        self.auto = SwitchRow(sec.body, "Tự dò & che chữ cứng cho từng video", on_change=self._auto_toggled)
+        self.auto = SwitchRow(sec.body, "Tự dò & che chữ cứng cho từng video", on_change=self._auto_toggled,
+                              info="Mỗi video chữ in sẵn nằm một chỗ: máy tự tìm dải chữ đổi liên tục và che mờ (bỏ qua "
+                                   "logo / watermark đứng yên). Lưu vào mẫu được.")
         self.auto.pack(fill="x")
         ButtonRow(sec.body, [("🔍 Dò lại cho video đang chọn", self._detect_now, None)]).pack(fill="x", pady=(4, 2))
         self.auto_status = StatusLabel(sec.body, "")
         self.auto_status.pack(fill="x")
-        hint(sec.body, "Mỗi video phụ đề in sẵn nằm một chỗ khác nhau: bật để máy tự tìm dải chữ (trắng/vàng viền đen, đổi liên "
-                       "tục) và che mờ thêm vùng đó — lưu vào mẫu được, dùng cho cả hàng đợi. Bỏ qua logo / watermark đứng yên.").pack(fill="x")
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", pady=2)
@@ -66,8 +66,7 @@ class BlurModule(BaseModule):
             e.bind("<Return>", lambda _e: self._apply_pixels())
             e.bind("<FocusOut>", lambda _e: self._apply_pixels())
             self.px_vars[key] = var
-        hint(sec.body, "Kéo trực tiếp khung màu cam trên vùng xem trước (công cụ B) để chỉnh nhanh; bấm ✕ ở góc khung "
-                       "hoặc phím Delete để xóa vùng đang chọn.").pack(fill="x", pady=(2, 0))
+        hint(sec.body, "Kéo khung cam trên hình (phím B) · ✕ hoặc Delete để xoá.").pack(fill="x", pady=(2, 0))
 
         sec = Section(self, "Cường độ")
         sec.pack(fill="x", pady=4)
@@ -82,7 +81,6 @@ class BlurModule(BaseModule):
         self.rounded = SliderRow(sec.body, "Bo góc", from_=0, to=100, step=5, suffix="%",
                                  on_change=lambda v: self._set("rounded", float(v), preview=False), on_release=rel)
         pack_rows(sec.body, [self.style, self.strength, self.feather, self.opacity, self.rounded])
-        hint(sec.body, "Độ mờ cao + mềm mép vừa phải giúp vùng che hòa tự nhiên vào khung hình.").pack(fill="x")
 
         sec = Section(self, "Thời gian hiệu lực")
         sec.pack(fill="x", pady=4)

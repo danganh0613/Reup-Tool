@@ -118,8 +118,8 @@ class StoryEditor(ctk.CTkToplevel):
             ("▶ Nghe", self._play_voice, None),
             ("📁 Mở thư mục dự án", self._open_dir, None),
         ]).pack(fill="x", pady=(8, 0))
-        hint(right, "Sửa lời kể xong hãy bấm “Tạo giọng cảnh này” để giọng khớp với chữ. "
-                    "Ảnh/clip có thể thay bằng file của bạn.").pack(fill="x", pady=(4, 0))
+        hint(right, "Sửa lời kể xong bấm «Tạo giọng cảnh này». Ảnh / clip thay được bằng file của bạn.").pack(
+            fill="x", pady=(4, 0))
 
     # ── Tab Phân vai ─────────────────────────────────────────────────────
     def _build_casting_tab(self, tab) -> None:

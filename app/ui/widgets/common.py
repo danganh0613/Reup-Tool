@@ -16,7 +16,7 @@ from app.ui.widgets.ui import Popover, Select, Tooltip, button
 def info_icon(master, text: str) -> ctk.CTkLabel:
     """Dấu «ⓘ» nhỏ cạnh nhãn: rê chuột vào xem giải thích dài — nhãn giữ ngắn gọn."""
     lbl = ctk.CTkLabel(master, text="ⓘ", font=T.font(13), text_color=T.TEXT_MUTED, width=16, cursor="hand2")
-    Tooltip(lbl, text, delay=150, wrap=60)
+    Tooltip(lbl, text, delay=150, wrap=60, click=True)
     return lbl
 
 
@@ -32,22 +32,65 @@ def row_label(master, text: str, info: str = "", width: int = 120):
 
 
 class Section(ctk.CTkFrame):
-    """Khối có tiêu đề; nội dung đặt vào ``self.body``."""
+    """Khối có tiêu đề; nội dung đặt vào ``self.body``. ``collapsed`` (True / False) → bấm tiêu đề để mở / thu gọn
+    (phần ít dùng giấu đi cho gọn); ``on_open`` gọi lần đầu mở (dựng nội dung nặng khi cần)."""
 
-    def __init__(self, master, title: str, *, subtitle: str = "", info: str = "") -> None:
+    def __init__(self, master, title: str, *, subtitle: str = "", info: str = "", collapsed: bool | None = None,
+                 on_open: Callable[[], None] | None = None) -> None:
         super().__init__(master, fg_color=T.BG_CARD, corner_radius=T.RADIUS_CARD, border_width=0)
         self.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
+        self.head = head
         ctk.CTkLabel(head, text=title, font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
         if info:
             info_icon(head, info).pack(side="left", padx=(4, 0))
-        if subtitle:
-            ctk.CTkLabel(head, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(
-                side="left", padx=(8, 0))
+        self.subtitle = ctk.CTkLabel(head, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w")
+        if subtitle or collapsed is not None:
+            self.subtitle.pack(side="left", padx=(8, 0))
         self.body = ctk.CTkFrame(self, fg_color="transparent")
-        self.body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
         self.body.grid_columnconfigure(0, weight=1)
+        self._on_open, self._opened_once = on_open, False
+        self.collapsible = collapsed is not None
+        self.is_open = not collapsed
+        if self.collapsible:
+            self.chevron = ctk.CTkLabel(head, text="", font=T.font(13), text_color=T.TEXT_DIM, width=20)
+            self.chevron.pack(side="right")
+            for w in (head, *head.winfo_children()):
+                try:
+                    is_info = w.cget("text") == "ⓘ"           # bấm ⓘ = xem giải thích, không đóng / mở khối
+                except (ValueError, tk.TclError):
+                    is_info = False
+                if is_info:
+                    continue
+                w.bind("<Button-1>", lambda _e: self.toggle(), add="+")
+                try:
+                    w.configure(cursor="hand2")
+                except (tk.TclError, ValueError):
+                    pass
+        self.set_open(self.is_open)
+
+    def set_open(self, on: bool) -> None:
+        self.is_open = bool(on)
+        if self.is_open:
+            if not self._opened_once:
+                self._opened_once = True
+                if self._on_open:
+                    self._on_open()
+            self.body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        else:
+            self.body.grid_forget()
+            self.head.grid_configure(pady=(12, 12))
+        if self.is_open:
+            self.head.grid_configure(pady=(12, 4))
+        if self.collapsible:
+            self.chevron.configure(text="▴" if self.is_open else "▾")
+
+    def toggle(self) -> None:
+        self.set_open(not self.is_open)
+
+    def set_subtitle(self, text: str) -> None:
+        self.subtitle.configure(text=text)
 
 
 class SliderRow(ctk.CTkFrame):

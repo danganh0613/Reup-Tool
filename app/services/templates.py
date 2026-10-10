@@ -21,6 +21,7 @@ from typing import Any
 from app.config.paths import PRESETS_DIR
 from app.core.state import (FIT_MODES, MACHINE_FIELDS, SRT_MODES, SRT_SOURCES, TEMPLATE_SECTIONS,
                             TEXT_EFFECTS, TTS_SOURCES, AppState, VideoItem)
+from app.services.subtitle_presets import STYLES
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +66,11 @@ BUILTIN: list[Template] = [
                       "speed": 105, "flip_h": False, "mute": False, "keep_original_audio": True, "vocal_filter": False,
                       "demucs_enable": True, "original_volume": 70.0, "tts_volume": 160.0, "adaptive_ducking": True, "normalize_audio": True,
                       "output_suffix": "_review", "loop_to_voice": False},
+            # phụ đề kiểu TikTok vàng (services/subtitle_presets.py), đè lên chỗ chữ gốc đã che
             "subtitle": {"enable_subtitle": True, "srt_source": SRT_SOURCES[0], "translate_enable": True,
-                         "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1], "sub_size": 50, "sub_bold": True,
-                         "sub_italic": False, "sub_uppercase": False, "sub_color": "#FFE45C", "sub_opacity": 100.0,
-                         "sub_stroke_width": 3.0, "sub_stroke_color": "#000000", "sub_shadow": 1.0,
-                         "sub_bg_enable": False, "use_box": True, "box_x": 0.06, "box_y": 0.70, "box_w": 0.88,
-                         "box_h": 0.06, "follow_hardsub": True, "text_effect": TEXT_EFFECTS[1], "bg_style": "Không nền", "karaoke": False},
+                         "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1],
+                         **STYLES["TikTok vàng"], "use_box": True, "box_x": 0.08, "box_y": 0.68, "box_w": 0.84,
+                         "box_h": 0.08, "follow_hardsub": True},
             "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "tts_speed": 1.1, "max_tempo": 1.4,
                     "multi_voice": True, "speaker_count": "Tự động"},
             "blur": {"auto_detect": True},             # tự che phụ đề tiếng Trung in sẵn

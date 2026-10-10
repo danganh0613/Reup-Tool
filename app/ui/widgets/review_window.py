@@ -108,8 +108,8 @@ class ReviewPanel(ctk.CTkFrame):
         self.rows.grid_columnconfigure(0, weight=1)
         self.status = StatusLabel(self, "")
         self.status.grid(row=5, column=0, sticky="ew", padx=4, pady=(6, 0))
-        hint(self, "Xem video bên phải (▶ Phát) · thấy lỗi → «Sửa ›» → chỉnh → ▶ Phát xem lại → «Duyệt» (Ctrl+Enter). "
-                   "Duyệt xong bấm «Xuất (n)» trên cùng.").grid(row=6, column=0, sticky="ew", padx=4, pady=(2, 6))
+        hint(self, "Thấy lỗi → «Sửa ›» → chỉnh → «Duyệt» (Ctrl+Enter). Duyệt xong bấm «Xuất» trên cùng.").grid(
+            row=6, column=0, sticky="ew", padx=4, pady=(2, 6))
         self.app_state.on("videos_changed", self.reload)
         self.app_state.on("config_changed", self._config_changed)
         self.reload()

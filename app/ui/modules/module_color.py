@@ -27,13 +27,14 @@ class ColorModule(BaseModule):
         cfg = self.state.color
         s = self.setter
         rel = lambda _v: self.window.preview.schedule_refresh()  # noqa: E731
-        hint(self, "Chống trùng khi đăng lại video của bạn trên nhiều kênh, và tinh chỉnh màu sắc, góc quay — "
-                   "xem trước trực tiếp và bake khi xuất MP4.").pack(fill="x", pady=(0, 4))
+        hint(self, "Màu sắc, góc quay, hiệu ứng — xem ngay trên khung video.").pack(fill="x", pady=(0, 4))
         ButtonRow(self, [("Reset toàn bộ", self._reset, None), ("Bật nhanh chống trùng", self._quick_dedup, T.primary_button())]).pack(fill="x", pady=(0, 4))
         self.enable = SwitchRow(self, "Bật chỉnh màu / hiệu ứng", on_change=s(cfg, "enable"))
         self.enable.pack(fill="x", pady=3)
 
-        sec = Section(self, "Chống trùng bản quyền")
+        sec = Section(self, "Chống trùng bản quyền",
+                      info="Biến thể rất nhẹ, người xem không nhận ra: dịch khung vài pixel, nhiễu hạt, lệch màu 1–3%, "
+                           "phóng 2% trượt chậm, lệch cao độ âm 2% (giữ nhịp), keyframe 47.")
         sec.pack(fill="x", pady=4)
         grid = ctk.CTkFrame(sec.body, fg_color="transparent")
         grid.pack(fill="x")
@@ -47,8 +48,6 @@ class ColorModule(BaseModule):
             self.dup[key] = sw
         self.dup_all = SwitchRow(sec.body, "Bật tất cả hiệu ứng chống trùng", on_change=self._dup_all)
         self.dup_all.pack(fill="x", pady=(6, 0))
-        hint(sec.body, "Biến thể rất nhẹ, người xem không nhận ra: dịch khung vài pixel, nhiễu hạt, lệch màu 1–3%, phóng 2% "
-                       "trượt chậm, lệch cao độ âm 2% (giữ nhịp), keyframe 47. «Đổi GOP» chỉ tác động lúc encode.").pack(fill="x")
 
         sec = Section(self, "Bộ lọc & chỉnh màu")
         sec.pack(fill="x", pady=4)
@@ -69,7 +68,6 @@ class ColorModule(BaseModule):
                                      on_change=s(cfg, "temperature", cast=float, preview=False), on_release=rel)
         pack_rows(sec.body, [self.preset, self.rotation, self.rotate_custom, self.brightness, self.contrast, self.saturation,
                              self.gamma, self.temperature])
-        hint(sec.body, "Hiệu ứng màu sắc và góc quay được xem trước trực tiếp trên khung xem trước.").pack(fill="x")
 
         sec = Section(self, "Hiệu ứng hình ảnh")
         sec.pack(fill="x", pady=4)

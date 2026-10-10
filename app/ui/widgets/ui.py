@@ -177,6 +177,22 @@ def relabel(b: ctk.CTkButton, text: str, *, width: int | None = None) -> None:
         _sync_state(b)
 
 
+def set_variant(b: ctk.CTkButton, variant: str) -> None:
+    """Đổi kiểu nút tạo bằng ``button()`` theo ngữ cảnh (vd nút chính ↔ nút thường: mỗi màn hình chỉ một nút chính)."""
+    if getattr(b, "_es_variant", None) == variant:
+        return
+    b._es_variant = variant
+    style = _variant(variant)
+    name, isz, _color, size, _font = getattr(b, "_es_icon", (None, 16, T.TEXT, "md", None))
+    font = T.font(SIZES.get(size, SIZES["md"])[1], "medium" if variant == "primary" else "normal")
+    b._es_icon = (name, isz, style["text_color"], size, font)
+    kw = {**style, "font": font}
+    look = _disabled_look(style["fg_color"])
+    if look:
+        kw["text_color_disabled"] = look[1]
+    b.configure(**kw)                            # đổi nền → _sync_state vẽ lại icon theo màu chữ mới
+
+
 def button_icon(name: str, *, size: str = "md", color: str | None = None, with_text: bool = True) -> ctk.CTkImage | None:
     """Icon thay thế cho nút đã tạo bằng ``button()`` (cùng cỡ, cùng độ hạ) — dùng khi đổi trạng thái Phát/Dừng, Sub/Sub ẩn.
     ``with_text=False`` cho nút chỉ có icon (icon nằm đúng giữa)."""
@@ -196,10 +212,11 @@ class Tooltip:
     DELAY = 450
     _open: Tooltip | None = None          # chỉ một tooltip hiện tại một thời điểm
 
-    def __init__(self, widget, text: str, *, delay: int | None = None, wrap: int = 0) -> None:
+    def __init__(self, widget, text: str, *, delay: int | None = None, wrap: int = 0, click: bool = False) -> None:
         self.w, self.text = widget, text
         self.delay = self.DELAY if delay is None else delay
         self.wrap = wrap                  # > 0: tự xuống dòng ~``wrap`` ký tự, căn trái (giải thích dài của nút ⓘ)
+        self.click = click                # bấm cũng hiện (không chỉ rê chuột) — cho nút ⓘ
         self._after: str | None = None
         self._hide_after: str | None = None
         self._tip: tk.Toplevel | None = None
@@ -230,6 +247,9 @@ class Tooltip:
 
     def _press(self, _e=None) -> None:
         self._cancel()
+        if self.click and self._tip is None:
+            self._show()
+            return
         self.hide()
 
     def _cancel(self) -> None:

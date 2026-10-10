@@ -1,4 +1,5 @@
-"""Module Lời thoại: sửa từng câu (+ Nhờ AI sửa), tệp phụ đề (chọn/sửa/xuất/mở/xóa cache), dịch AI, dán bản dịch ngoài."""
+"""Module Lời thoại: sửa từng câu (+ Nhờ AI sửa), phụ đề trên video (kiểu, chữ hiện, tuỳ chỉnh khi cần), dịch AI,
+tệp phụ đề (chọn / sửa thời gian / xuất / dán bản dịch ngoài)."""
 
 from __future__ import annotations
 
@@ -10,13 +11,16 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.config.paths import SUBS_DIR, VOICE_DIR
-from app.core.state import TRANSLATE_TARGETS
+from app.core.state import SRT_MODES, TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
+from app.services.subtitle_presets import CUSTOM as SUB_CUSTOM, STYLES as SUB_STYLES, apply_style, refit, style_of
 from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
-from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows, row_label
+from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, pack_rows, row_label
+from app.ui.widgets.ui import button, button_width, relabel, set_variant
 from app.core.platform import open_path
 
+MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MODES[2]: "Song ngữ (dịch trên, gốc dưới)"}
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
                 "ไทย", "Bahasa Indonesia", "Русский"]
 
@@ -40,18 +44,26 @@ class SRTModule(BaseModule):
                                                                              self.window.queue_update(it)))
         self.editor.pack(fill="x")
 
-        sec = Section(self, "Tệp phụ đề")
+        # ── Phụ đề trên video: bật / kiểu / chữ hiện; chỉnh chi tiết khi cần mới mở ──
+        sec = Section(self, "Phụ đề trên video", info="Mặc định kiểu TikTok: chữ đậm trắng viền đen, tối đa 2 dòng, "
+                                                      "nằm trên vùng nút của TikTok. Vị trí và cỡ chữ chỉnh nhanh trên "
+                                                      "thanh của khung video.")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Sửa thời gian…", self.open_editor, None), ("Dán bản dịch ngoài…", self._manual_translate, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None), ("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
-        self.file_status = StatusLabel(sec.body, "Chưa có SRT — nhập file hoặc tạo bằng tab STT.")
-        self.file_status.pack(fill="x", pady=(4, 0))
+        self.sub_section = sec
+        self.sub_on = SwitchRow(sec.body, "Hiện phụ đề", on_change=self._sub_on_changed)
+        self.sub_style = OptionRow(sec.body, "Kiểu", [*SUB_STYLES, SUB_CUSTOM], on_change=self._style_picked)
+        self.sub_mode = OptionRow(sec.body, "Chữ hiện", SRT_MODES, labels=MODE_LABELS, on_change=s(cfg, "srt_mode"))
+        pack_rows(sec.body, [self.sub_on, self.sub_style, self.sub_mode])
+        self.detail_btn = button(sec.body, "Tuỳ chỉnh chi tiết  ▾", variant="ghost", size="sm",
+                                 command=self.toggle_style)
+        self.detail_btn.pack(anchor="w", pady=(4, 0))
+        self.detail_box = ctk.CTkFrame(sec.body, fg_color="transparent")
+        self.style_panel = None                  # dựng lần đầu mở (~40 widget)
+        self.state.on("config_changed", self._config_changed)
 
-        sec = Section(self, "Dịch", info="AI Gemini dịch 2 bước: tóm tắt nội dung + lấy thuật ngữ, dịch sát nghĩa, rồi "
-                                         "tự đọc lại và viết cho tự nhiên. Có lồng tiếng thì tự rút gọn câu đọc không "
-                                         "kịp. Khoảng 10–15 lượt gọi AI mỗi video ngắn; lỗi giữa chừng thì «Thử lại» "
-                                         "dịch tiếp phần còn lại. Key và model: Cài đặt › AI dùng API key.")
+        sec = Section(self, "Dịch", info="AI Gemini dịch 2 bước: dịch sát nghĩa rồi tự đọc lại cho tự nhiên; có lồng "
+                                         "tiếng thì tự rút gọn câu đọc không kịp. Lỗi giữa chừng thì «Thử lại» dịch "
+                                         "tiếp. Key và model: Cài đặt › AI dùng API key.")
         sec.pack(fill="x", pady=4)
         self.src_lang = OptionRow(sec.body, "Ngôn ngữ gốc", SOURCE_LANGS, on_change=s(cfg, "translate_source", preview=False))
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
@@ -60,20 +72,30 @@ class SRTModule(BaseModule):
         row = ctk.CTkFrame(sec.body, fg_color="transparent")
         row.pack(fill="x", pady=3)
         row.grid_columnconfigure(1, weight=1)
-        row_label(row, "Phong cách", "Ghi chú cho AI về giọng văn, vd «xưng anh – em, văn nói». Đổi phong cách rồi bấm "
-                                     "«Dịch phụ đề» để dịch lại theo phong cách mới.").grid(row=0, column=0, sticky="w")
+        row_label(row, "Phong cách", "Ghi chú giọng văn cho AI, vd «xưng anh – em, văn nói». Đổi rồi bấm «Dịch phụ "
+                                     "đề» để dịch lại.").grid(row=0, column=0, sticky="w")
         self.style = ctk.CTkComboBox(row, values=RETRANSLATE_PRESETS, height=34, font=T.font(12),
                                      command=lambda _v: self._style_changed())
         self.style.grid(row=0, column=1, sticky="ew")
         self.style.bind("<FocusOut>", lambda _e: self._style_changed())
         self.style.bind("<Return>", lambda _e: self._style_changed())
-        ButtonRow(sec.body, [("Dịch phụ đề", self._translate_now, T.primary_button())]).pack(fill="x", pady=(6, 2))
-        hint(sec.body, "Dịch chưa ưng? Gõ yêu cầu vào ô «Nhờ AI sửa» ở trên.").pack(fill="x")
+        self.tr_btn = button(sec.body, "Dịch phụ đề", icon_name="translate", command=self._translate_now,
+                             min_width=button_width(sec.body, "Dịch phụ đề", icon=True, font=T.font(13, "medium")))
+        self.tr_btn.pack(fill="x", pady=(6, 2))
         self.tr_enable = SwitchRow(sec.body, "Tự dịch khi chuẩn bị video", on_change=s(cfg, "translate_enable", preview=False),
-                                   info="Bật: bước «Chuẩn bị» tự dịch khi phụ đề hoặc lồng tiếng cần bản dịch.")
+                                   info="Bước «Chuẩn bị» tự dịch khi phụ đề hoặc lồng tiếng cần bản dịch.")
         self.tr_enable.pack(fill="x", pady=(4, 0))
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
+
+        sec = Section(self, "Tệp phụ đề", collapsed=True)
+        sec.pack(fill="x", pady=4)
+        self.file_section = sec
+        ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Sửa thời gian…", self.open_editor, None), ("Dán bản dịch ngoài…", self._manual_translate, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None), ("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
+        self.file_status = StatusLabel(sec.body, "")
+        self.file_status.pack(fill="x", pady=(4, 0))
 
     def refresh(self) -> None:
         cfg = self.state.subtitle
@@ -83,9 +105,93 @@ class SRTModule(BaseModule):
             self.target.set(cfg.translate_target)
             self.style.set(cfg.translate_style or "")
             self.tr_enable.set(cfg.translate_enable)
+            self.refresh_subtitle()
         finally:
             self._loading = False
         self.on_active_changed()
+
+    def refresh_subtitle(self) -> None:
+        """Đổ lại phần «Phụ đề trên video» (đổi trên thanh khung video / kéo khung cũng gọi tới đây)."""
+        cfg = self.state.subtitle
+        loading, self._loading = self._loading, True
+        try:
+            self.sub_on.set(cfg.enable_subtitle)
+            self.sub_style.set(style_of(cfg))
+            self.sub_mode.set(cfg.srt_mode if cfg.srt_mode in SRT_MODES else SRT_MODES[0])
+            if self.style_panel is not None:
+                self.style_panel.refresh()
+        finally:
+            self._loading = loading
+
+    # ── Phụ đề trên video ────────────────────────────────────────────────
+    def toggle_style(self, show: bool | None = None) -> None:
+        """Mở / thu gọn «Tuỳ chỉnh chi tiết» (dựng bảng lần đầu mở)."""
+        show = not self.detail_box.winfo_ismapped() if show is None else show
+        if show and self.style_panel is None:
+            from app.ui.widgets.subtitle_panel import SubtitleStylePanel
+
+            loading, self._loading = self._loading, True
+            try:
+                self.style_panel = SubtitleStylePanel(self.detail_box, self)
+                self.style_panel.pack(fill="x")
+                self.style_panel.refresh()
+            finally:
+                self._loading = loading
+        if show:
+            self.detail_box.pack(fill="x", pady=(4, 0))
+        else:
+            self.detail_box.pack_forget()
+        relabel(self.detail_btn, "Thu gọn  ▴" if show else "Tuỳ chỉnh chi tiết  ▾")
+
+    def open_style(self) -> None:
+        """Từ nơi khác (tab Duyệt «Sửa ›», mục cũ «Phụ đề»): mở phần kiểu phụ đề và cuộn tới đó."""
+        self.toggle_style(True)
+
+        def scroll() -> None:
+            try:
+                canvas = self._parent_canvas
+                total = max(1, self.winfo_height())
+                canvas.yview_moveto(max(0.0, (self.sub_section.winfo_y() - 8) / total))
+            except Exception:
+                pass
+        self.after(80, scroll)
+
+    def _config_changed(self, section: str = "") -> None:
+        """Phụ đề đổi ở chỗ khác (bảng chi tiết, thanh khung video, kéo khung) → ô «Hiện phụ đề» / «Kiểu» theo ngay."""
+        if section != "subtitle" or self._loading:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:                        # noqa: BLE001 — giao diện đã dựng lại (đổi theme)
+            return
+        cfg = self.state.subtitle
+        loading, self._loading = self._loading, True
+        try:
+            self.sub_on.set(cfg.enable_subtitle)
+            self.sub_style.set(style_of(cfg))
+        finally:
+            self._loading = loading
+
+    def _sub_on_changed(self, v: bool) -> None:
+        self.set_value(self.state.subtitle, "enable_subtitle", bool(v))
+        self.window.preview.refresh_sub_chips()
+
+    def _style_picked(self, name: str) -> None:
+        if self._loading:
+            return
+        if name == SUB_CUSTOM:                  # «Tuỳ chỉnh» = mở bảng chỉnh tay
+            self.sub_style.set(style_of(self.state.subtitle))
+            self.toggle_style(True)
+            return
+        cfg = self.state.subtitle
+        if not apply_style(cfg, name):
+            return
+        refit(cfg, *self.window.preview.sub_frame_size())
+        self.state.config_changed("subtitle")
+        self.refresh_subtitle()
+        self.window.preview.refresh_sub_chips()
+        self.window.preview.schedule_refresh(0)
 
     def on_shown(self) -> None:
         super().on_shown()
@@ -104,21 +210,30 @@ class SRTModule(BaseModule):
         if self.editor.item is not it:
             self._ask_save()
             self.editor.load(it)
+        if self.style_panel is not None:
+            self.style_panel.fill_pixels()
+            self.style_panel.follow_status()
+        has_tr = bool(it and it.srt_translated_path and Path(it.srt_translated_path).exists())
+        set_variant(self.tr_btn, "secondary" if has_tr else "primary")     # đã dịch → nút chính là «Lưu» ở trên
         if it is None:
             self.file_status.info("Chưa có video được chọn.")
+            self.file_section.set_subtitle("")
             self.tr_status.info("")
             return
         if it.srt_path and Path(it.srt_path).exists():
             try:
-                self.file_status.ok(f"{Path(it.srt_path).name} · {stats(load_srt(it.srt_path))}")
+                info = f"{Path(it.srt_path).name} · {stats(load_srt(it.srt_path))}"
             except Exception:
-                self.file_status.ok(Path(it.srt_path).name)
+                info = Path(it.srt_path).name
+            self.file_status.ok(info)
+            self.file_section.set_subtitle(Path(it.srt_path).name)
         else:
-            self.file_status.info("Chưa có SRT — nhập file hoặc tạo bằng tab STT.")
-        if it.srt_translated_path and Path(it.srt_translated_path).exists():
-            self.tr_status.ok(f"Bản dịch: {Path(it.srt_translated_path).name}")
+            self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab STT.")
+            self.file_section.set_subtitle("chưa có")
+        if has_tr:
+            self.tr_status.ok(f"Đã dịch: {Path(it.srt_translated_path).name}")
         else:
-            self.tr_status.info("Chưa có bản dịch.")
+            self.tr_status.info("Chưa dịch.")
 
     # ── Tệp ──────────────────────────────────────────────────────────────
     def _need_item(self):

@@ -145,8 +145,7 @@ class SaveTemplateDialog(ctk.CTkToplevel):
             ctk.CTkCheckBox(grid, text=label, variable=var, font=T.font(12)).grid(row=i // 2, column=i % 2, sticky="w",
                                                                                 padx=(0, 12), pady=3)
             self.parts[k] = var
-        hint(body, "Bỏ tick phần nào thì khi áp mẫu phần đó giữ nguyên (vd. bỏ «Che mờ» nếu mỗi video chữ cứng nằm một chỗ). "
-                   "Đoạn cắt giữa video không lưu vào mẫu — chỉ lưu cắt đầu/cuối.").pack(fill="x", padx=14, pady=(4, 0))
+        hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối.").pack(fill="x", padx=14, pady=(4, 0))
         self._order_voices()
         tts = self.app_state.sections_dict().get("tts", {})
         if "tts" in self.parts and tts.get("enable_tts"):
@@ -156,8 +155,8 @@ class SaveTemplateDialog(ctk.CTkToplevel):
                                        anchor="w", justify="left", wraplength=470)
             self.voices.pack(fill="x", padx=14)
             if tts.get("multi_voice"):
-                hint(body, "Video sau nhận ra bao nhiêu người thì gán lần lượt theo thứ tự này; dư người thì tự chọn "
-                           "thêm giọng Nam/Nữ.").pack(fill="x", padx=14, pady=(2, 0))
+                hint(body, "Gán theo thứ tự người nói; dư người thì tự chọn thêm giọng Nam / Nữ.").pack(fill="x", padx=14,
+                                                                                              pady=(2, 0))
         self.thumb = ctk.BooleanVar(value=self.window.preview._frame is not None)
         ctk.CTkCheckBox(body, text="Dùng khung xem trước hiện tại làm ảnh đại diện", variable=self.thumb,
                         font=T.font(12)).pack(anchor="w", padx=14, pady=(10, 0))
