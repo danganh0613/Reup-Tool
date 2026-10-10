@@ -13,6 +13,7 @@ from app.services.qwen_asr import INSTALL_GB
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
+from app.ui.progress_panel import friendly_error
 
 ENGINE_INFO = ("Giọng nói trong video: AI Qwen3-ASR nghe lời thoại, chạy trên máy (có GPU NVIDIA thì nhanh hơn nhiều), "
                "không tốn lượt AI. Tên riêng hiếm có thể sai — sửa ở tab «Lời thoại» › «Nhờ AI sửa».\n\n"
@@ -124,6 +125,11 @@ class STTModule(BaseModule):
         if item is None:
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
+        has_srt = bool(item.srt_path and Path(item.srt_path).exists())
+        if has_srt and not messagebox.askyesno(
+                "Edit Studio", "Video này đã có lời thoại. Nhận diện lại sẽ thay bản cũ (cả chỗ đã sửa tay) và phải "
+                               "dịch lại. Tiếp tục?"):
+            return
         pipe = self.window.pipeline_for(item)
         self.status.warn("Đang nhận diện… (xem log)")
 
@@ -132,7 +138,7 @@ class STTModule(BaseModule):
 
         def done(result, error):
             if error:
-                self.status.error(f"Lỗi: {error}")
+                self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.on_active_changed()
                 self.window.queue_update(item)
@@ -163,7 +169,7 @@ class STTModule(BaseModule):
 
         def done(result, error):
             if error:
-                self.status.error(f"Lỗi: {error}")
+                self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.status.ok(f"Đã tạo {Path(tmp.srt_path).name} ({len(result)} câu) trong output/subs")
                 if messagebox.askyesno("Edit Studio", "Gán phụ đề vừa tạo cho video đang chọn?") and self.state.active:

@@ -403,6 +403,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     polish = polisher(settings)
 
     def synth(i: int, text: str) -> Path:
+        _check()                              # đã bấm Dừng → câu còn trong hàng chờ khỏi đọc
         eng, vid, sp, pt = plan[i]
         return synthesize_cached(eng, vid, text, speed=sp, pitch=pt, qc=qc, label=f"câu {i + 1}")
 
@@ -429,7 +430,9 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         futs = {pool.submit(synth, i, text): i for i, _, text in items}
         failed: list[int] = []
         for fut in as_completed(futs):
-            _check()
+            if cancel is not None and cancel.is_set():
+                pool.shutdown(wait=False, cancel_futures=True)     # huỷ câu chưa bắt đầu, không chờ đọc hết hàng
+                raise RenderCancelled("Đã huỷ tạo giọng")
             i = futs[fut]
             try:
                 paths[i] = fut.result()

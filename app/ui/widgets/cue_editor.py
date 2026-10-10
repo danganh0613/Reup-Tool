@@ -18,9 +18,11 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.core.state import VideoItem
+from app.services.job_runner import error_line
 from app.services.srt_utils import format_ts, load_srt, save_srt, wrap_lines
 from app.ui.widgets.common import StatusLabel, info_icon
 from app.ui.widgets.ui import Tooltip, button
+from app.ui.progress_panel import friendly_error
 
 
 class CueEditor(ctk.CTkFrame):
@@ -46,6 +48,8 @@ class CueEditor(ctk.CTkFrame):
         self._tick_id: str | None = None
         self._ai_marks: set[int] = set()          # câu AI vừa sửa (tô vàng tới khi lưu / đổi video)
         self._ai_before: dict[int, str] = {}      # câu trước khi AI sửa (↶ / Hoàn tác)
+        self._src_sig: tuple = ()                 # file phụ đề lúc nạp — đổi (Chuẩn bị / dịch lại xong) → nạp lại
+        self._ticks = 0
         self.grid_columnconfigure(0, weight=1)
 
         self.head = ctk.CTkLabel(self, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
@@ -129,8 +133,30 @@ class CueEditor(ctk.CTkFrame):
         super().destroy()
 
     # ── Nạp ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _file_sig(it: VideoItem | None) -> tuple:
+        out = []
+        for p in ((it.srt_translated_path, it.srt_path) if it is not None else ()):
+            try:
+                out.append((p, Path(p).stat().st_mtime_ns) if p else None)
+            except OSError:
+                out.append((p, 0))
+        return tuple(out)
+
+    def stale(self) -> bool:
+        """File phụ đề của video đang mở đã đổi từ lúc nạp (máy vừa nhận diện / dịch lại)."""
+        return self.item is not None and self._file_sig(self.item) != self._src_sig
+
+    def reload_if_stale(self) -> None:
+        """Nạp lại khi file đổi mà người dùng chưa sửa dở câu nào (đang sửa thì giữ nguyên, không mất chữ)."""
+        if self.stale() and not self.dirty() and not self._ai_marks:
+            page = self.page
+            self.load(self.item)
+            self.show_page(page, sync=False)
+
     def load(self, it: VideoItem | None) -> None:
         self.item = it
+        self._src_sig = self._file_sig(it)
         self._cur = -1
         self._stop_at = None
         self._clear_ai_marks()
@@ -267,6 +293,9 @@ class CueEditor(ctk.CTkFrame):
         if not self.winfo_exists() or not self.winfo_ismapped():
             return
         pv = self.window.preview
+        self._ticks += 1
+        if self._ticks % 5 == 0:
+            self.reload_if_stale()
         if pv.item is self.item and self.cues:
             t = pv.t
             k = bisect.bisect_right(self._starts, t) - 1
@@ -306,7 +335,8 @@ class CueEditor(ctk.CTkFrame):
     def dirty(self) -> bool:
         return self._text_dirty()
 
-    def save(self) -> None:
+    def save(self, regen: bool = True) -> None:
+        """``regen``: tạo lại giọng ngay (False khi sắp chạy Chuẩn bị / Render — lượt chạy tự tạo lại)."""
         it = self.item
         if it is None or not self.cues or not self.edit_path:
             return
@@ -320,13 +350,18 @@ class CueEditor(ctk.CTkFrame):
             self.status.info("Không có câu nào thay đổi.")
             return
         save_srt(self.cues, self.edit_path)
+        self._src_sig = self._file_sig(it)
         self._orig_texts = list(self.texts)
+        if it.status == "Xong":                        # đã xuất rồi mới sửa → bản xuất cũ: tính vào «Xuất (n)» / Render
+            it.status = "Cần xuất lại"
+            self.window.queue_update(it)
+            self.window.update_render_button()
         if self._ai_marks or self._ai_before:          # đã lưu → bỏ tô vàng
             self._clear_ai_marks()
             self.show_page(self.page, sync=False)
         self.window.log(f"{it.name}: đã sửa {changed} câu lời thoại.")
         st = self.app_state.state_for(it)
-        if st.tts.enable_tts:
+        if st.tts.enable_tts and regen:
             self.status.warn(f"Đã lưu {changed} câu — đang tạo lại giọng (câu không đổi dùng lại)…")
             self._regenerate(it)
         else:
@@ -347,10 +382,12 @@ class CueEditor(ctk.CTkFrame):
                 it.review, it.status = keep
 
         def done(_r, error):
+            if error and it.status in ("Đang chuẩn bị", "Đang xử lý"):     # lỗi / dừng giữa chừng: trả trạng thái cũ
+                it.review, it.status = keep
             if not self.winfo_exists():
                 return
             if error:
-                self.status.error(f"Tạo lại giọng lỗi: {str(error).splitlines()[0][:200]}")
+                self.status.error(f"Tạo lại giọng lỗi: {friendly_error(error_line(error, 200))}")
             else:
                 self.status.ok("Đã tạo lại giọng — bấm ▶ Phát (hoặc ▶ ở câu vừa sửa) để nghe lại.")
             win.queue_update(it)
@@ -428,7 +465,7 @@ class CueEditor(ctk.CTkFrame):
             if self.item is not it:
                 return
             if error:
-                self.status.error(f"AI sửa lỗi: {str(error).splitlines()[0][:200]}")
+                self.status.error(f"AI sửa lỗi: {friendly_error(error_line(error, 200))}")
                 return
             edits, note = result
             changed = self._apply_ai(edits, current)     # câu người dùng sửa tiếp trong lúc chờ: giữ chữ của họ
@@ -473,7 +510,7 @@ class CueEditor(ctk.CTkFrame):
             if not self.winfo_exists() or self.item is not it:
                 return
             if error:
-                self.status.error(f"Dịch lại lỗi: {str(error).splitlines()[0][:200]}")
+                self.status.error(f"Dịch lại lỗi: {friendly_error(error_line(error, 200))}")
                 return
             changed = len(self._apply_ai(result, previous))
             self.show_page(self.page, sync=False)

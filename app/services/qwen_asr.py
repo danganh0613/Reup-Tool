@@ -181,7 +181,7 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, language: str = "auto"
     data = json.loads(out.read_text(encoding="utf-8"))
     sents = [s["text"] for s in data["sentences"]]
     sents = split_long_sentences(sents, [int(s["tokens"]) for s in data["sentences"]], settings=settings,
-                                 language=data.get("language", "zh"), log=log)
+                                 language=data.get("language", "zh"), log=log, cancel=cancel)
     cues = sentence_cues(data["words"], sents)
     for p in (wav,):
         p.unlink(missing_ok=True)

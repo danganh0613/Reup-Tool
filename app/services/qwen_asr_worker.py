@@ -151,6 +151,20 @@ def repair_collapsed(words: list[dict]) -> int:
     return fixed
 
 
+def _join(tokens, joiner: str) -> str:
+    """Tiếng Trung / Nhật ghép liền, nhưng giữ dấu cách giữa hai chữ Latin (video Trung xen tiếng Anh:
+    «我们 use the app» không thành «我们usetheapp»)."""
+    if joiner:
+        return joiner.join(tokens)
+    out = ""
+    for t in tokens:
+        a, b = out[-1:], t[:1]
+        if a.isascii() and b.isascii() and (a.isalpha() and b.isalnum() or a.isdigit() and b.isalpha()):
+            out += " "                                  # chữ–chữ, chữ–số, số–chữ; số–số vẫn liền («20»«24»)
+        out += t
+    return out
+
+
 def segment(words: list[dict], lang: str) -> list[dict]:
     """spaCy như VideoLingo: tách theo dấu câu → dấu phẩy → liên từ → câu > 60 token (tiếng không có pipeline: chỉ theo dấu)."""
     import spacy
@@ -163,7 +177,7 @@ def segment(words: list[dict], lang: str) -> list[dict]:
     if nlp is None:
         nlp = spacy.blank("xx")
         nlp.add_pipe("sentencizer")
-    doc = nlp(joiner.join(w["word"] for w in words))
+    doc = nlp(_join([w["word"] for w in words], joiner))
     by_mark, cur = [], []
     for s in (x.text.strip() for x in doc.sents):
         if cur and (s.startswith("-") or s.startswith("...") or cur[-1].endswith("-") or cur[-1].endswith("...")):
@@ -242,7 +256,7 @@ def segment(words: list[dict], lang: str) -> list[dict]:
         out, i = [], n
         while i > 0:
             j = prev[i]
-            out.append(joiner.join(tokens[j:i]).strip())
+            out.append(d[j:i].text.strip())          # giữ đúng khoảng trắng gốc (chữ Latin xen chữ Hán)
             i = j
         return out[::-1]
 

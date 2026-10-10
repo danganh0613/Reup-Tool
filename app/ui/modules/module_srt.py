@@ -22,6 +22,7 @@ from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, pack_rows, row_label
 from app.ui.widgets.ui import button, button_width, set_variant
 from app.core.platform import open_path
+from app.ui.progress_panel import friendly_error
 
 MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MODES[2]: "Song ngữ (dịch trên, gốc dưới)"}
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
@@ -205,6 +206,7 @@ class SRTModule(BaseModule):
 
     def on_shown(self) -> None:
         super().on_shown()
+        self.editor.reload_if_stale()
         if self.tab_var.get() == TAB_TEXT:
             self.editor.start_tick()
 
@@ -221,6 +223,8 @@ class SRTModule(BaseModule):
         if self.editor.item is not it:
             self._ask_save()
             self.editor.load(it)
+        else:
+            self.editor.reload_if_stale()
         if self.style_panel is not None:
             self.style_panel.fill_pixels()
             self.style_panel.follow_status()
@@ -338,7 +342,7 @@ class SRTModule(BaseModule):
 
         def done(result, error):
             if error:
-                self.tr_status.error(f"Lỗi: {error}")
+                self.tr_status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.state.mark_dirty()
                 self._after_change(it)

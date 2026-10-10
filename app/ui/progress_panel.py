@@ -106,8 +106,12 @@ def friendly_error(message: str, item: VideoItem | None = None) -> str:
         return "file hỏng hoặc không phải video — mở thử bằng trình phát khác"
     if "503" in low or "overloaded" in low or "quá tải" in low:
         return "máy chủ AI đang quá tải — đợi một lát rồi bấm Thử lại"
-    if "api key" in low or "401" in low or "403" in low:
-        return "API key chưa đúng hoặc hết hạn — kiểm tra trong ☰ › Cài đặt"
+    if "chưa có gemini api key" in low:
+        return "chưa nhập API key Gemini (Cài đặt › AI dùng API key)"
+    if "kết nối" in low and "gemini" in low:
+        return "không kết nối được tới Gemini — kiểm tra mạng rồi bấm Thử lại"
+    if "api key" in low or " 401" in low or " 403" in low:
+        return "API key chưa đúng hoặc hết hạn — kiểm tra ở Cài đặt › AI dùng API key"
     if "no space" in low or "đầy" in low:
         return "ổ đĩa đầy — giải phóng dung lượng rồi thử lại"
     return m or "không rõ lý do — xem log"
@@ -173,7 +177,7 @@ class ProgressPanel(ctk.CTkFrame):
             else:
                 w.grid_remove()
 
-    def _action(self, label: str | None, command: Callable[[], None] | None = None, icon_name: str = "refresh",
+    def _action(self, label: str | None, command: Callable[[], None] | None = None, icon_name: str | None = "refresh",
                 primary: bool = True) -> None:
         """Đúng một nút «việc nên làm tiếp» (Thử lại / Mở thư mục / Mở tab Duyệt) — hoặc không có."""
         if self.action_btn is not None:
@@ -223,14 +227,23 @@ class ProgressPanel(ctk.CTkFrame):
         if self._mode == "idle":
             self.set_idle()
 
-    def start_queue(self, items: list[VideoItem], mode: str) -> None:
+    def start_queue(self, items: list[VideoItem], mode: str, on_skip: Callable[[], None] | None = None) -> None:
+        """``on_skip``: nhiều video → nút «Bỏ qua video này» (bỏ video đang chạy, các video sau chạy tiếp)."""
         self._t0 = time.time()
         self._steps = {it.path: planned_steps(self.window, it, mode) for it in items}
         self._run_title = "Đang chuẩn bị" if mode == "prepare" else "Đang xuất"
         self._show("running", SPIN[0], T.ACCENT, f"{self._run_title} {len(items)} video", "Bắt đầu…")
         self._meter(True)
-        self._action(None)
+        self._action("Bỏ qua video này", on_skip, None, False) if on_skip else self._action(None)
         self.set_progress(0.0)
+
+    def stopping(self) -> None:
+        """Đã bấm Dừng: báo ngay (bước đang chạy có thể cần vài giây mới dừng được)."""
+        if self._mode != "running":
+            return
+        self.status.configure(text="Đang dừng…")
+        self.detail.configure(text="Chờ bước đang chạy dừng hẳn (vài giây)")
+        self._action(None)
 
     def update_item(self, it: VideoItem, index: int, total: int, overall: float) -> None:
         steps = self._steps.setdefault(it.path, ["read"])

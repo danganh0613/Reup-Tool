@@ -78,6 +78,15 @@ class Pipeline:
         h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
         return JOBS_DIR / f"{_safe_stem(item.stem)[:40]}_{h}"
 
+    def file_stem(self, item: VideoItem) -> str:
+        """Tên gốc cho file phụ đề / video xuất. Hàng đợi có video khác trùng tên (khác thư mục) → thêm mã đường dẫn,
+        không ghi đè lên nhau."""
+        stem = _safe_stem(item.stem)
+        if any(v is not item and v.path != item.path and _safe_stem(v.stem).lower() == stem.lower()
+               for v in self.state.videos):
+            stem += "_" + hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:6]
+        return stem
+
     def transcribe(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
                    cancel: threading.Event | None = None, source_path: str | None = None) -> list[Cue]:
         cfg = self.state.subtitle
@@ -91,12 +100,20 @@ class Pipeline:
             # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
             from app.services.qwen_asr import transcribe as qwen_transcribe
 
+            try:
+                silent = not self.ffmpeg.probe(src).has_audio
+            except Exception:                           # noqa: BLE001 — không đọc được thông tin thì cứ thử nhận diện
+                silent = False
+            if silent:
+                raise RuntimeError("Video không có tiếng — không nghe được lời thoại. Video có phụ đề in sẵn thì chọn "
+                                   "«Chữ in sẵn trên video»; không thì tắt Phụ đề / Lồng tiếng cho video này.")
+
             res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
                                   work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
         if not res.cues:
-            raise RuntimeError("Không nhận ra lời nói nào trong file — file có tiếng nói không? Thử chọn đúng ngôn ngữ "
-                               "thay vì «Tự nhận diện».")
-        out = SUBS_DIR / f"{_safe_stem(Path(src).stem)}.srt"
+            raise RuntimeError("Không nghe thấy lời nói nào (video chỉ có nhạc?). Thử chọn đúng ngôn ngữ thay vì "
+                               "«Tự nhận diện», hoặc tắt Phụ đề / Lồng tiếng cho video này.")
+        out = SUBS_DIR / f"{self.file_stem(item)}.srt"
         save_srt(res.cues, out)
         item.srt_path = str(out)
         item.srt_translated_path = None
@@ -138,7 +155,7 @@ class Pipeline:
 
         cfg = self.state.subtitle
         tag = LANG_CODE.get(cfg.translate_target) or _safe_stem(cfg.translate_target.split(" ")[-1]).lower()[:8] or "dich"
-        return SUBS_DIR / f"{_safe_stem(item.stem)}.{tag}.srt"
+        return SUBS_DIR / f"{self.file_stem(item)}.{tag}.srt"
 
     def retranslate(self, item: VideoItem, idxs: list[int] | None = None, *, instruction: str = "",
                     previous: list[str] | None = None, save: bool = True, progress: ProgressCb | None = None,
@@ -449,7 +466,9 @@ class Pipeline:
         except ValueError:
             stt = 1
         now = time.localtime()
-        tokens = {"ten": item.stem, "hauto": vcfg.output_suffix, "mau": tpl, "ngay": time.strftime("%Y-%m-%d", now),
+        stem = self.file_stem(item)
+        stem = item.stem if stem == _safe_stem(item.stem) else stem      # trùng tên video khác → kèm mã đường dẫn
+        tokens = {"ten": stem, "hauto": vcfg.output_suffix, "mau": tpl, "ngay": time.strftime("%Y-%m-%d", now),
                   "gio": time.strftime("%H%M", now), "stt": f"{stt:02d}"}
 
         def fill(pattern: str) -> str:
@@ -458,8 +477,8 @@ class Pipeline:
                 out = out.replace("{" + k + "}", v)
             return out
 
-        name = fill(vcfg.output_name.strip()) if vcfg.output_name.strip() else f"{item.stem}{vcfg.output_suffix}"
-        name = "".join(c if c not in '\\/:*?"<>|' else "_" for c in name).strip() or item.stem
+        name = fill(vcfg.output_name.strip()) if vcfg.output_name.strip() else f"{stem}{vcfg.output_suffix}"
+        name = "".join(c if c not in '\\/:*?"<>|' else "_" for c in name).strip() or stem
         out_dir = Path(st.output_dir) if st.output_dir else VOICE_DIR.parent / "videos"
         sub = fill(vcfg.output_subdir.strip()).replace("\\", "/")
         for part in [p for p in sub.split("/") if p.strip() and p.strip() not in (".", "..")]:
@@ -747,18 +766,39 @@ class Pipeline:
         return out_path
 
 
+def error_line(exc: BaseException, limit: int = 160) -> str:
+    """Dòng đầu của câu lỗi cho người dùng — lỗi không có chữ (MemoryError, TimeoutError…) thì ghi tên loại lỗi."""
+    lines = str(exc).strip().splitlines()
+    names = {"MemoryError": "Hết bộ nhớ RAM (video quá dài?)", "TimeoutError": "Quá thời gian chờ"}
+    return (lines[0] if lines else names.get(type(exc).__name__, type(exc).__name__))[:limit]
+
+
 class JobRunner:
-    """Chạy hàng đợi trong thread nền; mỗi lúc chỉ một hàng đợi."""
+    """Chạy hàng đợi trong thread nền; mỗi lúc chỉ một hàng đợi. Dừng tất cả (``stop``) hoặc bỏ qua một video
+    (``skip``): mỗi video một cờ huỷ riêng — bỏ qua video đang chạy thì các video sau vẫn chạy tiếp."""
 
     def __init__(self, pipeline: Pipeline, ui_call: Callable[[Callable[[], None]], None]) -> None:
         self.pipeline = pipeline
         self.ui_call = ui_call
         self._thread: threading.Thread | None = None
         self.cancel = threading.Event()
+        self.current: VideoItem | None = None
+        self._item_cancel = threading.Event()
+        self._skipped: set[int] = set()
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def stopping(self) -> bool:
+        return self.running and self.cancel.is_set()
+
+    def skip(self, item: VideoItem) -> None:
+        """Bỏ qua ``item`` trong lượt đang chạy: đang xử lý → dừng video đó; chưa tới lượt → không làm."""
+        self._skipped.add(id(item))
+        if self.current is item:
+            self._item_cancel.set()
 
     def start(self, items: list[VideoItem], *, on_update: Callable[[VideoItem], None],
               on_log: LogCb, on_done: Callable[[int, int], None], mode: str = "render") -> bool:
@@ -766,6 +806,7 @@ class JobRunner:
         if self.running or not items:
             return False
         self.cancel.clear()
+        self._skipped.clear()
         # mỗi video một bản sao cấu hình (của mẫu / cấu hình riêng) — chụp lúc bấm Render, UI đổi gì sau đó không ảnh hưởng
         base = self.pipeline
         jobs = [(it, base.state.state_for(it)) for it in items]
@@ -779,31 +820,43 @@ class JobRunner:
 
         def run() -> None:
             ok = fail = 0
-            for it, st in jobs:
-                if self.cancel.is_set():
-                    it.status, it.message = "Đã huỷ", ""
-                    _ui_update(it)
-                    continue
-                try:
-                    pipe = Pipeline(st, base.ffmpeg)
-                    pipe.audio_only = base.audio_only
-                    if it.config is not None or it.template:
-                        _ui_log(f"{it.name}: dùng cấu hình riêng" + (f" (mẫu «{it.template}»)" if it.template else ""))
-                    if mode == "prepare":
-                        pipe.prepare(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
-                    else:
-                        pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=self.cancel)
-                    ok += 1
-                except RenderCancelled:
-                    it.status, it.message = "Đã huỷ", ""
-                    _ui_update(it)
-                except Exception as exc:
-                    logger.exception("Lỗi xử lý %s", it.name)
-                    it.status, it.message = "Lỗi", str(exc).splitlines()[0][:160]
-                    _ui_update(it)
-                    _ui_log(f"✖ {it.name}: {exc}")
-                    fail += 1
-            self.ui_call(lambda: on_done(ok, fail))
+            try:
+                for it, st in jobs:
+                    if self.cancel.is_set() or id(it) in self._skipped:
+                        it.status, it.message = ("Đã huỷ", "") if self.cancel.is_set() else ("Đã bỏ qua", "")
+                        _ui_update(it)
+                        continue
+                    self._item_cancel = ev = threading.Event()        # cờ riêng video này (Dừng tất cả cũng bật cờ)
+                    self.current = it
+                    if self.cancel.is_set():
+                        ev.set()
+                    try:
+                        pipe = Pipeline(st, base.ffmpeg)
+                        pipe.audio_only = base.audio_only
+                        if it.config is not None or it.template:
+                            _ui_log(f"{it.name}: dùng cấu hình riêng" + (f" (mẫu «{it.template}»)" if it.template else ""))
+                        if mode == "prepare":
+                            pipe.prepare(it, on_update=_ui_update, log=_ui_log, cancel=ev)
+                        else:
+                            pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=ev)
+                        ok += 1
+                    except RenderCancelled:
+                        skipped = not self.cancel.is_set()
+                        it.status, it.message = ("Đã bỏ qua", "") if skipped else ("Đã huỷ", "")
+                        _ui_update(it)
+                        if skipped:
+                            _ui_log(f"⏭ Bỏ qua {it.name} — chạy tiếp video sau.")
+                    except Exception as exc:
+                        logger.exception("Lỗi xử lý %s", it.name)
+                        it.status, it.message = "Lỗi", error_line(exc)
+                        _ui_update(it)
+                        _ui_log(f"✖ {it.name}: {error_line(exc, 400)}")
+                        fail += 1
+            except BaseException:                      # không để thanh trạng thái kẹt «Đang xử lý» mãi
+                logger.exception("Hàng đợi dừng bất thường")
+            finally:
+                self.current = None
+                self.ui_call(lambda: on_done(ok, fail))
 
         self._thread = threading.Thread(target=run, name="JobRunner", daemon=True)
         self._thread.start()
@@ -811,6 +864,7 @@ class JobRunner:
 
     def stop(self) -> None:
         self.cancel.set()
+        self._item_cancel.set()
 
 
 class TaskRunner:

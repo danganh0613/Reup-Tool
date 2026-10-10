@@ -61,11 +61,6 @@ def _leaks(text: str, target: str) -> bool:
     return LANG_CODE.get(target) not in ("zh", "ja", "ko") and bool(_CJK.search(text or ""))
 
 
-def _wait(seconds: float) -> None:
-    """Chờ có ngẫu nhiên: nhiều lô / nhiều key lỗi cùng lúc không gọi lại đúng cùng một nhịp."""
-    time.sleep(seconds * random.uniform(0.6, 1.2))
-
-
 def budget_for(duration: float, target: str) -> int:
     """Số ký tự tối đa để câu dịch đọc kịp trong ``duration`` giây."""
     return max(10, int(round(duration * _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS))))
@@ -81,9 +76,11 @@ on_unavailable: Callable[[str, str], None] | None = None
 class ModelUnavailable(RuntimeError):
     """Model đang chọn hết lượt hôm nay / quá tải lâu: dừng, báo người dùng chọn model khác (không tự đổi)."""
 
-    def __init__(self, provider: str, model: str, daily: bool) -> None:
+    def __init__(self, provider: str, model: str, daily: bool, gone: bool = False) -> None:
         self.model, self.daily = model, daily
-        if daily:
+        if gone:
+            why = f"{provider} {model} không còn dùng được (Google đã gỡ). Chọn model khác ở Cài đặt › AI dùng API key."
+        elif daily:
             why = (f"{provider} {model} đã hết lượt hôm nay (gói miễn phí). Chọn model khác ở Cài đặt › AI dùng API key, "
                    "hoặc đợi hạn mức đặt lại (nửa đêm giờ Mỹ ≈ 14–15 giờ chiều).")
         else:
@@ -140,7 +137,7 @@ def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
             "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json"}}
     if c.model.startswith("gemma"):              # Gemma không có chế độ JSON — lời nhắc đã đòi JSON, _load_json tự bóc
         del body["generationConfig"]["responseMimeType"]
-    r = requests.post(url, params={"key": c.key}, json=body, timeout=timeout)
+    r = requests.post(url, params={"key": c.key}, json=body, timeout=(15, timeout))   # mất mạng → biết sau 15 s
     if r.status_code in (401, 402, 403, 429):
         raise _quota_error(r, "Gemini")
     if r.status_code != 200:
@@ -155,10 +152,12 @@ def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
 class Router:
     TRIES = 5                                   # quá tải: chờ 10 → 50 s, 5 lần trước khi dừng báo người dùng
 
-    def __init__(self, settings: Settings, log: Callable[[str], None] | None = None) -> None:
+    def __init__(self, settings: Settings, log: Callable[[str], None] | None = None,
+                 cancel: threading.Event | None = None) -> None:
         self.cands = build_candidates(settings)
         self.idx = 0
         self.log = log
+        self.cancel = cancel
         if not self.cands:
             raise RuntimeError("Chưa có Gemini API key (Cài đặt › AI dùng API key).")
 
@@ -166,9 +165,20 @@ class Router:
     def current(self) -> Candidate:
         return self.cands[self.idx]
 
+    def _sleep(self, seconds: float) -> None:
+        """Chờ (gọi kèm hệ số ngẫu nhiên: nhiều lô / key lỗi cùng lúc không gọi lại cùng một nhịp); bấm Dừng /
+        Bỏ qua là thôi ngay, không treo tới hết lượt chờ quá tải."""
+        if self.cancel is None:
+            time.sleep(seconds)
+        elif self.cancel.wait(seconds):
+            raise RenderCancelled("Đã huỷ")
+
     def call(self, prompt: str) -> str:
+        if self.cancel is not None and self.cancel.is_set():
+            raise RenderCancelled("Đã huỷ")
         last = ""
         daily = None                            # lần hỏng cuối: True = hết lượt ngày · False = quá tải · None = lỗi khác
+        gone = offline = False                  # model bị gỡ (404) · không kết nối được (mạng)
         waited = 0.0                            # giây đã chờ vì giới hạn mỗi phút — chung cả lượt gọi, mọi key
         for tried in range(len(self.cands)):
             c = self.current
@@ -183,13 +193,14 @@ class Router:
                     last = str(exc)
                     if exc.status == 429:               # 401/403 = key hỏng → không phải hết lượt
                         daily = exc.per_day or exc.retry_after is None or exc.retry_after > 60
-                    if exc.retry_after is not None and exc.retry_after <= 60 and waited < 150:
+                    if (exc.retry_after is not None and exc.retry_after <= 60 and waited < 150
+                            and not exc.per_day):
                         # chạm giới hạn mỗi phút → chờ cho đầy lại rồi thử lại CHÍNH key này (key khác cùng tài khoản
                         # dùng chung hạn mức: đổi key chỉ tốn thêm lượt gọi bị từ chối)
                         if self.log:
                             self.log(f"⏳ {c.provider} {c.model} chạm giới hạn mỗi phút → chờ {exc.retry_after:.0f}s rồi thử lại")
                         pause = exc.retry_after * random.uniform(1.0, 1.2) + 0.5
-                        time.sleep(pause)
+                        self._sleep(pause)
                         waited += pause
                         continue
                     model_down = exc.retry_after is not None
@@ -198,18 +209,17 @@ class Router:
                     break
                 except requests.RequestException as exc:
                     last = str(exc)
-                    _wait(2.0 * (attempt + 1))
+                    self._sleep(2.0 * (attempt + 1) * random.uniform(0.6, 1.2))
                     if attempt == self.TRIES - 1:
-                        model_down = True
-                        daily = False
+                        model_down = offline = True
                         if self.log:
-                            self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
+                            self.log(f"⚠ {c.provider} lỗi mạng: {str(exc)[:110]}")
                     attempt += 1
                 except RuntimeError as exc:
                     last = str(exc)
                     busy = " 503" in last or " 500" in last or " 502" in last or " 529" in last
                     if " 404" in last:          # model không còn phục vụ
-                        model_down = True
+                        model_down = gone = True
                         if self.log:
                             self.log(f"⚠ {c.provider}: model {c.model} không còn khả dụng")
                         break
@@ -222,13 +232,15 @@ class Router:
                     # máy chủ quá tải → chờ lâu dần rồi thử lại (10 → 40 s); lỗi khác chờ ngắn
                     if busy and self.log:
                         self.log(f"⏳ {c.provider} {c.model} đang quá tải → chờ {10 * (attempt + 1)}s rồi thử lại")
-                    _wait(10.0 * (attempt + 1) if busy else 1.5)
+                    self._sleep((10.0 * (attempt + 1) if busy else 1.5) * random.uniform(0.6, 1.2))
                     attempt += 1
             if model_down or tried + 1 >= len(self.cands):
                 break
             self.idx = (self.idx + 1) % len(self.cands)
-        if daily is not None:
-            exc = ModelUnavailable(self.current.provider, self.current.model, daily)
+        if offline:
+            raise RuntimeError("Không kết nối được tới Gemini — kiểm tra mạng rồi Thử lại.")
+        if daily is not None or gone:
+            exc = ModelUnavailable(self.current.provider, self.current.model, bool(daily), gone)
             if self.log:
                 self.log(f"✖ {exc.message}")
             notify_unavailable(exc)
@@ -429,7 +441,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
     ``previous`` (trống = dịch mới) và câu xung quanh làm ngữ cảnh. Bỏ qua bộ nhớ dịch / checkpoint (đó chính là bản cũ
     bị chê); kết quả mới ghi đè vào bộ nhớ dịch. ``budgets``: số ký tự tối đa riêng cho từng câu (vd rút gọn câu đọc
     tràn khung). Trả {chỉ số: bản dịch mới}."""
-    router = Router(settings, log)
+    router = Router(settings, log, cancel)
     target_en = _LANG_HINT.get(target, target)
     memory = TranslationMemory()
     budgets = budgets or {}
@@ -519,7 +531,7 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
     Trả ({chỉ số 0-based: câu mới}, ghi chú của AI)."""
     if not instruction.strip():
         return {}, ""
-    router = Router(settings, log)
+    router = Router(settings, log, cancel)
     target_en = _LANG_HINT.get(target, target)
     edits: dict[int, str] = {}
     notes: list[str] = []

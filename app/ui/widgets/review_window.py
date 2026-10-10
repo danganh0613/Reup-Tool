@@ -17,11 +17,13 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.core.state import VideoItem
+from app.services.job_runner import error_line
 from app.services.srt_utils import format_ts
 from app.ui.icons import icon
 from app.ui.widgets.common import StatusLabel, hint
 from app.ui.widgets.ui import Select, Tooltip, button
 from app.ui.widgets.video_summary import OFF, WARN, summarize
+from app.ui.progress_panel import friendly_error
 
 APP = "Edit Studio"
 _MARK = {"": ("○", "Chưa chuẩn bị", "TEXT_MUTED"), "pending": ("●", "Chờ duyệt", "WARNING"),
@@ -35,6 +37,8 @@ def _mark(it: VideoItem) -> tuple[str, str, str]:
         return "⏳", it.status, T.INFO
     if it.status == "Xong" and it.review == "approved":
         return "★", "Đã xuất", T.SUCCESS
+    if it.status == "Cần xuất lại" and it.review == "approved":
+        return "↻", "Cần xuất lại", T.WARNING
     sym, label, color = _MARK.get(it.review, _MARK[""])
     return sym, label, getattr(T, color)
 
@@ -302,8 +306,8 @@ class ReviewPanel(ctk.CTkFrame):
             if not self.winfo_exists():
                 return
             if error:
-                it.status, it.message = "Lỗi", str(error).splitlines()[0][:160]
-                self.status.error(f"Lỗi: {error}")
+                it.status, it.message = "Lỗi", error_line(error)
+                self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.status.ok("Chuẩn bị xong — bấm ▶ Phát để xem, ưng thì Duyệt.")
             win.queue_update(it)

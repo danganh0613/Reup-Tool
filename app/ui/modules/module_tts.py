@@ -19,6 +19,7 @@ from app.services.tts.generator import make_engine, preview_text, synthesize_cac
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, hint, pack_rows
 from app.core.languages import LocaleLabels
+from app.ui.progress_panel import friendly_error
 
 logger = logging.getLogger(__name__)
 SPEED_OPTIONS = ["0.8", "0.9", "0.95", "1.0", "1.05", "1.1", "1.15", "1.2", "1.3", "1.5", "1.8", "2.0"]
@@ -319,7 +320,7 @@ class TTSModule(BaseModule):
 
         def done(result, error):
             if error:
-                self.speaker_status.error(f"Lỗi: {error}")
+                self.speaker_status.error(f"Lỗi: {friendly_error(str(error))}")
                 return
             n = len(result.speakers)
             self.speaker_status.ok(f"Tìm thấy {n} người nói. Nghe thử «Nghe giọng gốc» rồi chọn giọng cho từng người; "
@@ -410,7 +411,7 @@ class TTSModule(BaseModule):
 
         def done(result, error):
             if error:
-                self.track_status.error(f"Lỗi: {error}")
+                self.track_status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.on_active_changed()
                 self.state.mark_dirty()

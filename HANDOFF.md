@@ -81,6 +81,12 @@
     - `diarize.resolve_voices`: người 1 → giọng 1, người 2 → giọng 2…;
     - dư người thì tự gợi ý thêm giọng Nam/Nữ (`Pipeline.voice_config`);
     - hộp «Lưu mẫu» hiện rõ giọng sẽ lưu.
+19. **Sửa sau QA audit (10/2026)** — chi tiết + phát hiện còn lại: `audit_out/qa/BAO_CAO_QA.md`:
+    - Dừng tất cả / **Bỏ qua 1 video** (✕ trên dòng đang chạy, nút «Bỏ qua video này» ở thanh trạng thái): mỗi video một cờ huỷ (`JobRunner.skip`);
+    - chờ hạn mức Gemini, tách câu dài, tạo giọng đều dừng được ngay; mất mạng / model bị gỡ / chưa có key có câu báo + nút riêng;
+    - sửa sau khi xuất: trạng thái «Cần xuất lại», ↻ «Xuất lại video này», Render bỏ qua video đã Xong;
+    - video trùng tên khác thư mục không đè phụ đề / video xuất (`Pipeline.file_stem`); xuất ra file `.dang-xuat` rồi mới đổi tên;
+    - Lời thoại tự nạp lại khi file phụ đề đổi; nạp lại video cũ → hỏi dùng lại phụ đề đã làm.
 
 ## Còn tồn / để ý khi làm tiếp
 
@@ -105,4 +111,7 @@
      - bấm **Duyệt** (Ctrl+Enter).
   3. Bấm **Xuất** và kiểm tra file trong Thư mục xuất.
   4. Thử **Dừng** giữa chừng, nạp một file hỏng (sẽ hiện ✖ + Thử lại), và đổi theme trong Cài đặt.
+  5. Chuẩn bị 3 video, bấm **Bỏ qua video này** ở thanh trạng thái (hoặc ✕ trên dòng đang chạy) → video sau chạy tiếp.
 - **Lint nhanh:** `python -m pyflakes app`.
+- **Bài test tự động (local, trong `audit_out/`, không commit):** `audit_out/qa/test_qa_fixes.py`, `audit_out/b_only/smoke_b_ui.py`,
+  `audit_out/ux_sub/smoke_sub_ui.py`, `audit_out/review/smoke_retry_model.py` — thêm tham số `ctk52` để chạy với CustomTkinter 5.2.

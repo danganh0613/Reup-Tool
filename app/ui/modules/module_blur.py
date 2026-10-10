@@ -15,6 +15,7 @@ from app.ui.preview_panel import new_region
 from app.ui.widgets.ui import Select, button
 from app.ui.widgets.common import (ButtonRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, TimeEntry, hint,
                                   pack_rows)
+from app.ui.progress_panel import friendly_error
 
 
 class BlurModule(BaseModule):
@@ -180,7 +181,7 @@ class BlurModule(BaseModule):
 
         def done(_r, error):
             if error:
-                self.auto_status.error(f"Lỗi: {error}")
+                self.auto_status.error(f"Lỗi: {friendly_error(str(error))}")
                 return
             if not self.state.blur.auto_detect:
                 self.state.blur.auto_detect = True

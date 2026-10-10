@@ -11,6 +11,7 @@ dịch lại câu còn sót chữ Hán. AI tách câu dài (_3_2_split_meaning) 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -23,8 +24,8 @@ from pathlib import Path
 from app.core.state import Settings
 from app.services.ffmpeg import RenderCancelled
 from app.services.srt_utils import Cue, wrap_lines
-from app.services.translate_router import (LEAK_REQUEST, Checkpoint, ModelUnavailable, Router, TranslationMemory,
-                                           _leaks, _load_json, retranslate)
+from app.services.translate_router import (_LANG_HINT, LEAK_REQUEST, Checkpoint, ModelUnavailable, Router,
+                                           TranslationMemory, _leaks, _load_json, retranslate)
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +313,26 @@ def _ask(router: Router, prompt: str, valid: Callable[[dict], bool] | None = Non
     raise ValueError(last)
 
 
+_CODE_NAME = {"zh": "Chinese", "ja": "Japanese", "ko": "Korean", "en": "English", "vi": "Vietnamese"}
+
+
+def lang_name(value: str) -> str:
+    """Tên tiếng Anh cho lời nhắc: «Tiếng Việt» → Vietnamese, «zh» → Chinese, «Tự nhận diện» → the original language."""
+    v = (value or "").strip()
+    return _LANG_HINT.get(v) or _CODE_NAME.get(v) or ("the original language" if v in ("", "auto", "Tự nhận diện") else v)
+
+
+def source_name(texts: list[str], hint: str = "") -> str:
+    """Ngôn ngữ nguồn cho lời nhắc; video chữ Hán / Kana / Hangul xen nhiều câu tiếng Anh → nói rõ để AI dịch cả hai."""
+    code = source_code(texts, hint)
+    name = lang_name(code)
+    if code in ("zh", "ja", "ko"):
+        latin = sum(1 for t in texts if len(re.findall(r"[A-Za-z]{3,}", t)) >= 2)
+        if latin >= max(2, len(texts) // 10):
+            name += " mixed with some English"
+    return name
+
+
 def source_code(texts: list[str], hint: str = "") -> str:
     """Mã ngôn ngữ nguồn như get_source_language() của VideoLingo (zh / ja / ko …)."""
     joined = "".join(texts)
@@ -364,11 +385,14 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                       on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
                       cancel: threading.Event | None = None) -> list[Cue]:
     """``fit``: {"tts_speed", "video_speed", "min_gap"} khi có lồng tiếng → rút gọn câu đọc không kịp (None = bỏ qua)."""
-    router = Router(settings, log)
+    router = Router(settings, log, cancel)
     lines = [c.plain.replace("\n", " ").strip() or "…" for c in cues]
     total = len(lines)
-    src_lang = source_code(lines, source_hint)
-    key_style = (style or "") + STYLE_TAG
+    src_lang = source_name(lines, source_hint)
+    tgt_lang = lang_name(target)
+    # từ điển thuật ngữ đổi → không dùng lại bản dịch theo từ điển cũ
+    gloss = " ".join((settings.glossary or "").split())
+    key_style = (style or "") + STYLE_TAG + (f"|g{hashlib.sha1(gloss.encode('utf-8')).hexdigest()[:8]}" if gloss else "")
     memory = TranslationMemory()
     ckpt = Checkpoint(srt_path, target, key_style)
     results: dict[int, str] = {}
@@ -389,7 +413,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         if "theme" not in ckpt.extra:
             if log:
                 log("Dịch: tóm tắt nội dung + lấy thuật ngữ…")
-            summ = _ask(router, summary_prompt(src_lang, target, " ".join(lines)[:SUMMARY_CHARS], custom),
+            summ = _ask(router, summary_prompt(src_lang, tgt_lang, " ".join(lines)[:SUMMARY_CHARS], custom),
                         lambda d: isinstance(d.get("terms"), list) and all(
                             isinstance(t, dict) and {"src", "tgt", "note"} <= set(t) for t in d["terms"]))
             ckpt.extra = {"theme": str(summ.get("theme", "")), "terms": summ["terms"] + custom}
@@ -418,17 +442,17 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             return lambda d: all(isinstance(d.get(k), dict) and str(d[k].get(field, "")).strip() for k in keys)
 
         try:
-            faith = _ask(router, faith_prompt(chunk, sp, src_lang, target), has("direct"))
-        except ModelUnavailable:
+            faith = _ask(router, faith_prompt(chunk, sp, src_lang, tgt_lang), has("direct"))
+        except (ModelUnavailable, RenderCancelled):
             ckpt.save(total)
             memory.save()
             raise
         faith = {k: {"origin": lines[idx[n]], "direct": str(faith[k]["direct"]).replace("\n", " ").strip()}
                  for n, k in enumerate(keys)}
         try:
-            expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, target, style), has("free"))
+            expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style), has("free"))
             out = [str(expr[k]["free"]).replace("\n", " ").strip() for k in keys]
-        except ModelUnavailable:
+        except (ModelUnavailable, RenderCancelled):
             ckpt.save(total)
             memory.save()
             raise
@@ -455,7 +479,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             for i, t in new.items():
                 if t and not _leaks(t, target):
                     texts[i] = t
-        except ModelUnavailable:
+        except (ModelUnavailable, RenderCancelled):
             raise
         except Exception as exc:                        # noqa: BLE001 — phụ
             logger.warning("Không dịch lại được câu sót chữ gốc: %s", exc)
@@ -495,7 +519,7 @@ def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log:
                                 lambda d: bool(str(d.get("result", "")).strip()))["result"]).strip()
                 if syllable_count(new2) < syllable_count(new):
                     new = new2
-        except ModelUnavailable:
+        except (ModelUnavailable, RenderCancelled):
             raise
         except ValueError as exc:
             logger.warning("Không rút gọn được câu %d: %s", i + 1, exc)
@@ -553,19 +577,24 @@ def _mechanical_split(sentence: str, num_parts: int) -> list[str]:
 
 
 def split_long_sentences(sentences: list[str], token_counts: list[int], *, settings: Settings, language: str = "zh",
-                         log: Callable[[str], None] | None = None) -> list[str]:
+                         log: Callable[[str], None] | None = None,
+                         cancel: threading.Event | None = None) -> list[str]:
     """Câu > 20 token (spaCy) → AI tách thành ⌈token/20⌉ phần (chỉ lấy VỊ TRÍ cắt, giữ nguyên chữ gốc). Không gọi
     được AI (hết lượt…) → cắt máy ở dấu câu gần giữa nhất như bản gốc."""
     joiner = "" if language in ("zh", "ja", "yue") else " "
     out: list[str] = []
     router = None
+    use_ai = True                                       # hết lượt / chưa có key → các câu sau cắt máy luôn, khỏi chờ
     for s, n in zip(sentences, token_counts):
         if n <= MAX_SPLIT_TOKENS:
             out.append(s)
             continue
         parts_n = math.ceil(n / MAX_SPLIT_TOKENS)
+        if not use_ai:
+            out.extend(_mechanical_split(s, parts_n))
+            continue
         try:
-            router = router or Router(settings, log)
+            router = router or Router(settings, log, cancel)
             d = _ask(router, split_prompt(s, parts_n, MAX_SPLIT_TOKENS, language), lambda d: _pick_split(d) is not None)
             pts = _split_positions(s, _pick_split(d), joiner)
             pieces, last = [], 0
@@ -575,7 +604,13 @@ def split_long_sentences(sentences: list[str], token_counts: list[int], *, setti
             pieces.append(s[last:].strip())
             pieces = [x for x in pieces if x]
             out.extend(pieces if len(pieces) > 1 else _mechanical_split(s, parts_n))
+        except RenderCancelled:
+            raise
         except Exception as exc:                        # noqa: BLE001 — một câu tách hỏng không được dừng cả video
             logger.warning("AI tách câu dài lỗi (%s) → cắt ở dấu câu", exc)
+            if router is None or isinstance(exc, RuntimeError):     # hết lượt / mất mạng / key hỏng (JSON hỏng = ValueError)
+                use_ai = False
+                if log:
+                    log("Tách câu dài: không gọi được AI → cắt ở dấu câu cho các câu còn lại.")
             out.extend(_mechanical_split(s, parts_n))
     return out

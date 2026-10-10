@@ -15,6 +15,7 @@ from app.config.paths import SUBS_DIR
 from app.core.state import VideoItem
 from app.services.srt_utils import Cue, format_ts, load_srt, parse_srt, save_srt, to_srt
 from app.services.translate_router import RETRANSLATE_PRESETS
+from app.ui.progress_panel import friendly_error
 
 
 class SRTEditorDialog(ctk.CTkToplevel):
@@ -319,7 +320,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
             if not self.winfo_exists():
                 return
             if error:
-                self.status.configure(text=f"Lỗi: {error}")
+                self.status.configure(text=f"Lỗi: {friendly_error(str(error))}")
                 return
             self._sync_page()           # giữ những gì người dùng gõ trong lúc chờ dịch
             for i, t in result.items():

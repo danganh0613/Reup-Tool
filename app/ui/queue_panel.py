@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
 from app.config import theme as T
+from app.config.paths import SUBS_DIR
 from app.ui.widgets.ui import Tooltip, button
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts
@@ -20,7 +21,14 @@ if TYPE_CHECKING:
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
 _UNSET = object()
 _STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
-                 "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED}
+                 "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED,
+                 "Đã bỏ qua": T.WARNING, "Cần xuất lại": T.WARNING}
+_RUNNING = ("Chờ", "Đang xử lý", "Đang chuẩn bị")          # còn trong lượt đang chạy
+
+
+def has_work(it: VideoItem) -> bool:
+    """Video đã có phần việc (phụ đề, bản dịch, giọng, cấu hình riêng, đã duyệt) — xoá khỏi hàng đợi thì nên hỏi."""
+    return bool(it.srt_path or it.srt_translated_path or it.voice_path or it.config is not None or it.review)
 
 
 class QueueRow(ctk.CTkFrame):
@@ -54,6 +62,16 @@ class QueueRow(ctk.CTkFrame):
         self.update_view()
 
     def _remove(self) -> None:
+        """✕: đang chạy lượt có video này → bỏ qua video (các video sau chạy tiếp); không thì bỏ khỏi hàng đợi."""
+        win, it = self.panel.window, self.item
+        if win.runner.running and it.status in _RUNNING:
+            if messagebox.askyesno("Edit Studio", f"Bỏ qua «{it.name}» trong lượt đang chạy?\n\nCác video khác vẫn chạy tiếp."):
+                win.skip_item(it)
+            return
+        if has_work(it) and not messagebox.askyesno(
+                "Edit Studio", f"Bỏ «{it.name}» khỏi hàng đợi?\n\nPhụ đề, bản dịch, giọng đã làm vẫn còn trong thư mục "
+                               "output — nạp lại video này sẽ được hỏi dùng lại."):
+            return
         self.panel.state.remove_video(self.index)
 
     def _retry(self) -> None:
@@ -98,8 +116,14 @@ class QueueRow(ctk.CTkFrame):
             parts.append(it.message)
         self._put("info", "  |  ".join(parts) if parts else "Chưa đọc thông tin", lambda v: self.info.configure(text=v))
         self._put("status", it.status, lambda v: self.status.configure(text=v, text_color=_STATUS_COLOR.get(v, T.TEXT)))
-        failed = it.status in ("Lỗi", "Đã huỷ")
-        self._put("retry", failed, lambda v: self.retry_btn.grid(row=0, column=3, rowspan=2) if v else self.retry_btn.grid_remove())
+        # ↻: video lỗi / huỷ / bỏ qua → thử lại; đã xong → xuất lại riêng video này
+        again = it.status in ("Lỗi", "Đã huỷ", "Đã bỏ qua", "Xong", "Cần xuất lại")
+        self._put("retry", again, lambda v: self.retry_btn.grid(row=0, column=3, rowspan=2) if v else self.retry_btn.grid_remove())
+        self._put("retry_tip", "Xuất lại video này" if it.status in ("Xong", "Cần xuất lại") else "Thử lại video này",
+                  lambda v: self.retry_btn.tooltip.set_text(v))
+        running = self.panel.window.runner.running and it.status in _RUNNING
+        self._put("remove_tip", "Bỏ qua video này (các video khác chạy tiếp)" if running else "Bỏ video này khỏi hàng đợi",
+                  lambda v: self.remove_btn.tooltip.set_text(v))
         if it.status == "Lỗi" and it.message:
             import textwrap
 
@@ -185,13 +209,38 @@ class QueuePanel(ctk.CTkFrame):
                 srt = Path(it.path).with_suffix(".srt")
                 if srt.exists():
                     it.srt_path = str(srt)
+            self._offer_reuse([it for it in added if not it.srt_path])
             self.state.set_active(len(self.state.videos) - len(added))
             self.state.emit("active_changed")
             self.window.log(f"Đã thêm {len(added)} video.")
 
+    def _offer_reuse(self, items: list[VideoItem]) -> None:
+        """Video từng làm (phụ đề / bản dịch còn trong output/subs) → hỏi dùng lại, khỏi nhận diện + dịch lại."""
+        pipe = self.window.pipeline
+        found = []
+        for it in items:
+            srt, tr = SUBS_DIR / f"{pipe.file_stem(it)}.srt", pipe.translated_path(it)
+            if srt.exists():
+                found.append((it, srt, tr if tr.exists() else None))
+        if not found:
+            return
+        names = ", ".join(it.name for it, _, _ in found[:3]) + (f" và {len(found) - 3} video khác" if len(found) > 3 else "")
+        if not messagebox.askyesno("Edit Studio", f"Đã có phụ đề làm trước cho {names}.\n\nDùng lại? "
+                                                  "(Không = nhận diện lại từ đầu)"):
+            return
+        for it, srt, tr in found:
+            it.srt_path = str(srt)
+            it.srt_translated_path = str(tr) if tr else None
+        self.window.log(f"Dùng lại phụ đề đã làm cho {len(found)} video.")
+
     def _clear(self) -> None:
         if self.window.runner.running:
-            self.window.log("Đang render — dừng trước khi xoá hàng đợi.")
+            messagebox.showinfo("Edit Studio", "Đang chạy — bấm Dừng trước khi xoá hàng đợi.")
+            return
+        vids = self.state.videos
+        if any(has_work(it) for it in vids) and not messagebox.askyesno(
+                "Edit Studio", f"Xoá hết {len(vids)} video khỏi hàng đợi?\n\nPhụ đề, bản dịch, giọng đã làm vẫn còn trong "
+                               "thư mục output — nạp lại video sẽ được hỏi dùng lại."):
             return
         self.state.clear_videos()
 

@@ -13,6 +13,7 @@ from app.core.state import TTS_LABELS, TTS_PROVIDERS, provider_or_default
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list
 from app.ui.widgets.common import ButtonRow, OptionRow, StatusLabel
+from app.ui.progress_panel import friendly_error
 
 VoiceSel = tuple[str, str, str]          # (provider, locale, voice_id)
 
@@ -148,7 +149,7 @@ class VoicePicker(ctk.CTkFrame):
 
         def done(result, error):
             if error:
-                self.status.error(f"Lỗi: {error}")
+                self.status.error(f"Lỗi: {friendly_error(str(error))}")
                 return
             self.status.info("Đang phát…")
             try:

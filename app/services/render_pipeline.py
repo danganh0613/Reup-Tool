@@ -778,5 +778,24 @@ def run_plan(plan: RenderPlan, ffmpeg: FFmpeg, *, on_progress: Callable[[float],
         if on_progress:
             on_progress(0.2)
             v_prog = lambda p: on_progress(0.2 + 0.8 * p)      # noqa: E731
-    ffmpeg.run(plan.cmd, duration=plan.duration, on_progress=v_prog, cancel=cancel, cwd=plan.cwd, log_tag="render")
-    return plan.out_path
+    # ghi ra file tạm rồi mới đổi tên: Dừng / lỗi giữa chừng không để lại video dở (hay đè mất bản xuất cũ)
+    out = plan.out_path
+    cmd = list(plan.cmd)
+    tmp = out.with_name(f"{out.stem}.dang-xuat{out.suffix}")
+    if cmd and cmd[-1] == str(out):
+        cmd[-1] = str(tmp)
+    else:
+        tmp = out
+    try:
+        ffmpeg.run(cmd, duration=plan.duration, on_progress=v_prog, cancel=cancel, cwd=plan.cwd, log_tag="render")
+    except BaseException:
+        if tmp != out:
+            tmp.unlink(missing_ok=True)
+        raise
+    if tmp != out:
+        try:
+            tmp.replace(out)
+        except PermissionError:
+            raise RuntimeError(f"Không ghi đè được {out.name} (file đang mở ở trình phát khác?) — bản mới để ở "
+                               f"{tmp.name}. Đóng trình phát rồi Thử lại.") from None
+    return out

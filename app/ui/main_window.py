@@ -89,6 +89,7 @@ class MainWindow(_Root):
         # việc vừa lỗi (chạy lại bằng «Thử lại») + model lúc lỗi «hết lượt» (đổi model xong → nút thành «Thử lại»)
         self._last_retry: Callable[[], None] | None = None
         self._failed_model: str | None = None
+        self._failed_key: tuple | None = None          # key lúc lỗi «chưa có / sai key» — Lưu key khác → «Thử lại»
         self.player = AudioPlayer(self.ffmpeg)
         self.modules: dict[str, BaseModule] = {}
         self._rail_buttons: dict[str, ctk.CTkButton] = {}
@@ -309,13 +310,12 @@ class MainWindow(_Root):
             self.sync_review_rail()
             if cur:
                 self.show_module(cur)
-        panel_w = int(max(360, min(470, w * 0.30)))
-        help_w = int(max(300, min(400, w * 0.26)))
+        panel_w, help_w = self._side_widths(w)
         if getattr(self, "_panel_help_w", None) != (panel_w, help_w):     # configure(width) vẽ lại cả khung CTk
             self._panel_help_w = (panel_w, help_w)
             self.panel.configure(width=panel_w)
             self.help.set_width(help_w)
-        room_for_help = w - RAIL_W - panel_w - help_w - 60 >= 560
+        room_for_help = self._room_for_help(w)
         if self._help_open and not room_for_help:
             self._help_wanted = True
             self.help.grid_forget()
@@ -331,6 +331,16 @@ class MainWindow(_Root):
         if sig != getattr(self, "_layout_sig", None):
             self._layout_sig = sig
             self.after(60, self._repaint_all)
+
+    @staticmethod
+    def _side_widths(w: float) -> tuple[int, int]:
+        """(bảng tính năng, bảng hướng dẫn) theo bề rộng cửa sổ."""
+        return int(max(360, min(470, w * 0.30))), int(max(300, min(400, w * 0.26)))
+
+    def _room_for_help(self, w: float) -> bool:
+        """Đủ chỗ đặt bảng hướng dẫn cạnh bên mà khung xem trước vẫn ≥ 560."""
+        panel_w, help_w = self._side_widths(w)
+        return w - RAIL_W - panel_w - help_w - 60 >= 560
 
     def _repaint_all(self) -> None:
         """Widget CTk co lại để lại vệt vẽ cũ trên nền frame cha → ẩn/hiện lại các khung để Tk vẽ lại toàn bộ."""
@@ -582,7 +592,7 @@ class MainWindow(_Root):
         key = key or self.current_module_key() or "start"
         k = self._scaling()
         w = self.winfo_width() / k
-        if w > 50 and w < 1250 and not self._help_open:
+        if w > 50 and not self._room_for_help(w) and not self._help_open:
             self.open_guide_window(key)          # quá hẹp để đặt bảng cạnh bên
             return
         if not self._help_open:
@@ -671,16 +681,29 @@ class MainWindow(_Root):
 
         self._last_retry = retry
         self._failed_model = None
+        self._failed_key = None
         msg = message or ""
         if UNAVAILABLE_MARK in msg and "quá tải" not in msg:
             self._failed_model = self.app_state.settings.translate_model
             return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
         if MISSING_MARK in msg:
             return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
+        low = msg.lower()
+        if "chưa có gemini api key" in low or ("api key" in low and ("401" in low or "403" in low)):
+            # key nhập xong + Lưu → nút thành «Thử lại» như khi đổi model
+            self._failed_key = tuple(self.app_state.settings.gemini_keys())
+            return ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True)
         return ("Thử lại", retry, "refresh", True) if retry else None
 
     def _offer_retry_after_model(self) -> None:
-        """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại»."""
+        """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại».
+        Tương tự lỗi «chưa có / sai key»: đã nhập key khác."""
+        keys = tuple(self.app_state.settings.gemini_keys())
+        if self._failed_key is not None and self._last_retry is not None and keys and keys != self._failed_key:
+            self._failed_key = None
+            self.progress.result("error", "Đã lưu key", "Bấm «Thử lại» để chạy tiếp phần lỗi",
+                                 ("Thử lại", self._last_retry, "refresh", True))
+            return
         model = self.app_state.settings.translate_model
         if self._failed_model is None or self._last_retry is None or model == self._failed_model:
             return
@@ -720,7 +743,7 @@ class MainWindow(_Root):
             self.bind(f"<Control-{k}>", fn)
             if IS_MAC:                           # macOS quen dùng ⌘ (Command) thay Ctrl
                 self.bind(f"<Command-{k}>", fn)
-        self.bind("<Escape>", lambda _e: self.stop_all() if (self.runner.running or self.tasks.running) else None)
+        self.bind("<Escape>", self._on_escape)
 
         def fps() -> float:
             return max(1.0, self.preview.info.fps if self.preview.info and self.preview.info.fps else 30.0)
@@ -862,7 +885,7 @@ class MainWindow(_Root):
         """Nút ↻ của video lỗi trong hàng đợi: chuẩn bị lại (chế độ Duyệt) hoặc render lại đúng video đó."""
         if item not in self.app_state.videos:
             return
-        self.log(f"Thử lại: {item.name}")
+        self.log(("Xuất lại: " if item.status in ("Xong", "Cần xuất lại") else "Thử lại: ") + item.name)
         if self.review_mode and item.review != "approved":
             item.review = ""
             self._run_queue([item], mode="prepare")
@@ -892,19 +915,21 @@ class MainWindow(_Root):
         from app.ui.progress_panel import _clock, short_path
 
         took = f"mất {_clock(elapsed)}"
+        skipped = sum(1 for it in items if it.status == "Đã bỏ qua")
+        skip_note = f" · bỏ qua {skipped}" if skipped else ""
         if fail:
             first = next(it for it in items if it.status == "Lỗi")
-            self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
+            self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else "") + skip_note,
                                  f"{first.name}: {friendly_error(first.message, first)}",
                                  self._error_action(first.message, self.retry_failed))
         elif any(it.status == "Đã huỷ" for it in items):
-            self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
+            self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong{skip_note}")
         elif prep:
-            self.progress.result("ok", f"Chuẩn bị xong {ok} video",
+            self.progress.result("ok", f"Chuẩn bị xong {ok} video" + skip_note,
                                  f"{took} · xem từng video ở tab «Duyệt», ưng thì bấm «Duyệt», xong bấm «Xuất» trên cùng")
         else:
             out = self.app_state.output_dir or str(VIDEOS_DIR)
-            self.progress.result("ok", f"Đã xuất {ok} video", f"{took} · lưu ở {short_path(out)}",
+            self.progress.result("ok", f"Đã xuất {ok} video" + skip_note, f"{took} · lưu ở {short_path(out)}",
                                  ("Mở thư mục", self.open_output_dir, "openfolder", False))
 
     def retry_failed(self) -> None:
@@ -952,6 +977,16 @@ class MainWindow(_Root):
         if not items:
             messagebox.showinfo(APP_NAME, "Hàng đợi trống — bấm Nạp video trước.")
             return
+        if not self.review_mode and not force:
+            # video đã xuất (không sửa gì) không dựng lại; xuất lại riêng một video: nút ↻ ở dòng của nó
+            todo = [it for it in items if it.status != "Xong"]
+            if not todo:
+                if not messagebox.askyesno(APP_NAME, f"Cả {len(items)} video đã xuất. Xuất lại tất cả?"):
+                    return
+                todo = items
+            elif len(todo) < len(items):
+                self.log(f"Bỏ qua {len(items) - len(todo)} video đã xuất — xuất lại video nào thì bấm ↻ ở dòng đó.")
+            items = todo
         if self.review_mode and not force:
             todo = [it for it in items if not it.review]
             if todo:
@@ -974,7 +1009,16 @@ class MainWindow(_Root):
                              lambda: self._run_queue(items, mode=mode, audio_only=audio_only))
             return
         self.preview.stop_play()
-        Path(self.app_state.output_dir or VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
+        out_dir = Path(self.app_state.output_dir or VIDEOS_DIR)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            messagebox.showerror(APP_NAME, f"Không tạo được thư mục xuất:\n{out_dir}\n\nỔ đĩa đã rút hoặc đường dẫn sai — "
+                                           "chọn lại ở Cài đặt › Xuất video.")
+            return
+        srt = self.modules.get("srt")
+        if srt is not None and srt.editor.item in items and srt.editor.dirty():
+            srt.editor.save(regen=False)        # câu sửa dở ở Lời thoại → lưu trước (giọng tạo lại trong lượt chạy)
         for it in items:
             it.status, it.progress, it.message = "Chờ", 0.0, ""
             self.queue_update(it)
@@ -988,15 +1032,23 @@ class MainWindow(_Root):
             self.queue_update(it)
             if it.status in ("Đang xử lý", "Đang chuẩn bị"):
                 self.progress.update_item(it, done_count[0] + 1, total, (done_count[0] + it.progress) / total)
-            elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt"):
+            elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua"):
                 done_count[0] = min(total, done_count[0] + 1)
 
         def on_done(ok: int, fail: int) -> None:
+            stopped = self.runner.cancel.is_set()
             self.set_running(False)
             self.after(400, self._run_waiting)
             self.update_render_button()
             elapsed = time.time() - self._render_started
             self._show_result(items, ok, fail, elapsed, prep)
+            if stopped:                              # bấm Dừng: không báo «xong», không bật toast, không tự nhảy tab
+                msg = f"Đã dừng: {ok} video xong · {elapsed / 60:.1f} phút"
+                self.log(msg)
+                self.add_notification("Đã dừng", msg, "info")
+                self.app_state.save_config()
+                self.pipeline.audio_only = False
+                return
             if prep:
                 msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
                 self.log(msg)
@@ -1015,7 +1067,7 @@ class MainWindow(_Root):
 
         if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
             self.set_running(True)
-            self.progress.start_queue(items, mode)
+            self.progress.start_queue(items, mode, on_skip=self.skip_current if total > 1 else None)
             if prep:
                 self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
             else:
@@ -1213,7 +1265,7 @@ class MainWindow(_Root):
         else:
             todo = sum(1 for it in vids if not it.review)
             ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
-            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else "Duyệt")
+            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else ("Duyệt" if vids else "Chuẩn bị"))
         if getattr(self, "_render_label", None) != text:
             self._render_label = text
             relabel(self.render_btn, text)
@@ -1221,12 +1273,41 @@ class MainWindow(_Root):
                 self.progress.refresh_idle()
 
     def stop_all(self) -> None:
+        """Nút Dừng (Esc): dừng TẤT CẢ — video đang chạy, các video còn lại và việc xếp hàng chờ."""
         if self._waiting:
             self.log(f"Đã huỷ {len(self._waiting)} việc trong hàng chờ.")
             self._waiting.clear()
+        busy = self.runner.running or self.tasks.running
         self.runner.stop()
         self.tasks.stop()
         self.log("Đã yêu cầu dừng…")
+        if busy:                                  # bước đang chạy có thể cần vài giây mới dừng được — báo ngay
+            self.stop_btn.configure(state="disabled")
+            self.progress.stopping()
+
+    def skip_item(self, item: VideoItem) -> None:
+        """Bỏ qua một video trong lượt đang chạy; các video khác chạy tiếp."""
+        if not self.runner.running:
+            return
+        self.runner.skip(item)
+        if item is not self.runner.current and item.status == "Chờ":
+            item.status, item.message = "Đã bỏ qua", ""
+            self.queue_update(item)
+        self.log(f"⏭ Bỏ qua {item.name}" + (" — đang dừng video này…" if item is self.runner.current else "."))
+
+    def skip_current(self) -> None:
+        """Nút «Bỏ qua video này» trên thanh trạng thái: bỏ video đang chạy, sang video kế."""
+        if self.runner.current is not None:
+            self.skip_item(self.runner.current)
+
+    def _on_escape(self, _e=None) -> None:
+        """Esc = Dừng tất cả — trừ khi đang gõ trong ô nhập (Esc lúc gõ chữ không được huỷ cả lô)."""
+        if not (self.runner.running or self.tasks.running):
+            return
+        focus = self.focus_get()
+        if isinstance(focus, (tk.Entry, tk.Text)):
+            return
+        self.stop_all()
 
     def destroy(self) -> None:
         # khử giọng AI đang chạy nền (onnxruntime) phải dừng gọn trước khi thoát, không thì tiến trình bị abort
