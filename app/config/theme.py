@@ -98,6 +98,8 @@ SUCCESS = "#22C55E"
 SUCCESS_HOVER = "#16A34A"
 DANGER = "#EF4444"
 DANGER_HOVER = "#DC2626"
+DANGER_BG = "#DC2626"          # nền nút xoá / dừng: đỏ đậm hơn DANGER để chữ trắng đủ tương phản (4,8:1)
+DANGER_BG_HOVER = "#B91C1C"
 DANGER_SOFT = "#4A1D1D"
 WARNING = "#F59E0B"
 INFO = "#38BDF8"
@@ -327,7 +329,7 @@ def ghost_button() -> dict:
 
 
 def danger_button() -> dict:
-    return {"fg_color": DANGER, "hover_color": DANGER_HOVER, "text_color": "#FFFFFF",
+    return {"fg_color": DANGER_BG, "hover_color": DANGER_BG_HOVER, "text_color": "#FFFFFF",
             "font": font(13), "corner_radius": RADIUS, "border_width": 0}
 
 

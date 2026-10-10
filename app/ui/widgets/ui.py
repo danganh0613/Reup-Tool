@@ -34,7 +34,7 @@ def _variant(name: str) -> dict:
     if name == "ghost":
         return {"fg_color": "transparent", "hover_color": T.BG_HOVER, "text_color": T.TEXT, "border_width": 0}
     if name == "destructive":
-        return {"fg_color": T.DANGER, "hover_color": T.DANGER_HOVER, "text_color": "#FFFFFF", "border_width": 0}
+        return {"fg_color": T.DANGER_BG, "hover_color": T.DANGER_BG_HOVER, "text_color": "#FFFFFF", "border_width": 0}
     return {"fg_color": T.BG_ELEVATED, "hover_color": T.BG_HOVER, "text_color": T.TEXT, "border_width": 0}
 
 
@@ -48,7 +48,7 @@ def _disabled_look(fg) -> tuple[str, str] | None:
     c = str(c).upper()
     if c == str(T.ACCENT).upper():
         return T.ACCENT_SOFT, T.ACCENT
-    if c in (str(T.DANGER).upper(), str(T.DANGER_HOVER).upper()):
+    if c in (str(T.DANGER).upper(), str(T.DANGER_HOVER).upper(), str(T.DANGER_BG).upper(), str(T.DANGER_BG_HOVER).upper()):
         return T.DANGER_SOFT, "#FFFFFF"
     return None
 

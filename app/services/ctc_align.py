@@ -1,8 +1,9 @@
 """Căn ép đúng chữ (CTC forced alignment) cho giọng tiếng Việt — cách WhisperX làm, chạy bằng numpy thuần.
 
 Model: wav2vec2-base tiếng Việt 250 h (nguyenvulebinh — giấy phép CC-BY-NC 4.0, dùng phi thương mại), đổi một lần sang
-numpy float16 (~190 MB) ở ``models/align_vi``. Lúc chạy chỉ cần numpy (không nạp torch / transformers); torch chỉ cần lúc
-cài để đọc file model gốc. Đo trên câu Edge TTS có mốc chữ chuẩn: lệch đều ±20 ms (audit_out/word_sync)."""
+numpy float16 (~190 MB) ở ``models/align_vi``. Cả lúc cài lẫn lúc chạy chỉ cần numpy (không torch / transformers —
+bản đóng gói .exe không kèm hai thư viện này). Đo trên câu Edge TTS có mốc chữ chuẩn: lệch đều ±20 ms
+(audit_out/word_sync)."""
 
 from __future__ import annotations
 
@@ -31,12 +32,49 @@ def model_ready() -> bool:
     return WEIGHTS.exists() and VOCAB.exists()
 
 
+def read_torch_zip(path) -> dict[str, np.ndarray]:
+    """Đọc state dict PyTorch (file .bin dạng zip, torch ≥ 1.6) bằng zipfile + pickle — KHÔNG cần torch (bản đóng gói
+    .exe không kèm torch). Chỉ dựng lại tensor (OrderedDict + _rebuild_tensor_v2), lớp lạ thì báo lỗi."""
+    import collections
+    import io
+    import pickle
+    import zipfile
+
+    kinds = {"FloatStorage": np.float32, "HalfStorage": np.float16, "DoubleStorage": np.float64,
+             "LongStorage": np.int64, "IntStorage": np.int32, "ShortStorage": np.int16, "CharStorage": np.int8,
+             "ByteStorage": np.uint8, "BoolStorage": np.bool_}
+    with zipfile.ZipFile(path) as z:
+        pkl = next(n for n in z.namelist() if n.endswith("data.pkl"))
+        root = pkl[:-len("data.pkl")]
+        cache: dict[str, np.ndarray] = {}
+
+        def rebuild(arr, offset, size, stride, *_):
+            return np.lib.stride_tricks.as_strided(arr[offset:], shape=tuple(size),
+                                                   strides=tuple(s * arr.itemsize for s in stride)).copy()
+
+        class _Unpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module == "collections" and name == "OrderedDict":
+                    return collections.OrderedDict
+                if module == "torch._utils" and name == "_rebuild_tensor_v2":
+                    return rebuild
+                if module == "torch._utils" and name == "_rebuild_parameter":
+                    return lambda data, *_: data
+                if module == "torch" and name in kinds:
+                    return kinds[name]
+                raise pickle.UnpicklingError(f"Không đọc được lớp {module}.{name} trong file model")
+
+            def persistent_load(self, pid):
+                kind, key = pid[1], str(pid[2])           # ('storage', kiểu, khoá, thiết bị, số phần tử)
+                if key not in cache:
+                    cache[key] = np.frombuffer(z.read(f"{root}data/{key}"), dtype=kind)
+                return cache[key]
+
+        return dict(_Unpickler(io.BytesIO(z.read(pkl))).load())
+
+
 def install(log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> bool:
-    """Tải model gốc (~380 MB) → đổi sang numpy float16 (~190 MB). Cần torch (có trong requirements) để đọc file gốc."""
-    try:
-        import torch
-    except Exception as exc:
-        raise RuntimeError("Cần torch để đổi model căn chữ lần đầu (pip install -r requirements.txt).") from exc
+    """Tải model gốc (~380 MB) → đổi sang numpy float16 (~190 MB). Không cần torch (đọc file gốc bằng zipfile)."""
     from huggingface_hub import hf_hub_download
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,16 +87,18 @@ def install(log: Callable[[str], None] | None = None, cancel: threading.Event | 
             return False
         if log:
             log("Đổi model sang dạng gọn (~190 MB)…")
-        sd = torch.load(bin_path, map_location="cpu", weights_only=True)
+        sd = read_torch_zip(bin_path)
         pre = "wav2vec2.encoder.pos_conv_embed.conv."
         g = sd.pop(pre + "weight_g", None)
         v = sd.pop(pre + "weight_v", None)
         if g is None:                          # file lưu kiểu mới (parametrizations)
             g, v = sd.pop(pre + "parametrizations.weight.original0"), sd.pop(pre + "parametrizations.weight.original1")
-        sd["pos_w"] = g * v / v.norm(dim=(0, 1), keepdim=True)          # weight norm (dim=2) gộp sẵn
+        g, v = g.astype(np.float32), v.astype(np.float32)
+        sd["pos_w"] = g * v / np.sqrt((v * v).sum(axis=(0, 1), keepdims=True))   # weight norm (dim=2) gộp sẵn
         sd.pop("wav2vec2.masked_spec_embed", None)
         part = MODEL_DIR / "w2v_vi.part.npz"
-        np.savez(part, **{k.removeprefix("wav2vec2."): t.float().numpy().astype(np.float16) for k, t in sd.items()})
+        np.savez(part, **{k.removeprefix("wav2vec2."): np.asarray(t, dtype=np.float32).astype(np.float16)
+                          for k, t in sd.items()})
         shutil.copyfile(vocab, VOCAB)
         part.replace(WEIGHTS)
     if log:

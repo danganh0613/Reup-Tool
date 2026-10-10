@@ -356,7 +356,7 @@ class ButtonRow(ctk.CTkFrame):
             self.grid_columnconfigure(i, weight=1)
             label, ic = split_icon(text)
             st = dict(style or T.secondary_button())
-            variant = "primary" if st.get("fg_color") == T.ACCENT else "destructive" if st.get("fg_color") in (T.DANGER, T.DANGER_SOFT) \
+            variant = "primary" if st.get("fg_color") == T.ACCENT else "destructive" if st.get("fg_color") in (T.DANGER, T.DANGER_BG, T.DANGER_SOFT) \
                 else "ghost" if st.get("fg_color") == "transparent" else "secondary"
             b = button(self, label.strip() if ic else text, icon_name=ic, variant=variant, size="sm", command=cmd, width=10)
             b.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 3, 0))
