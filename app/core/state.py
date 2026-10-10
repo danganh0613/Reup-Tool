@@ -196,7 +196,9 @@ class TTSConfig:
     max_tempo: float = 1.5             # tăng tốc tối đa để khớp thời lượng cue
     min_gap: float = 0.08              # khoảng nghỉ tối thiểu giữa 2 cue (giây)
     natural_sync: bool = False         # đọc tốc độ tự nhiên, dời phụ đề theo giọng (không tăng tốc)
-    soft_timing: bool = False          # dời câu vào khoảng lặng, nén tối đa 1.10×
+    #: dời câu vào khoảng lặng, nén từ 1,10× tăng dần tới trần, câu bị đẩy trễ đọc nhanh hơn để đuổi kịp hình — mặc định
+    #: (đo: bản dịch kiểu VideoLingo câu dài hơn, «Voice tự nhiên» làm giọng trễ dồn tới 4,8 s)
+    soft_timing: bool = True
     multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
     #: AI tự đặt cảm xúc cho MỌI câu (gợi ý sau dịch). Tắt (mặc định) = một giọng xuyên suốt cả video — đổi lời dặn từng
     #: câu làm giọng đổi nhịp / cao độ giữa các câu, nghe như nhiều người đọc; câu chỉnh tay trên bánh xe vẫn đọc theo
