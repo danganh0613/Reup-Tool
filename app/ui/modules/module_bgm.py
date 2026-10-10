@@ -130,7 +130,7 @@ class BGMModule(BaseModule):
             x0, x1 = int(w * min(dur, s0) / dur), int(w * min(dur, e0) / dur)
             col = T.ACCENT if i == getattr(self, "_idx", 0) else T.ACCENT_SOFT
             cv.create_rectangle(x0, 8 + (i % 2) * 14, max(x0 + 3, x1), 22 + (i % 2) * 14, fill=col, outline="")
-            cv.create_text(x0 + 4, 15 + (i % 2) * 14, text=Path(c.get("path", "")).stem[:24], fill="#0B1220" if i == getattr(self, "_idx", 0) else T.TEXT,
+            cv.create_text(x0 + 4, 15 + (i % 2) * 14, text=Path(c.get("path", "")).stem[:24], fill=T.ON_ACCENT if i == getattr(self, "_idx", 0) else T.TEXT,
                            anchor="w", font=(T.UI_FONT, 9))
         t = self.window.preview.t
         x = int(w * min(dur, t) / dur)

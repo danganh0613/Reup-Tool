@@ -103,6 +103,11 @@ def _btn_init(self, *a, **kw) -> None:
 def _btn_configure(self, require_redraw: bool = False, **kw) -> None:
     if "fg_color" in kw:
         self._es_on = None                       # đổi màu nền → tính lại kiểu khi khoá theo màu mới
+    ic = getattr(self, "_es_icon", None)
+    if ic and ic[0] and "text_color" in kw and ic[2] == self.cget("text_color"):
+        # icon theo màu chữ (vd nút công cụ: chọn → nền màu nhấn chữ tối) → đổi màu chữ thì icon đổi theo, không vẽ lại
+        # icon bằng màu cũ (chữ tối mà icon trắng trên nền màu nhấn)
+        self._es_icon = (ic[0], ic[1], kw["text_color"], *ic[3:])
     _ORIG_CONFIGURE(self, require_redraw, **kw)
     if ("state" in kw or "fg_color" in kw) and hasattr(self, "_es_on"):
         _sync_state(self)
