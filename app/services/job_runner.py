@@ -675,6 +675,8 @@ class Pipeline:
             if synced_srt and synced_srt.exists() and same_source:
                 sub_cues = rp.scale_cues(shift(load_srt(synced_srt), scfg.sub_delay), tspeed / speed)
                 log("Phụ đề dùng mốc thời gian đã đồng bộ theo giọng đọc.")
+            for c in sub_cues:                                   # mốc lời thật cho chữ nổi (karaoke)
+                c.meta["anim"] = (c.start, c.duration)
             sub_cues = ensure_min_duration(sub_cues, 1.0)        # câu ngắn không chớp tắt (< 1 s)
             geo = rp.output_geometry(mods.info, vcfg)
             write_ass(sub_cues, stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,

@@ -18,6 +18,8 @@ from app.services.system_fonts import list_fonts
 from app.ui.widgets.common import ColorRow, ComboRow, OptionRow, SliderRow, SwitchRow, hint, pack_rows
 
 QUICK_COLORS = ["#FFFFFF", "#FFE45C", "#22D3EE", "#EF4444", "#22C55E", "#F472B6"]
+WORD_ANIMS = ["off", "pop", "fill", "reveal"]
+WORD_ANIM_LABELS = {"off": "Không", "pop": "Nổi bật (kiểu CapCut)", "fill": "Tô màu dần", "reveal": "Hiện dần từng chữ"}
 EFFECT_LABELS = {TEXT_EFFECTS[0]: "Không"}
 
 
@@ -64,8 +66,9 @@ class SubtitleStylePanel(ctk.CTkFrame):
         self.bg_color = ColorRow(self, "Màu nền", value="#000000", on_change=s(cfg, "sub_bg_color"))
         self.bg_opacity = SliderRow(self, "Độ đậm nền", from_=0, to=100, step=5, suffix="%",
                                     on_change=s(cfg, "sub_bg_opacity", cast=float, preview=False), on_release=rel)
-        self.karaoke = SwitchRow(self, "Tô màu chữ đang đọc", on_change=s(cfg, "karaoke"),
-                                 info="Chữ đang đọc đổi sang màu nổi bật, lần lượt từng chữ theo câu thoại.")
+        self.karaoke = OptionRow(self, "Chữ đang đọc", WORD_ANIMS, labels=WORD_ANIM_LABELS, on_change=self._anim_changed,
+                                 info="Nổi bật: chữ đang đọc đổi màu và to lên rồi trở lại (kiểu CapCut). Tô màu dần: chữ "
+                                      "đã đọc giữ màu nổi. Hiện dần: chữ hiện ra đúng lúc được đọc.")
         self.karaoke_color = ColorRow(self, "Màu chữ nổi", value="#FFE45C", on_change=s(cfg, "karaoke_color"))
         pack_rows(self, [self.bg_style, self.bg_color, self.bg_opacity, self.karaoke, self.karaoke_color])
 
@@ -124,7 +127,7 @@ class SubtitleStylePanel(ctk.CTkFrame):
         self.bg_style.set(cfg.bg_style if cfg.bg_style in SUB_BG_STYLES else SUB_BG_STYLES[0])
         self.bg_color.set(cfg.sub_bg_color)
         self.bg_opacity.set(cfg.sub_bg_opacity)
-        self.karaoke.set(cfg.karaoke)
+        self.karaoke.set(cfg.karaoke_mode if cfg.karaoke and cfg.karaoke_mode in WORD_ANIMS else "off")
         self.karaoke_color.set(cfg.karaoke_color)
         self.follow.set(cfg.follow_hardsub)
         self.delay.set(cfg.sub_delay)
@@ -136,6 +139,12 @@ class SubtitleStylePanel(ctk.CTkFrame):
     def _bg_changed(self, v: str) -> None:
         self.m.set_value(self.state.subtitle, "bg_style", v)
         self.m.set_value(self.state.subtitle, "sub_bg_enable", v != SUB_BG_STYLES[0])
+
+    def _anim_changed(self, v: str) -> None:
+        cfg = self.state.subtitle
+        if v != "off":
+            self.m.set_value(cfg, "karaoke_mode", v, preview=False)
+        self.m.set_value(cfg, "karaoke", v != "off")
 
     def _quick_color(self, col: str) -> None:
         self.color.set(col)

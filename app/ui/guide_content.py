@@ -118,7 +118,8 @@ TOPICS: list[dict] = [
         ("steps", [
             "Đổi chỗ / cỡ chữ: dùng 2 nút trên khung video — «Dưới · Giữa · Trên · Đè chữ cũ» và «Nhỏ · Vừa · Lớn».",
             "Video gốc có chữ in sẵn: chọn «Đè chữ cũ» — máy tự dò, che mờ chữ cũ rồi đặt phụ đề mới vào giữa đúng chỗ đó.",
-            "Đổi kiểu (trắng, vàng, hộp nền…): tab «Lời thoại» › «Phụ đề trên video» › «Kiểu».",
+            "Đổi kiểu (trắng, vàng, hộp nền…): tab «Lời thoại» › «Phụ đề trên video» › «Kiểu». Kiểu «Nổi chữ đang "
+            "đọc»: chữ đang đọc đổi màu và to lên theo đúng nhịp giọng, giống CapCut.",
             "Muốn chỉnh tay (phông, màu, viền, nền…): bấm «Tuỳ chỉnh chi tiết» ngay dưới đó.",
             "Kéo tay: ở tab «Lời thoại» bấm vào khung xanh trên video rồi kéo; «Căn giữa» / «Rộng hết» trên thanh để căn nhanh.",
         ]),

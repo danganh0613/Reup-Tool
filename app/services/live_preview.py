@@ -104,8 +104,9 @@ class LiveSpec:
             for c in self.cues:
                 if c.end <= src_t or c.start >= src_end:
                     continue
+                # «anim»: mốc lời thật (câu đã đọc dở từ trước → âm) để chữ nổi đúng chữ đang đọc
                 sub.append(Cue(len(sub) + 1, max(0.0, c.start - src_t) / speed, (c.end - src_t) / speed, c.text,
-                               dict(c.meta)))
+                               {**c.meta, "anim": ((c.start - src_t) / speed, c.duration / speed)}))
             if sub:          # ASS theo cỡ bản render; libass tự co theo khung nhỏ đang phát
                 write_ass(sub, self.scfg, geo.width, geo.height, self.work / "live.ass")
                 ass_name = "live.ass"

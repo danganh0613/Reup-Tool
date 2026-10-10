@@ -160,8 +160,11 @@ class SubtitleConfig:
     box_center: bool = False
     text_effect: str = "Không có (Khuyên dùng)"
     bg_style: str = "Không nền"
-    karaoke: bool = False
+    karaoke: bool = False              # chữ đang đọc nổi lên (kiểu ở ``karaoke_mode``)
     karaoke_color: str = "#FFD400"
+    #: pop = chữ đang đọc đổi màu + phóng nhẹ rồi trở lại (kiểu CapCut) · fill = tô màu dần (giữ màu) ·
+    #: reveal = chữ hiện dần đúng lúc được đọc
+    karaoke_mode: str = "pop"
     stt_engine: str = STT_ENGINES[0]
     translate_source: str = "Tự nhận diện"
 

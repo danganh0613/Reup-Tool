@@ -17,6 +17,7 @@ _TIKTOK = {"sub_font": SUB_FONT_DEFAULT, "sub_bold": SUB_BOLD_DEFAULT, "sub_ital
 STYLES: dict[str, dict] = {
     "TikTok trắng": dict(_TIKTOK),
     "TikTok vàng": {**_TIKTOK, "sub_color": "#FFE45C"},
+    "Nổi chữ đang đọc": {**_TIKTOK, "karaoke": True, "karaoke_mode": "pop", "karaoke_color": "#FFE45C"},
     "Hộp nền che chữ cũ": {**_TIKTOK, "sub_size": 56, "sub_stroke_width": 0.0, "sub_shadow": 0.0, "sub_bg_enable": True,
                            "bg_style": SUB_BG_STYLES[1], "sub_bg_color": "#000000", "sub_bg_opacity": 72.0},
     "Phim (chữ nhỏ)": {**_TIKTOK, "sub_font": "Arial", "sub_bold": True, "sub_size": 46, "sub_stroke_width": 3.0,
@@ -29,7 +30,8 @@ _MATCH = ("sub_font", "sub_bold", "sub_size", "sub_color", "sub_stroke_width", "
 def style_of(cfg: SubtitleConfig) -> str:
     """Tên kiểu dựng sẵn khớp cấu hình hiện tại, không khớp kiểu nào → «Tuỳ chỉnh»."""
     for name, st in STYLES.items():
-        if all(getattr(cfg, k) == st[k] for k in _MATCH):
+        keys = (*_MATCH, "karaoke_mode") if st["karaoke"] else _MATCH
+        if all(getattr(cfg, k) == st[k] for k in keys):
             return name
     return CUSTOM
 

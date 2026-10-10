@@ -522,9 +522,10 @@ class PreviewPanel(ctk.CTkFrame):
             if scfg.enable_subtitle and show_sub and c is not None:
                 geo = rp.output_geometry(eff, vcfg)
                 PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                write_ass([Cue(1, 0.0, 60.0, c.text, dict(c.meta))], stages_mod.subtitle_for(self.state, item, info),
-                          geo.width, geo.height,
-                          PREVIEW_CACHE_DIR / "preview.ass")
+                # chữ nổi (karaoke): vẽ tĩnh đúng chữ đang đọc tại vị trí đang xem
+                write_ass([Cue(1, 0.0, 60.0, c.text, {**c.meta, "anim": (0.0, c.duration)})],
+                          stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,
+                          PREVIEW_CACHE_DIR / "preview.ass", anim_at=max(0.0, t - c.start))
                 ass_name = "preview.ass"
             speed = max(0.25, vcfg.speed / 100.0)
             vg = rp.build_video_graph(eff, vcfg, work_dir=PREVIEW_CACHE_DIR, ass_name=ass_name, stages=mods.stages,
