@@ -191,7 +191,36 @@ def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05
                 if take > 0.005:
                     end += take
         out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
+    _spread(out, [c.start for c in cues], want, tight, lead)
     return out
+
+
+def _spread(out: list[Cue], orig: list[float], want: float, tight: float, lead: float) -> None:
+    """Còn câu < ``want`` kẹp trong chuỗi câu sát nhau không câu nào thừa để nhường («Trắng tinh 1,02 · Dễ thương 0,95 ·
+    Nuôi được… 1,01») → đẩy nguyên câu sau sang phải (nếu sau nó còn khe) / kéo nguyên câu trước sang trái, giữ độ dài,
+    mỗi câu lệch khỏi mốc ban đầu ≤ ``lead`` (muộn) / 2 × ``lead`` (sớm)."""
+    for _round in range(3):
+        for i, c in enumerate(out):
+            need = want - (c.end - c.start)
+            if need <= 1e-3:
+                continue
+            if i + 1 < len(out):
+                n = out[i + 1]
+                room = out[i + 2].start - tight - n.end if i + 2 < len(out) else need
+                s = max(0.0, min(need, room, orig[i + 1] + lead - n.start, n.start - tight - c.end + need))
+                if s > 1e-3:
+                    n.start += s
+                    n.end += s
+                    c.end = min(c.end + s, n.start - tight)
+                    need = want - (c.end - c.start)
+            if need > 1e-3 and i > 0:
+                p = out[i - 1]
+                room = p.start - (out[i - 2].end + tight) if i >= 2 else p.start
+                s = max(0.0, min(need, room, p.start - (orig[i - 1] - 2 * lead)))
+                if s > 1e-3:
+                    p.start -= s
+                    p.end -= s
+                    c.start = max(c.start - s, p.end + tight)
 
 
 def cue_at(cues: list[Cue], t: float) -> Cue | None:

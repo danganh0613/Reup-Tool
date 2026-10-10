@@ -325,13 +325,15 @@ def qa(path: Path, *, target: float = -14.0, tol: float = 1.0, tp_max: float = -
         if len(fr):
             # có nền: vẫn chỉ lấy các khung gần mức to nhất của câu (phần có giọng) — khung phụ đề được kéo ≥ 1 s nên câu
             # ngắn («Không bắt» 0,5 s) gồm nửa khung là nền đã duck → đo nhỏ hơn thật 2–3 LU
-            fr = fr[db[fr] > (gate if silent_bg else max(gate, float(db[fr].max()) - 20.0))]
+            # −12 dB dưới khung to nhất (gần cổng tương đối −10 LU của BS.1770): −20 dB còn ôm đuôi tắt dần → câu 2–3
+            # tiếng đo nhỏ hơn thật ~2 LU (track giọng riêng đều ±1,5 LU — audit_out/m7/kweight_probe.py)
+            fr = fr[db[fr] > (gate if silent_bg else max(gate, float(db[fr].max()) - 12.0))]
         return np.concatenate([kw[f * w:(f + 1) * w] for f in fr]) if len(fr) else kw[:0]
 
     # câu có < 0,8 s giọng («Gà rừng») đo LUFS trên vài khung 100 ms + nền đã duck → lệch 2–2,6 LU dù track giọng riêng
     # đều ±1,5 LU (audit_out/m7/kweight_probe.py) → không tính vào độ đều
     seg_v = [voiced(a, b) for a, b in segments if (b - a) * FRAME >= 0.4]
-    seg_l = [lufs(v) for v in seg_v if len(v) >= 0.8 * SR]
+    seg_l = [lufs(v) for v in seg_v if len(v) >= 0.5 * SR]
     seg_l = [v for v in seg_l if np.isfinite(v)]
     if seg_l:
         med = float(np.median(seg_l))
