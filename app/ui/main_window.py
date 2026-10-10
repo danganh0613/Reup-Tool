@@ -86,6 +86,9 @@ class MainWindow(_Root):
 
         self._unavailable_shown: set[str] = set()
         translate_router.on_unavailable = lambda model, msg: self.ui_call(lambda: self.model_unavailable(model, msg))
+        # việc vừa lỗi (chạy lại bằng «Thử lại») + model lúc lỗi «hết lượt» (đổi model xong → nút thành «Thử lại»)
+        self._last_retry: Callable[[], None] | None = None
+        self._failed_model: str | None = None
         self.player = AudioPlayer(self.ffmpeg)
         self.modules: dict[str, BaseModule] = {}
         self._rail_buttons: dict[str, ctk.CTkButton] = {}
@@ -506,6 +509,7 @@ class MainWindow(_Root):
         for key in ("tts", "video", "srt"):
             if key in self.modules:
                 self.modules[key].refresh()
+        self._offer_retry_after_model()
 
     def open_settings(self, tab: str | None = None) -> None:
         from app.ui.widgets.settings_window import SettingsWindow
@@ -659,16 +663,30 @@ class MainWindow(_Root):
                command=lambda: (dlg.destroy(), self.open_settings(tab="model"))).pack(side="right", padx=(0, 8))
         dlg.after(50, dlg.lift)
 
-    def _error_action(self, message: str | None) -> tuple | None:
-        """Nút nên bấm cho câu lỗi: model hết lượt → «Chọn model…»; chưa cài AI trên máy → «Cài…»."""
+    def _error_action(self, message: str | None, retry: Callable[[], None] | None = None) -> tuple | None:
+        """Nút nên bấm cho câu lỗi: model hết lượt hôm nay → «Chọn model…» (chọn xong nút thành «Thử lại»); chưa cài AI
+        trên máy → «Cài…»; còn lại (cả model quá tải tạm thời) → «Thử lại» chạy lại đúng việc vừa lỗi."""
         from app.services.qwen_asr import MISSING_MARK
         from app.services.translate_router import UNAVAILABLE_MARK
 
-        if UNAVAILABLE_MARK in (message or ""):
+        self._last_retry = retry
+        self._failed_model = None
+        msg = message or ""
+        if UNAVAILABLE_MARK in msg and "quá tải" not in msg:
+            self._failed_model = self.app_state.settings.translate_model
             return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
-        if MISSING_MARK in (message or ""):
+        if MISSING_MARK in msg:
             return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
-        return None
+        return ("Thử lại", retry, "refresh", True) if retry else None
+
+    def _offer_retry_after_model(self) -> None:
+        """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại»."""
+        model = self.app_state.settings.translate_model
+        if self._failed_model is None or self._last_retry is None or model == self._failed_model:
+            return
+        self._failed_model = None
+        self.progress.result("error", "Đã đổi model", f"Dùng «{model}» — bấm «Thử lại» để chạy tiếp phần lỗi",
+                             ("Thử lại", self._last_retry, "refresh", True))
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
@@ -800,8 +818,10 @@ class MainWindow(_Root):
             self.after(400, self._run_waiting)
             if error:
                 stopped = "huỷ" in str(error).lower()
+                retry = None if stopped else (lambda: self.run_task(name, fn, done))
                 self.progress.result("stopped" if stopped else "error", f"{name}: đã dừng" if stopped else f"{name} lỗi",
-                                     "" if stopped else friendly_error(str(error)), self._error_action(str(error)))
+                                     "" if stopped else friendly_error(str(error)),
+                                     None if stopped else self._error_action(str(error), retry))
                 self.log(f"✖ {name}: {error}")
                 if not stopped:
                     self.add_notification(f"{name} lỗi", str(error)[:300], "error")
@@ -876,7 +896,7 @@ class MainWindow(_Root):
             first = next(it for it in items if it.status == "Lỗi")
             self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
                                  f"{first.name}: {friendly_error(first.message, first)}",
-                                 self._error_action(first.message) or ("Thử lại", self.retry_failed, "refresh", True))
+                                 self._error_action(first.message, self.retry_failed))
         elif any(it.status == "Đã huỷ" for it in items):
             self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
         elif prep:
