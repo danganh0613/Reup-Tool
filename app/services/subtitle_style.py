@@ -51,11 +51,17 @@ def _ass_text(text: str, uppercase: bool = False) -> str:
     return text.replace("\n", "\\N")
 
 
-#: chia thời lượng câu cho từng chữ: trọng số 2 + số ký tự, dấu câu thêm khoảng nghỉ — đo trên giọng lồng tiếng thật
-#: (so với mốc Whisper nghe lại, audit_out/ux_sub/word_timing.py): lệch trung bình ~85 ms, trung vị ~55 ms
+#: chia thời lượng câu cho từng chữ: trọng số 2 + số ký tự, dấu câu thêm khoảng nghỉ — chỉ dùng khi chưa có mốc chữ
+#: theo giọng thật (``word_timing``: căn ép đúng chữ / bám khoảng lặng)
 _PAUSE = {",": 0.6, ";": 0.8, ":": 0.8, ".": 1.0, "?": 1.0, "!": 1.0, "…": 1.0}
 POP_SCALE = 115                       # % phóng chữ đang đọc (kiểu CapCut)
 POP_IN, POP_OUT = 70, 90              # ms chữ nổi lên / trở lại
+
+
+def words_of(text: str) -> list[str]:
+    """Các chữ của câu đúng như chữ nổi tách (bỏ thẻ, gộp dòng) — mốc chữ theo giọng tính trên cùng cách tách này."""
+    plain = " ".join(_OTHER_TAG.sub("", text.replace("\n", " ")).split())
+    return plain.split(" ") if plain else []
 
 
 def word_spans(words: list[str], duration: float) -> list[tuple[float, float]]:
@@ -82,26 +88,29 @@ def _alpha(opacity_pct: float) -> str:
     return f"&H{int(round((100 - max(0.0, min(100.0, opacity_pct))) * 2.55)):02X}&"
 
 
-def _anim_text(text: str, duration: float, cfg: SubtitleConfig, at: float | None = None, offset: float = 0.0) -> str:
-    """Câu với chữ đang đọc nổi lên theo ``cfg.karaoke_mode`` (pop · fill · reveal). ``at``: giây trong câu → vẽ
-    đúng trạng thái lúc đó, không chuyển động (khung xem trước tĩnh). ``offset``: lời bắt đầu muộn hơn lúc câu hiện
-    bấy nhiêu giây (câu ngắn được hiện sớm cho đủ 1 s); âm = câu đã đọc dở từ trước (phát xem trước giữa câu)."""
-    plain = " ".join(_OTHER_TAG.sub("", text.replace("\n", " ")).split())
-    if cfg.sub_uppercase:
-        plain = plain.upper()
-    if not plain:
+def _anim_text(text: str, duration: float, cfg: SubtitleConfig, at: float | None = None, offset: float = 0.0,
+               spans: list[tuple[float, float]] | None = None) -> str:
+    """Câu với chữ đang đọc nổi lên theo ``cfg.karaoke_mode`` (pop · fill · reveal). ``at``: giây tính từ lúc câu
+    hiện → vẽ đúng trạng thái lúc đó, không chuyển động (khung xem trước tĩnh). ``offset``: lời bắt đầu muộn hơn lúc
+    câu hiện bấy nhiêu giây (câu ngắn được hiện sớm cho đủ 1 s); âm = câu đã đọc dở từ trước (phát xem trước giữa câu).
+    ``spans``: (bắt đầu, kết thúc) từng chữ tính từ lúc bắt đầu đọc — mốc theo giọng thật; không có thì ước lượng."""
+    words = words_of(text)
+    if not words:
         return ""
-    words = plain.split(" ")
+    if cfg.sub_uppercase:
+        words = [w.upper() for w in words]
+    if not spans or len(spans) != len(words):
+        spans = word_spans(words, max(0.05, duration))
     mode = cfg.karaoke_mode if cfg.karaoke_mode in ("pop", "fill", "reveal") else "pop"
     base, hl = _bgr(cfg.sub_color), _bgr(cfg.karaoke_color)
     a1, a4 = _alpha(cfg.sub_opacity), _alpha(min(cfg.sub_opacity, 70.0))
     big = f"\\fscx{POP_SCALE}\\fscy{POP_SCALE}"
     out = []
-    for w, (s0, s1) in zip(words, word_spans(words, max(0.05, duration))):
+    for w, (s0, s1) in zip(words, spans):
         w = w.replace("{", "\\{").replace("}", "\\}")
         a, b = max(0, round((s0 + offset) * 1000)), max(0, round((s1 + offset) * 1000))
         if at is not None:                     # trạng thái tĩnh tại giây ``at`` của câu
-            said, now = at >= s0, s0 <= at < s1
+            said, now = at >= s0 + offset, s0 + offset <= at < s1 + offset
             if mode == "pop":
                 tag = f"\\1c{hl}{big}" if now else f"\\1c{base}\\fscx100\\fscy100"
             elif mode == "fill":
@@ -265,9 +274,12 @@ def build_ass(cues: list[Cue], cfg: SubtitleConfig, width: int, height: int, ani
         plain = _ass_text(c.text, cfg.sub_uppercase)
         text = plain
         if cfg.karaoke:
-            # mốc lời thật (trước khi câu ngắn được kéo dài cho đủ 1 s) — chữ nổi theo đúng nhịp đọc
-            a0, dur = c.meta.get("anim", (c.start, c.duration)) if isinstance(c.meta, dict) else (c.start, c.duration)
-            text = _anim_text(c.text, dur, cfg, anim_at, a0 - c.start)
+            # mốc lời thật (trước khi câu ngắn được kéo dài cho đủ 1 s) — chữ nổi theo đúng nhịp đọc;
+            # «words»: mốc từng chữ theo giọng (tỉ lệ trong đoạn giọng của câu)
+            meta = c.meta if isinstance(c.meta, dict) else {}
+            a0, dur = meta.get("anim", (c.start, c.duration))
+            spans = [(u0 * dur, u1 * dur) for u0, u1 in meta["words"]] if meta.get("words") else None
+            text = _anim_text(c.text, dur, cfg, anim_at, a0 - c.start, spans)
         if not text:
             continue
         secondary_text = c.meta.get("secondary") if isinstance(c.meta, dict) else None

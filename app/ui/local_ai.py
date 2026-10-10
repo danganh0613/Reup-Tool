@@ -56,6 +56,21 @@ def install_cuda(window, on_done: Done) -> bool:
     return True
 
 
+def install_aligner(window, on_done: Done) -> bool:
+    """Bộ căn chữ nổi (CTC tiếng Việt): chữ nổi sáng đúng từng tiếng đọc. Tải ~380 MB, lưu ~190 MB."""
+    from app.services.ctc_align import DISK_MB, DOWNLOAD_MB, install, model_ready
+
+    if model_ready():
+        on_done(True, None)
+        return False
+    if not messagebox.askyesno("Edit Studio", "Tải bộ căn chữ nổi (chữ nổi sáng đúng từng tiếng đọc)?\n\n"
+                               f"Tải ~{DOWNLOAD_MB} MB, lưu ~{DISK_MB} MB, một lần. Model wav2vec2 tiếng Việt của "
+                               "nguyenvulebinh — giấy phép CC-BY-NC 4.0 (chỉ dùng phi thương mại)."):
+        return False
+    window.run_task("Cài bộ căn chữ nổi", lambda cancel: install(window.log_bg, cancel), _finish(on_done))
+    return True
+
+
 def whisper_size(nvidia: bool) -> str:
     """Model Whisper nên tải cho việc kiểm lỗi giọng đọc: GPU → large-v3-turbo (chính xác), CPU → small (nhẹ)."""
     return "large-v3-turbo" if nvidia else "small"

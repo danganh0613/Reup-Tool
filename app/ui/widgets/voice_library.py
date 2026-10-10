@@ -15,6 +15,8 @@ from app.config.paths import VOICE_DIR
 from app.services.srt_utils import format_ts
 from app.core.platform import open_path
 
+SIDE_FILES = (".json", ".srt", ".cues.csv", ".words.json")    # file đi kèm track: ghi chú · phụ đề dời · báo cáo · mốc chữ
+
 
 def list_voices() -> list[dict]:
     VOICE_DIR.mkdir(parents=True, exist_ok=True)
@@ -128,7 +130,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
             return
         p = self.selected["path"]
         if messagebox.askyesno("Xóa voice", f"Xoá {p.name}?"):
-            for f in (p, p.with_suffix(".json"), p.with_suffix(".srt")):
+            for f in (p, *(p.with_suffix(x) for x in SIDE_FILES)):
                 try:
                     f.unlink()
                 except OSError:
@@ -139,7 +141,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
     def _delete_all(self) -> None:
         if messagebox.askyesno("Xóa tất cả", "Xoá toàn bộ voice đã tạo trong output/voice?"):
             for it in list_voices():
-                for f in (it["path"], it["path"].with_suffix(".json"), it["path"].with_suffix(".srt")):
+                for f in (it["path"], *(it["path"].with_suffix(x) for x in SIDE_FILES)):
                     try:
                         f.unlink()
                     except OSError:

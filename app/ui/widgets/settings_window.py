@@ -28,8 +28,8 @@ GEMINI_KEY_URL = "https://aistudio.google.com/apikey"
 
 GUIDE = [
     ("Cài đặt", T.INFO, [
-        ("🖥 AI trên máy", "Nghe lời thoại (Qwen3-ASR), giọng đọc Việt (VieNeu), kiểm lỗi giọng đọc (Whisper): cài một lần, "
-                           "miễn phí, không giới hạn lượt. Có GPU NVIDIA thì nhanh hơn nhiều."),
+        ("🖥 AI trên máy", "Nghe lời thoại (Qwen3-ASR), giọng đọc Việt (VieNeu), kiểm lỗi giọng đọc (Whisper), căn chữ "
+                           "nổi: cài một lần, miễn phí, không giới hạn lượt. Có GPU NVIDIA thì nhanh hơn nhiều."),
         ("☁ AI dùng API key", "Gemini dịch phụ đề, sửa lời thoại theo yêu cầu, rút gọn câu đọc không kịp và viết kịch "
                               "bản Dựng truyện. Hết lượt / quá tải thì máy dừng và báo để bạn chọn model khác."),
         ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
@@ -193,6 +193,12 @@ class SettingsWindow(ctk.CTkToplevel):
                             "để đọc liền vài câu ngắn rồi tách lại cho tự nhiên. Luôn bật khi đã có model.")
         self.whisper_status, row = self._status_row(b)
         self.whisper_btn = button(row, "Tải", icon_name="download", size="sm", command=self._download_whisper)
+
+        b = self._card(c, "Căn chữ nổi", sub="CTC tiếng Việt",
+                       info="Phụ đề «Nổi chữ đang đọc»: căn từng chữ theo đúng tiếng của giọng lồng, như CapCut. Chưa "
+                            "cài thì chữ nổi chia theo khoảng lặng trong câu — gần đúng. Chạy bằng CPU.")
+        self.align_status, row = self._status_row(b)
+        self.align_btn = button(row, "Tải", icon_name="download", size="sm", command=self._install_aligner)
 
         b = self._card(c, "Khử giọng gốc & nhận ra người nói",
                        info="Khử giọng nói gốc (giữ nhạc nền, tiếng động) và nhận ra ai nói câu nào để lồng mỗi người một "
@@ -420,12 +426,18 @@ class SettingsWindow(ctk.CTkToplevel):
     def _refresh_local(self) -> None:
         """Trạng thái Qwen3-ASR / VieNeu / Whisper / model nhỏ (đọc đĩa, nhanh)."""
         from app.services import diarize, vocal_remove
+        from app.services.ctc_align import DOWNLOAD_MB, model_ready as align_ok
         from app.services.qwen_asr import INSTALL_GB, is_installed as qwen_ok
         from app.services.tts.quality import local_whisper
         from app.services.tts.vieneu import is_installed as vieneu_ok
 
-        for btn in (self.qwen_btn, self.vieneu_btn, self.whisper_btn):
+        for btn in (self.qwen_btn, self.vieneu_btn, self.whisper_btn, self.align_btn):
             btn.pack_forget()
+        if align_ok():
+            self.align_status.ok("✓ Đã cài — chữ nổi khớp từng tiếng.")
+        else:
+            self.align_status.warn(f"Chưa cài — chữ nổi đang chia gần đúng (tải ~{DOWNLOAD_MB} MB, một lần).")
+            self.align_btn.pack(side="right")
         if qwen_ok():
             self.qwen_status.ok("✓ Đã cài.")
         else:
@@ -478,6 +490,12 @@ class SettingsWindow(ctk.CTkToplevel):
 
         if download_whisper(self.window, whisper_size(self._nvidia), self._after_install("Tải Whisper")):
             self.whisper_status.warn("Đang tải model… xem log")
+
+    def _install_aligner(self) -> None:
+        from app.ui.local_ai import install_aligner
+
+        if install_aligner(self.window, self._after_install("Cài bộ căn chữ nổi")):
+            self.align_status.warn("Đang tải model… xem log")
 
     # ── Hành động ────────────────────────────────────────────────────────
     def _pick_theme(self, key: str) -> None:

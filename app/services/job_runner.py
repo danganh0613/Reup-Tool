@@ -20,6 +20,7 @@ from app.config.paths import JOBS_DIR, PREVIEW_CACHE_DIR, SUBS_DIR, VOICE_DIR
 from app.core.state import ENCODE_PRESETS, SRT_MODES, SRT_SOURCES, TRIM_MODES, TTS_SOURCES, AppState, VideoItem
 from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
+from app.services import word_timing
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration, load_srt, merge_bilingual, save_srt, shift, wrap_lines
 from app.services.subtitle_style import write_ass
@@ -379,8 +380,11 @@ class Pipeline:
                                            (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
         if synced is not None and synced.exists() and same_source and not self.state.trim.enable:
             try:
+                cues = load_srt(synced)
+                if scfg.karaoke:                 # mốc chữ đã căn (không chạy model ở đây — tính ở bước chuẩn bị)
+                    cues = word_timing.attach(cues, voice, self.ffmpeg)
                 # track mới dựng theo mốc video ra → nhân lại tốc độ lúc dựng để về mốc nguồn
-                return rp.scale_cues(shift(load_srt(synced), scfg.sub_delay), rp.voice_timeline_speed(voice))
+                return rp.scale_cues(shift(cues, scfg.sub_delay), rp.voice_timeline_speed(voice))
             except Exception:
                 pass
         return self.subtitle_cues(item)
@@ -422,7 +426,7 @@ class Pipeline:
         try:                                    # giọng của các lần xem thử: giữ 12 file gần nhất
             old = sorted((PREVIEW_CACHE_DIR / "voice").glob("*.wav"), key=lambda f: f.stat().st_mtime, reverse=True)
             for f in old[12:]:
-                for ext in (".wav", ".srt", ".json", ".cues.csv"):
+                for ext in (".wav", ".srt", ".json", ".cues.csv", ".words.json"):
                     f.with_suffix(ext).unlink(missing_ok=True)
         except OSError:
             pass
@@ -619,6 +623,15 @@ class Pipeline:
                 if new is not None:                 # lỗi mạng → lần sau thử lại; đã gọi được → không gọi lại
                     self.mark_shortened(voice_path, budgets)
             on_update(item)
+            if voice_path is not None and sub_on and scfg.karaoke:
+                # chữ nổi: căn mốc từng chữ theo giọng một lần (lưu cạnh track) → khung xem trước cũng khớp
+                try:
+                    word_timing.ensure(voice_path, self.ffmpeg, use_model=True, log=log, cancel=cancel)
+                except RenderCancelled:
+                    raise
+                except Exception as exc:
+                    logger.exception("Không căn được mốc chữ nổi")
+                    log(f"⚠ Không căn được mốc chữ nổi ({str(exc)[:120]}) — dùng mốc ước lượng.")
 
         if self.wants_voice_removal(info):
             self.remove_voice(item, progress=stage("Khử giọng gốc", 0.65, 0.3), log=log, cancel=cancel)
@@ -673,10 +686,13 @@ class Pipeline:
             same_source = tts_on and ((tcfg.tts_source == TTS_SOURCES[0] and scfg.srt_mode == SRT_MODES[1]) or
                                       (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
             if synced_srt and synced_srt.exists() and same_source:
-                sub_cues = rp.scale_cues(shift(load_srt(synced_srt), scfg.sub_delay), tspeed / speed)
+                synced = load_srt(synced_srt)
+                if scfg.karaoke:                                 # chữ nổi: mốc từng chữ theo giọng thật
+                    synced = word_timing.attach(synced, voice_path, self.ffmpeg, use_model=True, log=log, cancel=cancel)
+                sub_cues = rp.scale_cues(shift(synced, scfg.sub_delay), tspeed / speed)
                 log("Phụ đề dùng mốc thời gian đã đồng bộ theo giọng đọc.")
             for c in sub_cues:                                   # mốc lời thật cho chữ nổi (karaoke)
-                c.meta["anim"] = (c.start, c.duration)
+                c.meta["anim"] = word_timing.speech_span(c)
             sub_cues = ensure_min_duration(sub_cues, 1.0)        # câu ngắn không chớp tắt (< 1 s)
             geo = rp.output_geometry(mods.info, vcfg)
             write_ass(sub_cues, stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,

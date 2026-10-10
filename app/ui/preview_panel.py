@@ -32,6 +32,7 @@ from app.services.player import Player, waveform_png
 from app.services.srt_utils import Cue, cue_at, format_ts
 from app.services import subtitle_style as sst
 from app.services.subtitle_style import write_ass
+from app.services.word_timing import speech_span
 from app.core.platform import open_path
 
 if TYPE_CHECKING:
@@ -522,8 +523,9 @@ class PreviewPanel(ctk.CTkFrame):
             if scfg.enable_subtitle and show_sub and c is not None:
                 geo = rp.output_geometry(eff, vcfg)
                 PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                # chữ nổi (karaoke): vẽ tĩnh đúng chữ đang đọc tại vị trí đang xem
-                write_ass([Cue(1, 0.0, 60.0, c.text, {**c.meta, "anim": (0.0, c.duration)})],
+                # chữ nổi (karaoke): vẽ tĩnh đúng chữ đang đọc tại vị trí đang xem (theo đoạn giọng thật của câu)
+                a0, d = speech_span(c)
+                write_ass([Cue(1, 0.0, 60.0, c.text, {**c.meta, "anim": (a0 - c.start, d)})],
                           stages_mod.subtitle_for(self.state, item, info), geo.width, geo.height,
                           PREVIEW_CACHE_DIR / "preview.ass", anim_at=max(0.0, t - c.start))
                 ass_name = "preview.ass"
