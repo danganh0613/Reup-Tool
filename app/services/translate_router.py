@@ -773,6 +773,129 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
     return edits, " ".join(notes)[:300]
 
 
+# ── AI rà soát bản dịch (dịch xong đọc lại cả video, chỉ sửa câu chưa ổn, kèm lý do) ─────────
+
+REVIEW_CHUNK = 160        # câu mỗi lượt gọi — video ngắn cả video một lượt (thấy hết ngữ cảnh, xưng hô)
+_REVIEWED = "⟂đã-rà-soát|"  # khoá bộ nhớ dịch: bản dịch này đã qua rà soát (dịch lại video không gọi rà soát lần nữa)
+
+
+def _review_prompt(rows: list[tuple[int, str, str, int]], target: str, style: str, glossary: str) -> str:
+    lines = []
+    for n, src, cur, b in rows:
+        lines.append(f"{n}. [max {b} chars] {cur}" + (f"\n   SOURCE: {src}" if src else ""))
+    gl = _glossary_lines(glossary)
+    return (
+        f"You are the senior editor of {target} subtitles for a short video. The lines are also read aloud as the "
+        "voice-over (dubbing). Each numbered line shows the machine translation and its SOURCE line.\n"
+        "Review the whole video as a native speaker and fix ONLY lines with a real problem:\n"
+        "- wrong or missing meaning compared with SOURCE (wrong subject, wrong name of an animal / object / place);\n"
+        "- stiff, literal or unnatural wording a native speaker would not say in a short video;\n"
+        "- names, terms, pronouns or forms of address that are inconsistent across the video (pick one, keep it);\n"
+        "- longer than its [max N chars] budget (spoken in the same time slot) — shorten, keep the meaning;\n"
+        f"- hard to read aloud: abbreviations, symbols, foreign words left untranslated (write them the way a {target} "
+        "voice actor would say them).\n"
+        "Rules: keep good lines as they are and do not list them; prefer small edits; never merge or split lines, never "
+        "cut a line off mid-sentence, never copy the [max N chars] bracket; no quotes or notes inside the text. "
+        "If unsure, leave the line unchanged.\n"
+        + (f"- Style notes from the user: {style.strip()}\n" if style.strip() else "")
+        + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
+        + "Return ONLY JSON: {\"edits\": [{\"n\": <line number>, \"text\": \"<new line>\", "
+        "\"why\": \"<reason in Vietnamese, at most 10 words>\"}], "
+        "\"note\": \"<one short sentence in Vietnamese summing up the review>\"}\n\n"
+        "Lines:\n" + "\n".join(lines)
+    )
+
+
+def review_translation(source: list[str], current: list[str], durations: list[float], *, settings: Settings,
+                       target: str, style: str = "", log: Callable[[str], None] | None = None,
+                       cancel: threading.Event | None = None) -> tuple[list[dict], str]:
+    """AI đọc lại cả bản dịch (kèm câu gốc + ngân sách ký tự), chỉ trả các câu cần sửa.
+    Trả ([{i (0-based), old, new, why}], ghi chú). Bản sửa làm câu dài quá khung / cắt cụt / sót chữ gốc thì bỏ."""
+    router = Router(settings, log)
+    target_en = _LANG_HINT.get(target, target)
+    budgets = [budget_for(d, target) for d in durations]
+    out: list[dict] = []
+    notes: list[str] = []
+    n = len(current)
+    for a in range(0, n, REVIEW_CHUNK):
+        if cancel is not None and cancel.is_set():
+            raise RenderCancelled("Đã huỷ")
+        b = min(n, a + REVIEW_CHUNK)
+        rows = [(i + 1, (source[i] if i < len(source) else "").replace("\n", " "), current[i].replace("\n", " "),
+                 budgets[i] if i < len(budgets) else 40) for i in range(a, b)]
+        data = _load_json(router.call(_review_prompt(rows, target_en, style, settings.glossary), max_out(b - a)))
+        for e in (data.get("edits") or []) if isinstance(data, dict) else []:
+            try:
+                k = int(e.get("n")) - 1
+                new = " ".join(str(e.get("text", "")).split())
+                why = " ".join(str(e.get("why", "")).split())[:120]
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if not (a <= k < b) or not new:
+                continue
+            old = " ".join(current[k].split())
+            cap = (budgets[k] if k < len(budgets) else 40) * _OVER_BUDGET
+            if (new == old or _leaks(new, target) or cut_off(new, old) or "[max" in new
+                    or (len(new) > cap and len(new) > len(old))):          # sửa mà dài quá khung → bỏ
+                continue
+            out.append({"i": k, "old": old, "new": new, "why": why})
+        if isinstance(data, dict) and data.get("note"):
+            notes.append(str(data["note"]).strip())
+    return out, " ".join(notes)[:300]
+
+
+def review_cues(src_cues: list[Cue], out_cues: list[Cue], *, settings: Settings, target: str, style: str = "",
+                log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> list[dict]:
+    """Rà soát ngay sau khi dịch: sửa thẳng vào ``out_cues`` + bộ nhớ dịch. Bản dịch cả video đã rà soát rồi (dịch lại
+    lấy từ bộ nhớ) thì không gọi lại."""
+    memory = TranslationMemory()
+    texts = [c.plain for c in out_cues]
+    if texts and all(memory.get(target, _REVIEWED + t, style) for t in texts if t):
+        if log:
+            log("Bản dịch đã được AI rà soát trước đó — bỏ qua.")
+        return []
+    if log:
+        log(f"AI rà soát bản dịch ({len(texts)} câu)…")
+    items, note = review_translation([c.plain for c in src_cues], texts, [c.duration for c in out_cues],
+                                     settings=settings, target=target, style=style, log=log, cancel=cancel)
+    for it in items:
+        i = it["i"]
+        out_cues[i].text = wrap_lines(it["new"])
+        texts[i] = it["new"]
+        if i < len(src_cues) and src_cues[i].plain:
+            memory.put(target, src_cues[i].plain, it["new"], style)
+    for t in texts:
+        if t:
+            memory.put(target, _REVIEWED + t, "1", style)
+    memory.save()
+    if log:
+        log(f"AI rà soát: sửa {len(items)} câu" + (f" — {note}" if note else "")
+            + (" · xem ở tab «Lời thoại» (tô vàng, trả lại được từng câu)" if items else ""))
+    return items
+
+
+def review_path(srt_path: str | Path) -> Path:
+    return Path(str(srt_path) + ".review.json")
+
+
+def save_review(srt_path: str | Path, items: list[dict]) -> None:
+    """Ghi các câu AI rà soát đã sửa kèm SRT (tab «Lời thoại» tô vàng + lý do tới khi người dùng lưu / chấp nhận)."""
+    try:
+        review_path(srt_path).write_text(json.dumps({"items": items}, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        logger.warning("Không ghi được file rà soát cho %s", srt_path)
+
+
+def load_review(srt_path: str | Path | None) -> list[dict]:
+    if not srt_path:
+        return []
+    try:
+        data = json.loads(review_path(srt_path).read_text(encoding="utf-8"))
+        return [x for x in data.get("items", []) if isinstance(x, dict) and isinstance(x.get("i"), int)]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
 def detect_language(cues: list[Cue], settings: Settings) -> str:
     sample = " ".join(c.plain for c in cues[:15])[:800]
     if not sample:

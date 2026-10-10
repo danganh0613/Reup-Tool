@@ -39,6 +39,10 @@ class TTSEngine:
     reread_soft: bool = True
     #: đọc gộp tối đa bấy nhiêu câu trong một lượt gọi rồi tách lại (``synthesize_batch``; 0 = không gộp)
     batch_lines: int = 0
+    #: tổng ký tự tối đa mỗi lô đọc gộp
+    batch_chars: int = 1500
+    #: chỉ gộp các câu liền nhau (đọc liền cho có ngữ cảnh) — False: gộp mọi câu cùng giọng (né giới hạn lượt gọi)
+    batch_adjacent: bool = False
 
     def list_voices(self, locale: str | None = None) -> list[Voice]:
         raise NotImplementedError

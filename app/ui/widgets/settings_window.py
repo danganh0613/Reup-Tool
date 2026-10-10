@@ -224,6 +224,10 @@ class SettingsWindow(ctk.CTkToplevel):
         self.models_btn.pack(side="left", padx=(6, 0))
         self.models_status = hint(b, "")
         self.models_status.pack(fill="x")
+        self.tr_review = SwitchRow(b, "Dịch xong, AI rà soát & sửa bản dịch", value=st.translate_review)
+        self.tr_review.pack(fill="x", pady=3)
+        hint(b, "Thêm 1 lượt gọi mỗi video: AI đọc lại cả bản dịch, sửa câu dịch sai nghĩa / cứng / lệch xưng hô / dài quá "
+                "khung. Câu đã sửa tô vàng ở tab «Lời thoại» kèm lý do, trả lại được từng câu.").pack(fill="x")
         self.key_boxes: dict[str, ctk.CTkTextbox] = {}
         for prov, value in (("Gemini", st.gemini_api_keys or st.gemini_api_key), ("Groq", st.groq_api_key),
                             ("DeepSeek", st.deepseek_api_key), ("OpenAI", st.openai_api_key)):
@@ -238,8 +242,8 @@ class SettingsWindow(ctk.CTkToplevel):
             self.key_boxes[prov] = box
         hint(b, "Mỗi dòng một key. Tự xoay vòng: nhà cung cấp chính → các nhà cung cấp khác có key. "
                 "Gemini/Groq có gói miễn phí · DeepSeek/OpenAI cần key trả phí · Edge-TTS không cần key.").pack(fill="x", pady=(4, 0))
-        hint(b, "Gói miễn phí Gemini: Google có thể dùng chữ / âm thanh bạn gửi để cải thiện sản phẩm — đừng gửi nội dung "
-                "nhạy cảm. Gemini TTS miễn phí chỉ vài lượt mỗi ngày cho mỗi model.").pack(fill="x", pady=(2, 0))
+        hint(b, "Gói miễn phí Gemini: Google có thể dùng chữ bạn gửi để cải thiện sản phẩm — đừng gửi nội dung nhạy cảm."
+             ).pack(fill="x", pady=(2, 0))
         r = ctk.CTkFrame(b, fg_color="transparent")
         r.pack(fill="x", pady=(10, 0))
         ctk.CTkLabel(r, text="Từ điển tên riêng (Thuật ngữ):", font=T.font(12, "bold"), anchor="w").pack(side="left")
@@ -253,7 +257,7 @@ class SettingsWindow(ctk.CTkToplevel):
         c3 = cols[2]
         self._col_title(c3, "🎙 GIỌNG CLOUD & CẤU HÌNH")
         b = self._card(c3, "Giọng đọc cloud (ElevenLabs · Google · FPT.AI)",
-                       "Key lưu tại settings.json trên máy này. Gemini TTS dùng key Gemini ở cột giữa.")
+                       "Key lưu tại settings.json trên máy này. VieNeu chạy trên máy, không cần key.")
         r = ctk.CTkFrame(b, fg_color="transparent")
         r.pack(fill="x")
         ctk.CTkLabel(r, text="ElevenLabs API keys (mỗi dòng một key)", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
@@ -286,17 +290,16 @@ class SettingsWindow(ctk.CTkToplevel):
         self.qc_retries = SliderRow(b, "Đọc lại tối đa", from_=1, to=5, step=1, value=st.tts_qc_retries, suffix=" lần")
         self.qc_asr = OptionRow(b, "Whisper nghe lại", ["auto", "on", "off"], value=st.tts_qc_asr,
                                 labels={"auto": "Tự động (máy có GPU)", "on": "Luôn bật", "off": "Tắt"})
-        self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Gemini Live (không giới hạn lượt)", "Edge TTS",
-                                                             "VieNeu (local, tiếng Việt)"],
+        self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Edge TTS", "VieNeu (local, tiếng Việt)"],
                                       value=st.tts_fallback or "Không")
         self.auto_shorten = SwitchRow(b, "Câu đọc tràn khung → AI tự rút gọn bản dịch", value=st.tts_auto_shorten)
-        self.tts_batch = SwitchRow(b, "Gemini: gộp ~25 câu một lượt gọi (né giới hạn lượt/phút)", value=st.tts_batch)
+        self.tts_batch = SwitchRow(b, "VieNeu: đọc liền các câu kề nhau rồi tách lại", value=st.tts_batch)
         for r in (self.tts_qc, self.qc_retries, self.qc_asr, self.tts_fallback, self.auto_shorten, self.tts_batch):
             r.pack(fill="x", pady=3)
-        hint(b, "VieNeu đọc lại miễn phí (chạy trên máy) · Gemini đọc lại tối đa 1 lần (tốn lượt) · engine trả phí khác "
-                "không đọc lại. Whisper nghe lại bắt thêm chữ đọc méo, dùng model Whisper đã có trên máy. Câu lỗi hẳn "
-                "(hết lượt, mất mạng) thì đọc tạm bằng engine dự phòng thay vì để im lặng. Đọc gộp: Whisper trên máy "
-                "tách lại từng câu, câu tách không chắc thì đọc riêng.").pack(fill="x")
+        hint(b, "VieNeu đọc lại miễn phí (chạy trên máy) · engine trả phí không đọc lại. Whisper nghe lại bắt thêm chữ "
+                "đọc méo, dùng model Whisper đã có trên máy. Câu lỗi hẳn (hết hạn mức, mất mạng) thì đọc tạm bằng engine "
+                "dự phòng thay vì để im lặng. Đọc liền: vài câu cùng người nói đọc một hơi (câu ngắn có ngữ cảnh, ít "
+                "đọc lại hơn), Whisper tách lại từng câu; câu tách không chắc thì đọc riêng.").pack(fill="x")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
         button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron,
@@ -517,6 +520,7 @@ class SettingsWindow(ctk.CTkToplevel):
         st.tts_fallback = "" if fb == "Không" else fb
         st.tts_auto_shorten = self.auto_shorten.get()
         st.tts_batch = self.tts_batch.get()
+        st.translate_review = self.tr_review.get()
         st.loudness_target = float(self.loudness.get())
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()

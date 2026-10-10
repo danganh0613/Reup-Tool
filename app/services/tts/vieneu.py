@@ -102,6 +102,11 @@ class VieNeuTTS(TTSEngine):
     # v3 Turbo (int8 lẫn fp32) hay đọc lặp / nói thêm / nuốt chữ đầu ở câu ngắn (~1/3 số lần đọc) — mỗi lần đọc
     # một kết quả khác → câu không đạt kiểm tra thì đọc lại (local, không tốn tiền)
     qc_retries = 3
+    # đọc liền vài câu kề nhau cùng giọng (VieNeu tự gộp thành một khối) rồi tách lại: câu ngắn có ngữ cảnh — đo trên
+    # 77 câu (audit_out/vieneu_q): câu ≤ 4 chữ Whisper nghe đúng 66% → 82% số lần đọc, câu dài 92% → 98%
+    batch_lines = 6
+    batch_chars = 160
+    batch_adjacent = True
 
     def __init__(self, precision: str = "int8", log: Callable[[str], None] | None = None) -> None:
         self.precision = precision
@@ -162,3 +167,19 @@ class VieNeuTTS(TTSEngine):
                 audio = model.infer(text, voice=voice_id or None)
         sf.write(str(out_path), audio, int(getattr(model, "sample_rate", 48000)))
         return out_path
+
+    def synthesize_batch(self, lines: list[str], voice_id: str) -> tuple[bytes, int]:
+        global _last_used
+        import numpy as np
+
+        model = load_model(self.precision, self.log)
+        # mỗi câu một dấu kết câu → VieNeu ngắt nghỉ giữa các câu (chỗ cắt khi tách lại)
+        text = " ".join(t.strip() if t.strip()[-1:] in ".!?…" else t.strip().rstrip(",;:") + "." for t in lines)
+        with _model_lock:
+            _last_used = time.monotonic()
+            if voice_id.startswith("ref:"):
+                audio = model.infer(text, ref_audio=voice_id[4:], denoise=True)
+            else:
+                audio = model.infer(text, voice=voice_id or None)
+        pcm = (np.clip(np.asarray(audio, dtype=np.float32), -1, 1) * 32767).astype("<i2").tobytes()
+        return pcm, int(getattr(model, "sample_rate", 48000))

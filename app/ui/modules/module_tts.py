@@ -14,7 +14,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import VOICE_DIR
-from app.core.state import ELEVEN_MODELS, GEMINI_TTS_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
+from app.core.state import ELEVEN_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list, voice_id_for
 from app.ui.modules.base_module import BaseModule
@@ -75,16 +75,9 @@ class TTSModule(BaseModule):
         self.language = OptionRow(sec.body, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(sec.body, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         pack_rows(sec.body, [self.search, self.language, self.voice])
-        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button()),
-                             ("🎬 Đạo diễn âm thanh…", self._open_direction, None)]).pack(fill="x", pady=(4, 2))
+        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button())]).pack(fill="x", pady=(4, 2))
         self.voice_status = StatusLabel(sec.body, "")
         self.voice_status.pack(fill="x")
-        self.emotion = SwitchRow(sec.body, "AI tự đặt cảm xúc cho từng câu",
-                                 on_change=s(cfg, "emotion_auto", preview=False))
-        self.emotion.pack(fill="x", pady=(4, 0))
-        hint(sec.body, "Nên để TẮT: cả video một giọng xuyên suốt theo «Phong cách» ở trên — tự nhiên nhất, ít lượt gọi "
-                       "nhất. Câu nào muốn nhấn cảm xúc thì chỉnh tay ở tab «Lời thoại» → «Cảm xúc» (luôn được dùng). "
-                       "Bật: dịch xong AI gán cảm xúc cho mọi câu (giọng đổi theo từng câu).").pack(fill="x")
         self.speed = OptionRow(sec.body, "Tốc độ đọc", SPEED_OPTIONS, on_change=lambda v: self.set_value(cfg, "tts_speed", float(v), preview=False))
         self.pitch = SliderRow(sec.body, "Cao độ (Edge)", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
                                on_change=s(cfg, "tts_pitch", cast=int, preview=False))
@@ -104,18 +97,6 @@ class TTSModule(BaseModule):
         self.eleven_quota.pack(fill="x")
         hint(self.eleven_frame, "Danh sách có cả giọng 🌐 do cộng đồng ElevenLabs chia sẻ (tiếng Việt, xếp theo lượt dùng) — "
                                 "lần đầu đọc máy tự thêm giọng vào tài khoản của bạn.").pack(fill="x")
-        from app.services.tts.gemini_tts import STYLES
-
-        self.gemini_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
-        self.gemini_style = OptionRow(self.gemini_frame, "Phong cách", list(STYLES), on_change=self._gemini_style_changed)
-        self.gemini_custom = EntryRow(self.gemini_frame, "Lời dặn", value=cfg.gemini_style_custom,
-                                      placeholder="vd: Đọc giọng miền Tây, chậm rãi, hài hước",
-                                      on_change=s(cfg, "gemini_style_custom", preview=False))
-        self.gemini_model = OptionRow(self.gemini_frame, "Model", GEMINI_TTS_MODELS,
-                                      on_change=s(cfg, "gemini_tts_model", preview=False))
-        pack_rows(self.gemini_frame, [self.gemini_style, self.gemini_custom, self.gemini_model])
-        hint(self.gemini_frame, "Gemini TTS dùng key Gemini trong Cài đặt. Gói miễn phí chỉ vài lượt/ngày (mỗi câu một lượt) "
-                                "— video dài nên bật thanh toán cho key (rất rẻ) hoặc nhập nhiều key.").pack(fill="x")
 
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
@@ -180,10 +161,6 @@ class TTSModule(BaseModule):
             self.max_tempo.set(cfg.max_tempo)
             self.min_gap.set(cfg.min_gap)
             self.multi.set(cfg.multi_voice)
-            self.emotion.set(cfg.emotion_auto)
-            self.gemini_style.set(cfg.gemini_style)
-            self.gemini_custom.set(cfg.gemini_style_custom)
-            self.gemini_model.set(cfg.gemini_tts_model)
             self.speaker_count.set(cfg.speaker_count)
         finally:
             self._loading = False
@@ -211,7 +188,6 @@ class TTSModule(BaseModule):
         p = self.state.tts.tts_provider
         self.eleven_frame.pack_forget()
         self.vieneu_frame.pack_forget()
-        self.gemini_frame.pack_forget()
         hints = {
             "Edge TTS": "Edge TTS: miễn phí, cần mạng. Tiếng Việt: HoaiMy (nữ), NamMinh (nam) + các giọng 🌐 đa ngôn ngữ.",
             "ElevenLabs": "ElevenLabs: cần API key trong Cài đặt (nhiều key sẽ tự xoay khi hết quota). Có thư viện giọng Việt cộng đồng.",
@@ -219,14 +195,9 @@ class TTSModule(BaseModule):
                                 "Service Account JSON trong Cài đặt.",
             "FPT.AI": "FPT.AI: giọng Việt 3 miền (Bắc / Trung / Nam), cần key console.fpt.ai trong Cài đặt.",
         }
-        if p.startswith("Gemini Live"):
-            hint_text = ("Gemini Live: cùng 30 giọng Gemini, gói miễn phí KHÔNG giới hạn lượt (Gemini TTS chỉ 10 lượt/ngày "
-                         "mỗi model). Đọc từng câu, vài câu song song; câu đọc sai tự đọc lại. Dùng key Gemini trong Cài đặt.")
-        elif p.startswith("Gemini"):
-            hint_text = ("Gemini TTS: 30 giọng đọc tiếng Việt tự nhiên, chỉnh phong cách & giọng miền bằng lời dặn. Gói miễn "
-                         "phí: 3 lượt/phút · 10 lượt/ngày mỗi model (máy tự gộp ~25 câu một lượt).")
-        elif p.startswith("VieNeu"):
-            hint_text = "VieNeu: 25 giọng tiếng Việt chạy local (Bắc / Trung / Nam), có clone giọng."
+        if p.startswith("VieNeu"):
+            hint_text = ("VieNeu (khuyên dùng): 25 giọng tiếng Việt chạy trên máy (Bắc / Trung / Nam), miễn phí, không "
+                         "giới hạn lượt, có clone giọng. Câu đọc lỗi tự đọc lại.")
         else:
             hint_text = hints.get(p, "")
         self.provider_hint.configure(text=hint_text)
@@ -234,31 +205,12 @@ class TTSModule(BaseModule):
             self.eleven_frame.pack(fill="x", pady=(4, 0))
         elif p.startswith("VieNeu"):
             self.vieneu_frame.pack(fill="x", pady=(4, 0))
-        elif p.startswith("Gemini"):
-            self.gemini_frame.pack(fill="x", pady=(4, 0))
-            self._layout_gemini()
         if not uses_language_list(p):
             self.language.pack_forget()
         else:
             if not self.language.winfo_ismapped():
                 self.language.pack(fill="x", pady=3, before=self.voice)
         self.pitch.slider.configure(state="normal" if p == "Edge TTS" else "disabled")
-
-    def _layout_gemini(self) -> None:
-        if self.state.tts.gemini_style == "Tự viết…":
-            if not self.gemini_custom.winfo_ismapped():
-                self.gemini_custom.pack(fill="x", pady=3, after=self.gemini_style)
-        else:
-            self.gemini_custom.pack_forget()
-        if self.state.tts.tts_provider.startswith("Gemini Live"):      # Live tự chọn model Live (không phải model TTS)
-            self.gemini_model.pack_forget()
-        elif not self.gemini_model.winfo_manager():
-            prev = self.gemini_custom if self.gemini_custom.winfo_manager() else self.gemini_style
-            self.gemini_model.pack(fill="x", pady=3, after=prev)
-
-    def _gemini_style_changed(self, v: str) -> None:
-        self.set_value(self.state.tts, "gemini_style", v, preview=False)
-        self._layout_gemini()
 
     # ── Voices ────────────────────────────────────────────────────────────
     def _provider_changed(self, v: str) -> None:
@@ -476,12 +428,6 @@ class TTSModule(BaseModule):
         self._load_voices(force=True)
 
     # ── Hành động ────────────────────────────────────────────────────────
-    def _open_direction(self) -> None:
-        """Cửa sổ Đạo diễn âm thanh: chọn giọng + bánh xe cảm xúc, thử đọc (cache, không tốn lượt khi nghe lại)."""
-        from app.ui.widgets.direction_studio import open_studio
-
-        open_studio(self.window, self.state.settings, play=self.window.player.play)
-
     def _preview_voice(self) -> None:
         cfg = self.state.tts
         engine = self._engine

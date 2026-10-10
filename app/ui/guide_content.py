@@ -183,6 +183,11 @@ TOPICS: list[dict] = [
             "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: ghi yêu cầu vào ô «Phong cách dịch», "
             "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «Dịch lại (bản mới)». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
             "Chỉ vài câu dở: bấm ↻ cạnh câu đó, hoặc gõ yêu cầu vào ô «Nhờ AI sửa» — AI chỉ sửa đúng những câu liên quan.",
+            "Nhờ AI rà soát cả bản: tab «Lời thoại» bấm «AI rà soát» — AI đọc lại cả video, sửa câu dịch sai nghĩa, cứng, lệch "
+            "xưng hô hay dài quá khung. Câu sửa tô vàng, dòng nhỏ ghi lý do + câu cũ; bấm ↶ cạnh câu để trả lại câu cũ, "
+            "«Hoàn tác» trả lại hết, ưng thì «Lưu & tạo lại giọng».",
+            "Mặc định dịch xong máy TỰ rà soát một lượt (thêm 1 lượt gọi AI mỗi video, tắt ở Cài đặt → «Dịch xong, AI rà "
+            "soát & sửa bản dịch»). Mở tab «Lời thoại» sẽ thấy các câu AI đã sửa tô vàng — bấm «Lưu & tạo lại giọng» để chấp nhận.",
             "Đang duyệt: từ tab Duyệt bấm «Sửa ›» ở dòng Lời thoại để tới đây; nút ↻ cạnh từng câu, hoặc ô «Nhờ AI sửa» — gõ yêu cầu, AI chỉ sửa đúng những câu liên quan "
             "(tô vàng, xem trước được) — ưng thì bấm «Lưu & tạo lại giọng».",
             "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
@@ -200,12 +205,10 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bật «Thêm lồng tiếng vào video».",
             "«Đọc từ»: chọn «Sub đã dịch» (đọc tiếng Việt) hoặc «Sub gốc».",
-            "Chọn «Nhà cung cấp»: Edge TTS miễn phí (HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ). "
-            "Gemini TTS: 30 giọng rất tự nhiên, chọn «Phong cách» (review phim, kể chuyện, giọng miền Nam/Bắc…), dùng key Gemini; "
-            "máy tự gộp ~25 câu vào một lượt gọi rồi tách lại — gói miễn phí chỉ 3 lượt/phút · 10 lượt/ngày mỗi model (hết "
-            "model này máy tự sang model TTS kế). Gemini Live: cùng 30 giọng, gói miễn phí KHÔNG giới hạn lượt, đọc từng câu. "
-            "VieNeu: 25 giọng Việt 3 miền chạy trên máy. FPT.AI: giọng Việt 3 miền. ElevenLabs: có thư viện giọng Việt "
-            "🌐 cộng đồng chia sẻ. Google Cloud: 30 giọng Chirp3-HD.",
+            "Chọn «Nhà cung cấp»: VieNeu (mặc định, khuyên dùng) — 25 giọng Việt 3 miền chạy ngay trên máy, miễn phí, không "
+            "giới hạn lượt; máy đọc liền vài câu kề nhau cho tự nhiên rồi tách lại, câu đọc lỗi tự đọc lại. Edge TTS miễn phí "
+            "(HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng). FPT.AI: giọng Việt 3 miền. ElevenLabs: có thư viện "
+            "giọng Việt 🌐 cộng đồng chia sẻ. Google Cloud: 30 giọng Chirp3-HD.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
             "Để «Khớp mềm» bật: giọng đọc tự nhiên, máy tự dồn cho vừa video.",
             "Bấm «Render MP4» ở trên. Giọng đã tạo được giữ lại, lần sau render lại rất nhanh.",
@@ -225,19 +228,6 @@ TOPICS: list[dict] = [
             "Máy nhận sai câu nào thì bấm «Gán từng câu…» sửa tay. Không nhận diện được thì cũng tự chia tay ở đây.",
             "Render hàng loạt: video nào chưa nhận diện, máy tự nhận diện trước khi lồng tiếng.",
         ]),
-        ("h", "Giọng tự nhiên & cảm xúc từng câu (Đạo diễn âm thanh)"),
-        ("p", "Mặc định cả video đọc MỘT giọng xuyên suốt theo «Phong cách» ở mục TTS (vd «Tự nhiên», «Kể chuyện trầm "
-              "ấm») — nghe tự nhiên nhất và ít lượt gọi nhất (~25 câu một lượt). Chỉ nhấn cảm xúc ở vài câu cần thiết:"),
-        ("steps", [
-            "Tab «Lời thoại»: bấm «＋ cảm xúc» cạnh câu (hoặc nút «Cảm xúc») → bảng «Cảm xúc từng câu»: bánh xe để kéo kim "
-            "(góc = cảm xúc, xa tâm = bậc), «Nghe thử câu» rồi «Áp dụng».",
-            "Đổi nhiều câu một lần: ô «Áp cho câu» gõ «3-8, 12», hoặc «Cả video», rồi «Áp dụng».",
-            "«Tạo lại giọng video» — chỉ câu đổi cảm xúc mới gọi API, câu khác dùng lại.",
-            "Muốn AI tự gán cảm xúc cho MỌI câu: bật «AI tự đặt cảm xúc cho từng câu» ở mục TTS trước khi dịch (thêm 1–2 lượt "
-            "gọi; giọng đổi theo từng câu nên có thể kém tự nhiên hơn).",
-        ]),
-        ("p", "Gemini TTS đọc đủ cảm xúc; Edge TTS chỉ đổi nhịp / cao độ. Câu có cảm xúc mà chữ nhiều, khung ngắn: máy dặn "
-              "«nói nhanh hơn một chút» ngay lượt đầu."),
     ]},
     {"key": "blur", "title": "Che mờ: giấu chữ, logo, mặt người", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),

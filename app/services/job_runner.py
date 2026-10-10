@@ -139,7 +139,25 @@ class Pipeline:
                                   source_hint=cfg.translate_source, style=cfg.translate_style, reflow=cfg.ai_reflow,
                                   srt_path=item.srt_path, on_progress=progress, log=log, cancel=cancel)
         out = self.translated_path(item)
+        reviewed: list[dict] = []
+        if self.state.settings.translate_review and out_cues:
+            # AI đọc lại cả bản dịch, sửa câu sai nghĩa / cứng / lệch xưng hô / dài quá khung (1 lượt gọi thêm)
+            from app.services.translate_router import review_cues
+
+            try:
+                reviewed = review_cues(cues, out_cues, settings=self.state.settings, target=cfg.translate_target,
+                                       style=cfg.translate_style, log=log, cancel=cancel)
+            except RenderCancelled:
+                raise
+            except Exception as exc:                   # noqa: BLE001 — phụ, giữ bản dịch chưa rà soát
+                logger.warning("Không rà soát được bản dịch: %s", exc)
+                if log:
+                    log(f"⚠ AI rà soát bản dịch lỗi — giữ bản dịch gốc ({str(exc).splitlines()[0][:120]})")
         save_srt(out_cues, out)
+        if reviewed or self.state.settings.translate_review:
+            from app.services.translate_router import save_review
+
+            save_review(out, reviewed)                 # tab «Lời thoại» tô vàng câu AI sửa (trống = không câu nào)
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")

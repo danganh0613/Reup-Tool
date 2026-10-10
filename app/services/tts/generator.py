@@ -332,17 +332,23 @@ def _synthesize_parts(engine: TTSEngine, voice_id: str, text: str, parts: list[s
 def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings: Settings, qc: QCOptions | None, *,
                     log: Callable[[str], None] | None = None, check: Callable[[], None] | None = None,
                     on_progress: Callable[[float], None] | None = None) -> bool:
-    """``jobs``: (engine, giọng, tốc độ, cao độ, chữ) theo thứ tự đọc. Engine đọc gộp được (Gemini TTS): câu chưa có
-    trong cache → gộp lô ~25 câu, đọc MỘT lượt, tách ra file cache từng câu (tts/batch.py) — né giới hạn lượt gọi
-    mỗi phút. Câu dài hơn ``max_chars`` (lời kể Dựng truyện…) gộp theo từng đoạn — đúng các đoạn ``_synthesize_parts``
-    sẽ đọc. Câu tách không chắc / lô lỗi → bước đọc từng câu lo như cũ. Trả True nếu đã đọc gộp ít nhất một lô."""
+    """``jobs``: (engine, giọng, tốc độ, cao độ, chữ) theo thứ tự đọc. Engine đọc gộp được: câu chưa có trong cache →
+    gộp lô, đọc MỘT lượt, tách ra file cache từng câu (tts/batch.py). Gemini TTS: lô ~25 câu cùng giọng — né giới hạn
+    lượt gọi mỗi phút. VieNeu (``batch_adjacent``): chỉ gộp vài câu KỀ NHAU cùng giọng — câu ngắn đọc có ngữ cảnh.
+    Câu dài hơn ``max_chars`` (lời kể Dựng truyện…) gộp theo từng đoạn — đúng các đoạn ``_synthesize_parts`` sẽ đọc.
+    File tách ra vẫn qua bước kiểm chất lượng như câu đọc riêng; câu tách không chắc / lô lỗi → đọc từng câu như cũ.
+    Trả True nếu đã đọc gộp ít nhất một lô."""
     if not settings.tts_batch:
         return False
     groups: dict[tuple, list[str]] = {}
     engs: dict[tuple, TTSEngine] = {}
     seen: set[Path] = set()
+    run, prev = 0, None
     for eng, vid, sp, pt, text in jobs:
         t = normalize_vi_text(text)
+        key = (id(eng), vid, sp, pt)
+        if key != prev:                          # đổi giọng / người nói → đoạn đọc liền mới
+            run, prev = run + 1, key
         if not eng.batch_lines or not t:
             continue
         parts = split_long(t, eng.max_chars) if eng.max_chars and len(t) > eng.max_chars else [t]
@@ -356,11 +362,11 @@ def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings
             if p in seen or (p.exists() and p.stat().st_size > 0):     # câu trùng chữ / đã có trong cache
                 continue
             seen.add(p)
-            key = (id(eng), vid, sp, pt)
-            engs[key] = eng
-            groups.setdefault(key, []).append(part)
-    lots = [(key, lot) for key, texts in groups.items() for lot in batch.chunks(texts, engs[key].batch_lines)
-            if len(lot) >= batch.MIN_LINES]
+            gkey = (*key, run if eng.batch_adjacent else 0)
+            engs[gkey] = eng
+            groups.setdefault(gkey, []).append(part)
+    lots = [(key, lot) for key, texts in groups.items()
+            for lot in batch.chunks(texts, engs[key].batch_lines, engs[key].batch_chars) if len(lot) >= batch.MIN_LINES]
     if not lots:
         return False
     if not batch.available():
@@ -369,13 +375,13 @@ def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings
         return False
     total = sum(len(lot) for _k, lot in lots)
     if log:
-        log(f"Đọc gộp: {total} câu → {len(lots)} lượt gọi (≤ {batch.MAX_LINES} câu mỗi lượt, né giới hạn lượt/phút)…")
+        log(f"Đọc gộp: {total} câu → {len(lots)} đoạn đọc liền rồi tách lại từng câu…")
     compute = qc.compute if qc else settings.whisper_compute
     ok = 0
     for n, (key, lot) in enumerate(lots):
         if check:
             check()
-        eng, (vid, sp, pt) = engs[key], key[1:]
+        eng, (vid, sp, pt) = engs[key], key[1:4]
         try:
             pcm, rate = eng.synthesize_batch(lot, vid)
             parts = batch.split(pcm, rate, lot, compute)
