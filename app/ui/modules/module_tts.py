@@ -296,8 +296,6 @@ class TTSModule(BaseModule):
             cfg.eleven_voice_id, cfg.eleven_voice_name = v.id, v.name
         elif cfg.tts_provider.startswith("VieNeu"):
             cfg.vieneu_voice = v.id
-        elif cfg.tts_provider.startswith("Gemini"):
-            cfg.gemini_voice = v.id
         elif cfg.tts_provider.startswith("FPT"):
             cfg.fpt_voice = v.id
         elif cfg.tts_provider == "Google Cloud TTS":

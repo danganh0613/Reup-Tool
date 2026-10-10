@@ -1,11 +1,9 @@
-"""Gộp nhiều câu vào MỘT lượt gọi TTS rồi tách lại từng câu — né giới hạn lượt gọi mỗi phút của Gemini TTS (gói miễn
-phí ~15 lượt/phút): video 60 câu còn 3 lượt thay vì 60, cả đoạn cùng một chất giọng.
+"""Đọc liền nhiều câu rồi tách lại từng câu — VieNeu đọc vài câu kề nhau một hơi cho câu ngắn có ngữ cảnh (trước đây
+dùng để né giới hạn lượt gọi mỗi phút của Gemini TTS, engine đó đã gỡ 10/2026).
 
 Tách: Whisper nghe cả đoạn (mốc từng từ) → khớp chữ với từng câu → cắt ở khoảng lặng dài nhất giữa chữ cuối câu trước
-và chữ đầu câu sau (lời dặn bảo model nghỉ ~1 giây giữa các dòng). Câu khớp kém / dài bất thường thì bỏ, không ghi cache
-— câu đó tự đọc riêng như cũ, nên tách hỏng không làm hỏng track. Không có Whisper trên máy → không gộp.
-Thử thật (audit_out/gemini_batch): 25 câu → 1 lượt 25 s, 72 s âm thanh, tách đúng 25/25; lồng cả video 58 câu:
-13 lượt gọi (2 lượt gộp + đọc lại câu chưa đạt) thay vì ~55.
+và chữ đầu câu sau. Câu khớp kém / dài bất thường thì bỏ, không ghi cache — câu đó tự đọc riêng như cũ, nên tách hỏng
+không làm hỏng track. Không có Whisper trên máy → không gộp.
 """
 
 from __future__ import annotations

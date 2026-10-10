@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config.paths import CONFIG_FILE, SETTINGS_FILE, VIDEOS_DIR
-from app.services.gemini_models import DEFAULT_TEXT, migrate_model
+from app.services.gemini_models import migrate_model
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +51,9 @@ SRT_MODES = ["Sub gốc", "Sub đã dịch", "Song ngữ (dịch trên, gốc d�
 SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
-AI_ENGINES = ["Gemini"]
 #: cách dịch: VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát → khớp thời lượng lồng tiếng) ·
 #: Edit Studio (lô 40 câu có ngữ cảnh cả video + ngân sách ký tự, ít lượt gọi)
 TRANSLATE_METHODS = ["VideoLingo (dịch 2 bước, sát nghĩa)", "Edit Studio (gọn, ít lượt gọi)"]
-GEMINI_MODELS = DEFAULT_TEXT          # danh sách đầy đủ / cập nhật: app/services/gemini_models.py
 
 TEXTURE_BLENDS = ["screen", "overlay", "softlight", "multiply", "lighten", "addition"]
 BLUR_STYLES = ["Mờ (Gaussian)", "Ô vuông (pixelate)", "Che kín (màu đen)"]
@@ -72,10 +70,6 @@ TTS_PROVIDERS = [VIENEU, "Edge TTS", "ElevenLabs", "Google Cloud TTS", "FPT.AI"]
 RETIRED_TTS = ("Gemini TTS (Google AI)", "Gemini Live (không giới hạn lượt)")
 #: giọng VieNeu thay cho giọng Gemini cũ theo giới tính
 VIENEU_BY_GENDER = {"Female": "Trúc Ly", "Male": "Thanh Bình"}
-#: model Gemini TTS — model đầu không dùng được với key thì tự thử model kế tiếp
-# flash-lite trước: điểm tiếng Việt cao nhất trên Voice Arena, hợp lồng tiếng hàng loạt; flash cho cảnh cần diễn mạnh
-GEMINI_TTS_MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview",
-                     "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 ELEVEN_MODELS = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
@@ -125,8 +119,6 @@ class SubtitleConfig:
     stt_language: str = "auto"
     stt_device: str = "auto"
     translate_enable: bool = False
-    ai_engine: str = AI_ENGINES[0]
-    gemini_model: str = GEMINI_MODELS[0]
     translate_target: str = TRANSLATE_TARGETS[0]
     translate_style: str = ""          # ghi chú phong cách dịch (tuỳ chọn)
     translate_method: str = TRANSLATE_METHODS[0]
@@ -186,10 +178,6 @@ class TTSConfig:
     google_language: str = "vi-VN"
     google_voice: str = "vi-VN-Neural2-A"
     vieneu_voice: str = "Minh Quân Pro"
-    gemini_voice: str = "Leda"
-    gemini_tts_model: str = GEMINI_TTS_MODELS[0]
-    gemini_style: str = "Tự nhiên"            # phong cách đọc (xem gemini_tts.STYLES)
-    gemini_style_custom: str = ""              # hướng dẫn tự gõ khi chọn «Tự viết…»
     fpt_voice: str = "banmai"
     tts_speed: float = 1.0
     tts_pitch: int = 0                 # Hz, Edge only
@@ -200,9 +188,6 @@ class TTSConfig:
     #: (đo: bản dịch kiểu VideoLingo câu dài hơn, «Voice tự nhiên» làm giọng trễ dồn tới 4,8 s)
     soft_timing: bool = True
     multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
-    #: AI tự đặt cảm xúc cho MỌI câu (gợi ý sau dịch). Tắt (mặc định) = một giọng xuyên suốt cả video — đổi lời dặn từng
-    #: câu làm giọng đổi nhịp / cao độ giữa các câu, nghe như nhiều người đọc; câu chỉnh tay trên bánh xe vẫn đọc theo
-    emotion_auto: bool = False
     speaker_count: str = SPEAKER_COUNTS[0]
     #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
     speaker_voices: list = field(default_factory=list)
@@ -210,14 +195,15 @@ class TTSConfig:
     def set_voice(self, voice_id: str) -> None:
         """Ghi cùng một mã giọng cho mọi nhà cung cấp (dùng khi đổi giọng theo nhân vật / người nói)."""
         self.edge_voice = self.google_voice = self.eleven_voice_id = self.vieneu_voice = voice_id
-        self.gemini_voice = self.fpt_voice = voice_id
+        self.fpt_voice = voice_id
 
-    def migrate(self) -> bool:
-        """Cấu hình cũ dùng Gemini TTS / Gemini Live (đã gỡ) → VieNeu, giọng theo giới tính giọng Gemini cũ.
-        Trả về True nếu có đổi."""
+    def migrate(self, data: dict | None = None) -> bool:
+        """Cấu hình cũ dùng Gemini TTS / Gemini Live (đã gỡ) → VieNeu, giọng theo giới tính giọng Gemini cũ
+        (``data``: dict gốc của cấu hình — trường ``gemini_voice`` không còn trong TTSConfig). True nếu có đổi."""
         changed = False
         if self.tts_provider in RETIRED_TTS:
-            self.tts_provider, self.vieneu_voice = VIENEU, vieneu_for_gemini(self.gemini_voice)
+            self.tts_provider = VIENEU
+            self.vieneu_voice = vieneu_for_gemini(str((data or {}).get("gemini_voice") or ""))
             changed = True
         for sv in self.speaker_voices:
             if isinstance(sv, dict) and sv.get("provider") in RETIRED_TTS:
@@ -227,11 +213,13 @@ class TTSConfig:
         return changed
 
 
-def vieneu_for_gemini(voice: str) -> str:
-    from app.services.tts.gemini_tts import VOICES
+#: giọng nam của Gemini TTS cũ (engine đã gỡ) — để chuyển cấu hình cũ sang giọng VieNeu cùng giới tính
+_GEMINI_MALE = {"Puck", "Charon", "Fenrir", "Orus", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Algenib", "Rasalgethi",
+                "Alnilam", "Schedar", "Achird", "Zubenelgenubi", "Sadachbia", "Sadaltager"}
 
-    gender = next((g for n, g, _d in VOICES if n == voice), "Female")
-    return VIENEU_BY_GENDER[gender]
+
+def vieneu_for_gemini(voice: str) -> str:
+    return VIENEU_BY_GENDER["Male" if voice in _GEMINI_MALE else "Female"]
 
 
 @dataclass
@@ -425,11 +413,9 @@ class Settings:
     #: câu lỗi hẳn (đọc lại vẫn hỏng / engine trả phí hết hạn mức) thì đọc bằng engine này ("" = để trống câu đó)
     tts_fallback: str = "Edge TTS"
     tts_batch: bool = True               # đọc gộp rồi tách lại: VieNeu đọc liền câu kề nhau · Gemini TTS gộp ~25 câu một lượt
-    direction_suggest: bool = True       # dịch xong, AI gợi ý cảm xúc / kiểu nói từng câu (1 lượt gọi thêm)
     tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
     tts_fade_out_ms: int = 25
     tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên
-    gemini_tts_temperature: float = 0.7  # cố định cho đều giọng giữa các câu; 0 = mặc định của Google
     tts_auto_shorten: bool = True        # câu đọc tràn khung (đã nén tối đa) → AI tự rút gọn bản dịch rồi đọc lại
     loudness_target: float = -14.0       # độ to file xuất (LUFS) khi bật «Chuẩn hoá âm lượng»: TikTok/FB/YouTube −14
 
@@ -516,7 +502,7 @@ def _from_dict(cls, data: dict[str, Any] | None):
             continue
         setattr(obj, f.name, value)
     if isinstance(obj, TTSConfig):
-        obj.migrate()                 # cấu hình / mẫu / cấu hình riêng từng video còn ghi engine đã gỡ
+        obj.migrate(data)             # cấu hình / mẫu / cấu hình riêng từng video còn ghi engine đã gỡ
     return obj
 
 
@@ -811,8 +797,7 @@ class AppState:
         self.color = _from_dict(ColorConfig, data.get("color"))
         self.story = _from_dict(StoryConfig, data.get("story"))
         # cấu hình cũ còn ghi model Google đã tắt (2.5 Flash, Imagen 4, Veo 3.0…) → tự đổi sang model thay thế
-        for obj, attr in ((self.story, "text_model"), (self.story, "image_model"), (self.story, "video_model"),
-                          (self.subtitle, "gemini_model")):
+        for obj, attr in ((self.story, "text_model"), (self.story, "image_model"), (self.story, "video_model")):
             setattr(obj, attr, migrate_model(getattr(obj, attr)))
         if self.story.provider in RETIRED_TTS:
             self.story.provider = VIENEU

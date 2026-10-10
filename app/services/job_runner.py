@@ -180,18 +180,6 @@ class Pipeline:
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")
-        if self.state.settings.direction_suggest and self.state.tts.enable_tts and self.state.tts.emotion_auto:
-            # gợi ý cảm xúc / kiểu nói cho từng câu (1–2 lượt gọi thêm) — chỉ khi bật «AI tự đặt cảm xúc từng câu»;
-            # mặc định tắt: một giọng xuyên suốt, không tốn lượt gợi ý
-            from app.services.direction import suggest
-
-            try:
-                items = suggest.suggest([c.plain for c in cues], [c.plain for c in out_cues],
-                                        settings=self.state.settings, log=log, cancel=cancel)
-                if items:
-                    suggest.save(out, items, n=len(out_cues), keep_manual=True)
-            except Exception as exc:                   # noqa: BLE001 — phụ, không làm hỏng bước dịch
-                logger.warning("Không gợi ý được cảm xúc: %s", exc)
         return out_cues
 
     def translated_path(self, item: VideoItem) -> Path:
@@ -291,7 +279,6 @@ class Pipeline:
             mtime = 0
         # cảm xúc từng câu: chỉ thêm vào chữ ký khi có file direction (track cũ không có thì giữ nguyên chữ ký)
         dsig = direction_apply.signature(srt_path)
-        dsig += "|auto" if dsig and t.emotion_auto else ""
         multi = ""
         if t.multi_voice:
             try:
@@ -304,8 +291,6 @@ class Pipeline:
             t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key, post_signature(self.state.settings),
             self.state.video.speed)                # track dựng theo mốc video ra → phụ thuộc tốc độ video
             + ((multi,) if multi else ())
-            + ((t.gemini_voice, t.gemini_tts_model, t.gemini_style, t.gemini_style_custom)
-               if t.tts_provider.startswith("Gemini") or multi else ())
             + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ())
             + ((f"dir{dsig}",) if dsig else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]

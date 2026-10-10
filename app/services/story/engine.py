@@ -116,8 +116,7 @@ class StoryEngine:
         done = 0
         if log:
             log(f"Tạo giọng cho {len(targets)} cảnh…")
-        # Gemini TTS: lời kể nhiều cảnh (theo từng đoạn ≤ 200 ký tự) gộp vào ít lượt gọi rồi tách lại — trước đây mỗi
-        # đoạn một lượt (truyện 30 cảnh ≈ 90 lượt)
+        # engine đọc gộp được (VieNeu): lời kể các cảnh liền nhau đọc một hơi rồi tách lại
         jobs = []
         for sc in targets:
             cfg, eng, vid = engine_for(sc)

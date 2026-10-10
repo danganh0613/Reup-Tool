@@ -27,7 +27,7 @@ from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration
 from app.services.tts import batch, postprocess, quality
 from app.services.tts.base import TTSEngine
-from app.services.direction.apply import Director, compiled_for, effective, emotion_label, is_gemini_voice, needs_faster
+from app.services.direction.apply import Director, compiled_for, effective, emotion_label
 from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
 logger = logging.getLogger(__name__)
@@ -110,19 +110,6 @@ def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
         from app.services.tts.vieneu import VieNeuTTS
 
         return VieNeuTTS(precision=settings.vieneu_precision)
-    if cfg.tts_provider.startswith("Gemini Live"):
-        from app.services.tts.gemini_live import GeminiLiveTTS
-        from app.services.tts.gemini_tts import style_prompt
-
-        temp = settings.gemini_tts_temperature
-        return GeminiLiveTTS(settings.gemini_keys(), style=style_prompt(cfg.gemini_style, cfg.gemini_style_custom),
-                             temperature=temp if temp > 0 else None)
-    if cfg.tts_provider.startswith("Gemini"):
-        from app.services.tts.gemini_tts import GeminiTTS
-
-        temp = settings.gemini_tts_temperature
-        return GeminiTTS(settings.gemini_keys(), model=cfg.gemini_tts_model, style=cfg.gemini_style,
-                         custom_style=cfg.gemini_style_custom, temperature=temp if temp > 0 else None)
     if cfg.tts_provider.startswith("FPT"):
         from app.services.tts.fpt import FptTTS
 
@@ -171,8 +158,6 @@ def voice_id_for(cfg: TTSConfig) -> str:
         return cfg.google_voice
     if cfg.tts_provider.startswith("VieNeu"):
         return cfg.vieneu_voice
-    if cfg.tts_provider.startswith("Gemini"):
-        return cfg.gemini_voice
     if cfg.tts_provider.startswith("FPT"):
         return cfg.fpt_voice
     return cfg.edge_voice
@@ -218,8 +203,6 @@ def speaker_configs(cfg: TTSConfig) -> dict[str, TTSConfig]:
         except (TypeError, ValueError):
             speed, pitch = 0.0, None
         prov = str(sv.get("provider") or "")
-        if prov.startswith("Gemini") and cfg.tts_provider.startswith("Gemini"):
-            prov = cfg.tts_provider          # cùng bộ giọng Gemini → đọc bằng engine đang chọn (Gemini TTS / Gemini Live)
         out[str(sv["name"])] = config_with_voice(cfg, prov, str(sv["voice_id"]), str(sv.get("locale") or ""), speed, pitch)
     return out
 
@@ -334,7 +317,7 @@ def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings
                     log: Callable[[str], None] | None = None, check: Callable[[], None] | None = None,
                     on_progress: Callable[[float], None] | None = None) -> bool:
     """``jobs``: (engine, giọng, tốc độ, cao độ, chữ) theo thứ tự đọc. Engine đọc gộp được: câu chưa có trong cache →
-    gộp lô, đọc MỘT lượt, tách ra file cache từng câu (tts/batch.py). Gemini TTS: lô ~25 câu cùng giọng — né giới hạn
+    gộp lô, đọc MỘT lượt, tách ra file cache từng câu (tts/batch.py). Engine gộp mọi câu cùng giọng: lô lớn — né giới hạn
     lượt gọi mỗi phút. VieNeu (``batch_adjacent``): chỉ gộp vài câu KỀ NHAU cùng giọng — câu ngắn đọc có ngữ cảnh.
     Câu dài hơn ``max_chars`` (lời kể Dựng truyện…) gộp theo từng đoạn — đúng các đoạn ``_synthesize_parts`` sẽ đọc.
     File tách ra vẫn qua bước kiểm chất lượng như câu đọc riêng; câu tách không chắc / lô lỗi → đọc từng câu như cũ.
@@ -407,12 +390,9 @@ def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings
 
 
 def _fallback_config(cfg: TTSConfig, provider: str, text: str, voice_id: str = "") -> TTSConfig:
-    """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu;
-    Gemini Live → đúng giọng Gemini của câu (``voice_id``, kể cả giọng từng người nói), không thì giọng Gemini chính."""
+    """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu."""
     if provider.startswith("VieNeu"):
         return config_with_voice(cfg, provider, cfg.vieneu_voice)
-    if provider.startswith("Gemini Live"):
-        return config_with_voice(cfg, provider, voice_id if is_gemini_voice(voice_id) else cfg.gemini_voice)
     voice = cfg.edge_voice or "vi-VN-HoaiMyNeural"
     if is_vietnamese(text) and not voice.lower().startswith("vi-"):
         voice = "vi-VN-HoaiMyNeural"
@@ -442,13 +422,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         raise RuntimeError("Phụ đề trống — không có gì để đọc.")
 
     # giọng cho từng câu: nhiều giọng theo người nói (meta["speaker"]), còn lại giọng chính;
-    # câu có direction (Đạo diễn âm thanh) → lời dặn cảm xúc riêng, câu cùng lời dặn dùng chung engine (đọc gộp chung)
+    # câu có cảm xúc chỉnh tay (file cảm xúc đã lưu) → Edge chỉnh nhịp / cao độ theo cảm xúc
     spk_cfgs = speaker_configs(cfg)
     engines: dict[str, TTSEngine] = {cfg.tts_provider: engine}
     plan: dict[int, tuple[TTSEngine, str, float, int]] = {}      # cue → (engine, giọng, tốc độ, cao độ)
     used: dict[str, int] = {}
-    director = Director(settings)            # chỉ câu có direction được dùng (chỉnh tay / bật AI tự đặt cảm xúc)
-    faster = 0
+    director = Director(settings)            # chỉ câu có cảm xúc chỉnh tay được dùng
     for pos, (i, c, text) in enumerate(items):
         sc = spk_cfgs.get(str(c.meta.get("speaker", "")), cfg)
         if sc.tts_provider not in engines:
@@ -459,11 +438,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         plan[i] = (eng, vid, sc.tts_speed, pitch_i)
         d = effective(c.meta.get("direction"), cfg)
         if d:
-            slot = items[pos + 1][1].start - c.start - cfg.min_gap if pos + 1 < len(items) else c.duration
-            # cả chế độ «Voice tự nhiên»: không nén nên câu dài đẩy lùi cả đoạn sau (đo: trễ tới 1,75 s)
-            fast = needs_faster(text, slot, sc.tts_speed)
-            faster += int(fast)
-            plan[i] = director.plan(sc, eng, vid, sc.tts_speed, pitch_i, d, faster=fast)
+            plan[i] = director.plan(sc, eng, vid, sc.tts_speed, pitch_i, d)
             vid = plan[i][1]
         key = f"{vid}{f' {pitch_i:+d}Hz' if pitch_i else ''}"
         used[key] = used.get(key, 0) + 1
@@ -491,10 +466,6 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             + (f" · kiểm chất lượng{' + Whisper nghe lại' if qc.asr else ''}" if qc else ""))
         if len(used) > 1:
             log(f"Nhiều giọng: {len(used)} giọng — " + ", ".join(f"{k} ({n} câu)" for k, n in used.items()))
-        if director.styles:
-            log(f"Cảm xúc từng câu: {sum(director.styles.values())} câu · {len(director.styles)} kiểu lời dặn "
-                "(câu cùng kiểu đọc gộp chung một lượt)"
-                + (f" · {faster} câu chật khung → dặn nói nhanh hơn" if faster else ""))
     base = 0.3 if prefill_batches([(*plan[i], text) for i, _c, text in items], settings, qc, log=log, check=_check,
                                   on_progress=on_progress) else 0.0
     done = 0
@@ -526,9 +497,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         failed = still
     fb = (settings.tts_fallback or "").strip()
     fallback_used: set[int] = set()
-    # dự phòng là Gemini Live (không giới hạn lượt) mà vẫn lỗi (mất mạng, chưa có key…) → Edge là lớp cuối
-    chain = [p for p in dict.fromkeys([fb, "Edge TTS" if fb.startswith("Gemini Live") else ""])
-             if p and p != cfg.tts_provider]
+    chain = [fb] if fb and fb != cfg.tts_provider else []
     fb_engines: dict[tuple, TTSEngine] = {}
     for fb in chain:
         if not failed:
@@ -549,8 +518,6 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 if d and fcfg.tts_provider == "Edge TTS":       # dự phòng Edge vẫn giữ nhịp / cao độ của cảm xúc
                     comp = compiled_for(d)
                     sp_f, pt_f = sp_f * (1.0 + comp.edge_rate / 100.0), comp.edge_pitch
-                elif d:                                        # dự phòng Live: lời dặn cảm xúc trong phiên
-                    eng = director.plan(fcfg, eng, vid, sp_f, 0, d)[0]
                 paths[i] = synthesize_cached(eng, vid, text, speed=sp_f, pitch=pt_f, qc=qc, label=f"câu {i + 1}")
                 plan[i] = (eng, vid, sp_f, pt_f)
                 rescued.append(i)

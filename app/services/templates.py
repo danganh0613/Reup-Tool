@@ -29,7 +29,7 @@ NO_TEMPLATE = "— Cấu hình tự chỉnh —"
 #: thông số máy / nhận diện giọng: mẫu không đè (model Whisper, GPU… mỗi máy một khác)
 KEEP_FIELDS: dict[str, tuple[str, ...]] = {
     **MACHINE_FIELDS,
-    "subtitle": ("stt_model", "stt_device", "stt_engine", "weak_pc", "ai_engine", "gemini_model"),
+    "subtitle": ("stt_model", "stt_device", "stt_engine", "weak_pc"),
 }
 
 
