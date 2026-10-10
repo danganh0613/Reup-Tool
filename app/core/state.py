@@ -385,7 +385,9 @@ class Settings:
     tts_qc: bool = True                  # kiểm từng câu (đọc lặp, cắt cụt, «rẹt» cuối câu…) → câu hỏng thì đọc lại
     tts_qc_retries: int = 3              # số lần đọc lại tối đa mỗi câu (Gemini tối đa 1, engine trả phí khác không đọc lại)
     tts_qc_asr: str = "auto"             # Whisper nghe lại: auto (có GPU + model sẵn) | on | off
-    tts_fallback: str = "Edge TTS"       # câu lỗi hẳn thì đọc bằng engine này ("" = để trống câu đó)
+    #: câu lỗi hẳn (vd Gemini TTS hết 10 lượt / ngày) thì đọc bằng engine này ("" = để trống câu đó). Gemini Live: cùng
+    #: giọng Gemini, không giới hạn lượt; Live cũng lỗi thì Edge đọc
+    tts_fallback: str = "Gemini Live (không giới hạn lượt)"
     tts_batch: bool = True               # Gemini TTS: gộp ~25 câu một lượt gọi rồi tách lại (né giới hạn lượt/phút)
     direction_suggest: bool = True       # dịch xong, AI gợi ý cảm xúc / kiểu nói từng câu (1 lượt gọi thêm)
     tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối

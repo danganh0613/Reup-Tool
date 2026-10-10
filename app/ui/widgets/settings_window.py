@@ -286,7 +286,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.qc_retries = SliderRow(b, "Đọc lại tối đa", from_=1, to=5, step=1, value=st.tts_qc_retries, suffix=" lần")
         self.qc_asr = OptionRow(b, "Whisper nghe lại", ["auto", "on", "off"], value=st.tts_qc_asr,
                                 labels={"auto": "Tự động (máy có GPU)", "on": "Luôn bật", "off": "Tắt"})
-        self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Edge TTS", "VieNeu (local, tiếng Việt)"],
+        self.tts_fallback = OptionRow(b, "Engine dự phòng", ["Không", "Gemini Live (không giới hạn lượt)", "Edge TTS",
+                                                             "VieNeu (local, tiếng Việt)"],
                                       value=st.tts_fallback or "Không")
         self.auto_shorten = SwitchRow(b, "Câu đọc tràn khung → AI tự rút gọn bản dịch", value=st.tts_auto_shorten)
         self.tts_batch = SwitchRow(b, "Gemini: gộp ~25 câu một lượt gọi (né giới hạn lượt/phút)", value=st.tts_batch)

@@ -27,7 +27,7 @@ from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration
 from app.services.tts import batch, postprocess, quality
 from app.services.tts.base import TTSEngine
-from app.services.direction.apply import Director, compiled_for, effective, emotion_label, needs_faster
+from app.services.direction.apply import Director, compiled_for, effective, emotion_label, is_gemini_voice, needs_faster
 from app.services.tts.normalize import is_vietnamese, normalize_vi_text, split_long
 
 logger = logging.getLogger(__name__)
@@ -399,10 +399,13 @@ def prefill_batches(jobs: list[tuple[TTSEngine, str, float, int, str]], settings
     return True
 
 
-def _fallback_config(cfg: TTSConfig, provider: str, text: str) -> TTSConfig:
-    """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu."""
+def _fallback_config(cfg: TTSConfig, provider: str, text: str, voice_id: str = "") -> TTSConfig:
+    """Cấu hình engine dự phòng: Edge → giọng Edge đang chọn (câu tiếng Việt thì giọng vi-VN); VieNeu → giọng VieNeu;
+    Gemini Live → đúng giọng Gemini của câu (``voice_id``, kể cả giọng từng người nói), không thì giọng Gemini chính."""
     if provider.startswith("VieNeu"):
         return config_with_voice(cfg, provider, cfg.vieneu_voice)
+    if provider.startswith("Gemini Live"):
+        return config_with_voice(cfg, provider, voice_id if is_gemini_voice(voice_id) else cfg.gemini_voice)
     voice = cfg.edge_voice or "vi-VN-HoaiMyNeural"
     if is_vietnamese(text) and not voice.lower().startswith("vi-"):
         voice = "vi-VN-HoaiMyNeural"
@@ -516,22 +519,31 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         failed = still
     fb = (settings.tts_fallback or "").strip()
     fallback_used: set[int] = set()
-    if failed and fb and fb != cfg.tts_provider:
+    # dự phòng là Gemini Live (không giới hạn lượt) mà vẫn lỗi (mất mạng, chưa có key…) → Edge là lớp cuối
+    chain = [p for p in dict.fromkeys([fb, "Edge TTS" if fb.startswith("Gemini Live") else ""])
+             if p and p != cfg.tts_provider]
+    fb_engines: dict[tuple, TTSEngine] = {}
+    for fb in chain:
+        if not failed:
+            break
         # vẫn lỗi (hết lượt, mất mạng…) → đọc tạm bằng engine dự phòng thay vì để câu đó im lặng
-        fb_engines: dict[str, TTSEngine] = {}
         rescued: list[int] = []
         for i in failed:
             _check()
             cue_i, text = next((c, t) for j, c, t in items if j == i)
             try:
-                fcfg = _fallback_config(cfg, fb, text)
-                eng = fb_engines.get(fcfg.tts_provider) or fb_engines.setdefault(fcfg.tts_provider, make_engine(fcfg, settings))
+                fcfg = _fallback_config(cfg, fb, text, plan[i][1])
+                d = effective(cue_i.meta.get("direction"), cfg)
+                if fcfg.tts_provider not in fb_engines:
+                    fb_engines[fcfg.tts_provider] = make_engine(fcfg, settings)
+                eng = fb_engines[fcfg.tts_provider]
                 vid = voice_id_for(fcfg)
                 sp_f, pt_f = plan[i][2], 0
-                d = effective(cue_i.meta.get("direction"), cfg)
                 if d and fcfg.tts_provider == "Edge TTS":       # dự phòng Edge vẫn giữ nhịp / cao độ của cảm xúc
                     comp = compiled_for(d)
                     sp_f, pt_f = sp_f * (1.0 + comp.edge_rate / 100.0), comp.edge_pitch
+                elif d:                                        # dự phòng Live: lời dặn cảm xúc trong phiên
+                    eng = director.plan(fcfg, eng, vid, sp_f, 0, d)[0]
                 paths[i] = synthesize_cached(eng, vid, text, speed=sp_f, pitch=pt_f, qc=qc, label=f"câu {i + 1}")
                 plan[i] = (eng, vid, sp_f, pt_f)
                 rescued.append(i)

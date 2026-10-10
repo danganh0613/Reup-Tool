@@ -162,12 +162,13 @@ def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05
     """Câu hiện quá ngắn (phụ đề dời theo giọng: câu ngắn chỉ hiện ~0,5 s) → kéo dài tới ``min_dur`` giây,
     nhưng không chồng sang câu sau (cách ≥ ``gap``). Câu sau sát quá thì cho hiện sớm hơn tối đa ``lead`` giây (không
     chồng câu trước); vẫn thiếu thì mượn đuôi câu trước (câu trước vẫn ≥ ``min_dur``), sớm tổng cộng ≤ 2 × ``lead``."""
-    want = min_dur + 0.02                 # dư 20 ms: ASS ghi mốc theo 1/100 s, làm tròn không được tụt dưới min_dur
+    want = min_dur + 0.015                # dư 15 ms: ASS ghi mốc theo 1/100 s, làm tròn không được tụt dưới min_dur
+    tight = 0.02                          # khe tối thiểu khi phải mượn (3 câu ngắn liền nhau: khe 0,05 s không đủ chỗ)
     out: list[Cue] = []
     for i, c in enumerate(cues):
         start, end = c.start, c.end
-        if out and out[-1].end + gap > start:  # câu trước đã mượn đầu câu này
-            start = out[-1].end + gap
+        if out and out[-1].end + tight > start:  # câu trước đã mượn đầu câu này
+            start = out[-1].end + tight
         if end - start < want:
             limit = cues[i + 1].start - gap if i + 1 < len(cues) else float("inf")
             end = max(end, min(start + want, limit))
@@ -175,18 +176,20 @@ def ensure_min_duration(cues: list[Cue], min_dur: float = 1.0, gap: float = 0.05
                 floor = out[-1].end + gap if out else 0.0
                 start = min(start, max(end - want, start - lead, floor))
             if end - start < want and out and start - c.start > -2 * lead:
-                # câu trước sát quá → mượn đuôi câu trước nếu nó còn dài hơn min_dur (vd «Không bắt» 0,6 s kẹp giữa)
+                # câu trước sát quá → mượn đuôi câu trước (câu trước vẫn ≥ min_dur) + thu khe còn ``tight``
                 prev = out[-1]
-                take = min(want - (end - start), prev.end - prev.start - want, start - (c.start - 2 * lead))
-                if take > 0.01:
-                    prev.end -= take
-                    start = max(prev.end + gap, start - take)
+                room = max(0.0, prev.end - prev.start - want) + max(0.0, start - prev.end - tight)
+                take = min(want - (end - start), room, start - (c.start - 2 * lead))
+                if take > 0.005:
+                    start -= take
+                    prev.end = min(prev.end, start - tight)
             if end - start < want and i + 1 < len(cues):
-                # vẫn thiếu → mượn đầu câu sau (câu sau hiện muộn ≤ ``lead`` giây, vẫn ≥ min_dur)
+                # vẫn thiếu → mượn đầu câu sau (câu sau hiện muộn ≤ ``lead`` giây, vẫn ≥ min_dur) + thu khe còn ``tight``
                 nxt = cues[i + 1]
-                take = min(want - (end - start), nxt.end - nxt.start - want, lead)
-                if take > 0.01:
-                    end = min(start + want, nxt.start - gap + take)
+                room = max(0.0, nxt.end - nxt.start - want) + max(0.0, nxt.start - end - tight)
+                take = min(want - (end - start), room, lead)
+                if take > 0.005:
+                    end += take
         out.append(Cue(c.index, start, end, c.text, dict(c.meta)))
     return out
 
