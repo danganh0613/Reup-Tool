@@ -27,6 +27,9 @@ datas = []   # Windows: app/assets được build.bat chép cạnh EXE (người
 if MAC:
     # gói .app chỉ đọc → assets/presets mẫu + ffmpeg đi trong gói; lần chạy đầu app chép assets/presets ra thư mục dữ liệu
     datas += [(str(ROOT / "app" / "assets"), "app/assets"), (str(ROOT / "presets"), "presets")]
+# Qwen3-ASR chạy bằng python của môi trường riêng (models/qwen_asr_env) → file worker phải nằm thật trên đĩa cạnh
+# qwen_asr (Path(__file__).with_name), không chỉ trong gói PYZ
+datas += [(str(ROOT / "app" / "services" / "qwen_asr_worker.py"), "app/services")]
 datas += collect_data_files("customtkinter")
 datas += collect_data_files("tkinterdnd2")
 datas += collect_data_files("faster_whisper")
