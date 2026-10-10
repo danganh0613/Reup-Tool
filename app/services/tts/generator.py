@@ -36,6 +36,7 @@ SAMPLE_RATE = 24000
 _BYTES_PER_SEC = SAMPLE_RATE * 2   # s16 mono
 TRIM_VERSION = "trim3"             # đổi khi đổi cách xử lý từng câu → track giọng cũ được tạo lại
 PULL_EARLY = 0.2                   # chế độ mềm: câu được vào sớm tối đa 0,2 s khi câu trước đã đọc xong
+CATCH_UP_LATE = 0.15               # chế độ mềm: câu bắt đầu trễ hơn mốc phụ đề quá ngần này → nén thêm để đuổi kịp hình
 JOIN_GAP = 0.15                    # khớp chặt: câu bị đẩy lùi vẫn cách câu trước ≥ 150 ms (không dính liền)
 PART_GAP = 0.25                    # nghỉ giữa các đoạn của một câu quá dài được tách ra đọc riêng
 MAX_TOTAL_TEMPO = 1.25             # time-stretch tổng (tốc độ đọc × nén cho vừa khung) — quá mức này giọng méo, nuốt chữ
@@ -630,15 +631,28 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             start = max(start, cursor + (cfg.min_gap if flexible else JOIN_GAP))
         return start
 
-    def simulate(cap: float) -> float:
-        """Độ dài track nếu áp mức tăng tốc tối đa ``cap`` (không cần giải mã lại)."""
+    def plan_tempos(cap: float) -> tuple[dict[int, float], float]:
+        """Mức nén từng câu + độ dài track khi áp mức tăng tốc tối đa ``cap`` (không cần giải mã lại). Khớp mềm: câu
+        bắt đầu trễ hơn mốc phụ đề (câu trước tràn) đọc nhanh hơn để kết thúc đúng khung — đuổi kịp hình thay vì trễ
+        dồn cả đoạn sau (như VideoLingo tăng tốc cả cụm câu), vẫn trong cùng trần nén."""
+        tempos: dict[int, float] = {}
         cursor = 0.0
         for pos in range(len(order)):
             cue = by_index[order[pos]]
-            d = nat_dur[pos] / tempo_for(pos, cap)
+            t = tempo_for(pos, cap)
             start = start_of(pos, cue, cursor)
-            cursor = start + d
-        return cursor
+            if cfg.soft_timing and not cfg.natural_sync and start - cue.start > CATCH_UP_LATE:
+                room = cue.start + slot_for(pos) - start
+                want = nat_dur[pos] / room if room > 0.1 else float("inf")
+                t = max(t, min(cap, fit_cap(pos), want))
+                t = t if t > 1.02 else 1.0
+            tempos[pos] = t
+            cursor = start + nat_dur[pos] / t
+        return tempos, cursor
+
+    def simulate(cap: float) -> float:
+        """Độ dài track nếu áp mức tăng tốc tối đa ``cap``."""
+        return plan_tempos(cap)[1]
 
     cap = 1.10 if cfg.soft_timing else total_cap
     if cfg.soft_timing and fit_duration and fit_duration > 0 and order:
@@ -654,10 +668,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             log(f"Khớp mềm: nén tối đa ×{min(cap, top):.2f} để giọng không dài quá video "
                 f"(tổng cùng tốc độ đọc ≤ ×{total_cap:.2f})")
 
+    tempos = plan_tempos(cap)[0]
+
     def decode(pos: int) -> tuple[int, bytes, bool, bool, float]:
         _check()
         idx = order[pos]
-        tempo = tempo_for(pos, cap)
+        tempo = tempos[pos]
         pcm = base[pos]
         sped = False
         if tempo > 1.0:
