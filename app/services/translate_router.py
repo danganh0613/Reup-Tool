@@ -383,11 +383,13 @@ class Checkpoint:
         self.target = target
         self.style = " ".join(style.split())
         self.done: dict[str, str] = {}
+        self.extra: dict = {}                   # dữ liệu riêng của cách dịch (vd chủ đề + thuật ngữ kiểu VideoLingo)
         if self.path and self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 if data.get("target") == target and data.get("style", "") == self.style:
                     self.done = {str(k): str(v) for k, v in (data.get("done") or {}).items()}
+                    self.extra = data.get("extra") or {}
             except Exception:
                 self.done = {}
 
@@ -396,7 +398,8 @@ class Checkpoint:
             return
         try:
             self.path.write_text(json.dumps({"target": self.target, "style": self.style, "total": total,
-                                             "done": self.done, "updated": time.time()}, ensure_ascii=False),
+                                             "done": self.done, "extra": self.extra, "updated": time.time()},
+                                            ensure_ascii=False),
                                  encoding="utf-8")
         except Exception:
             pass

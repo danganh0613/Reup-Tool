@@ -10,7 +10,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.config.paths import SUBS_DIR, VOICE_DIR
-from app.core.state import TRANSLATE_TARGETS
+from app.core.state import TRANSLATE_METHODS, TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
 from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
@@ -53,7 +53,10 @@ class SRTModule(BaseModule):
         hint(sec.body, "Giữ nguyên timestamp của SRT đã import hoặc SRT do STT tạo.").pack(fill="x")
         self.src_lang = OptionRow(sec.body, "Ngôn ngữ nguồn", SOURCE_LANGS, on_change=s(cfg, "translate_source", preview=False))
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
-        pack_rows(sec.body, [self.src_lang, self.target])
+        self.method = OptionRow(sec.body, "Cách dịch", TRANSLATE_METHODS, on_change=s(cfg, "translate_method", preview=False))
+        pack_rows(sec.body, [self.src_lang, self.target, self.method])
+        hint(sec.body, "VideoLingo: tóm tắt + thuật ngữ, dịch sát rồi tự phê bình & dịch thoát, rút gọn câu đọc không kịp "
+                       "lồng tiếng — hay, sát nghĩa, ~10–15 lượt gọi AI mỗi video ngắn. Edit Studio: ~3–5 lượt, câu gọn.").pack(fill="x")
         # một ô duy nhất cho phong cách dịch + yêu cầu khi dịch lại (dùng chung với tab Duyệt / bảng dịch từng câu)
         row = ctk.CTkFrame(sec.body, fg_color="transparent")
         row.pack(fill="x", pady=3)
@@ -69,7 +72,8 @@ class SRTModule(BaseModule):
                              ("Dịch lại (bản mới)", self._retranslate_all, None)]).pack(fill="x", pady=(6, 2))
         hint(sec.body, "Dịch chưa hay? Chọn / gõ yêu cầu vào ô trên (vd «xưng anh–em, văn nói») rồi «Dịch lại» — AI xem "
                        "bản cũ để biết bạn chưa ưng chỗ nào («Dịch phụ đề» lần nữa chỉ lấy lại bản cũ đã nhớ). Giọng lồng "
-                       "tự tạo lại theo bản mới. Xoay vòng key & nhà cung cấp khi hết quota; mỗi lô dịch đều được lưu.").pack(fill="x")
+                       "tự tạo lại theo bản mới. Model hết lượt thì dừng và báo (không tự đổi model); mỗi lô dịch đều được "
+                       "lưu — «Thử lại» sẽ dịch tiếp.").pack(fill="x")
         ButtonRow(sec.body, [("Dự án dịch dang dở", self._pending_projects, None)]).pack(fill="x", pady=(4, 2))
         self.tr_enable = SwitchRow(sec.body, "Tự dịch khi render (nếu chọn ghi Sub đã dịch)", on_change=s(cfg, "translate_enable", preview=False))
         self.tr_enable.pack(fill="x", pady=(4, 0))
@@ -89,6 +93,7 @@ class SRTModule(BaseModule):
         try:
             self.src_lang.set(cfg.translate_source if cfg.translate_source in SOURCE_LANGS else SOURCE_LANGS[0])
             self.target.set(cfg.translate_target)
+            self.method.set(cfg.translate_method if cfg.translate_method in TRANSLATE_METHODS else TRANSLATE_METHODS[0])
             self.style.set(cfg.translate_style or "")
             self.tr_enable.set(cfg.translate_enable)
             self.reflow.set(cfg.ai_reflow)

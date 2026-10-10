@@ -135,12 +135,26 @@ class Pipeline:
             if not item.srt_path:
                 raise RuntimeError("Chưa có phụ đề gốc để dịch.")
             cues = load_srt(item.srt_path)
-        out_cues = translate_cues(cues, settings=self.state.settings, target=cfg.translate_target,
-                                  source_hint=cfg.translate_source, style=cfg.translate_style, reflow=cfg.ai_reflow,
-                                  srt_path=item.srt_path, on_progress=progress, log=log, cancel=cancel)
+        videolingo = cfg.translate_method.startswith("VideoLingo")
+        if videolingo:
+            # dịch kiểu VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát) + khớp thời lượng lồng
+            # tiếng theo nhịp đọc thật (nếu bật lồng tiếng)
+            from app.services.translate_vl import translate_cues_vl
+
+            t = self.state.tts
+            fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100,
+                    "min_gap": t.min_gap if (t.soft_timing or t.natural_sync) else 0.15} if t.enable_tts else None)
+            out_cues = translate_cues_vl(cues, settings=self.state.settings, target=cfg.translate_target,
+                                         source_hint=cfg.translate_source, style=cfg.translate_style,
+                                         srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel)
+        else:
+            out_cues = translate_cues(cues, settings=self.state.settings, target=cfg.translate_target,
+                                      source_hint=cfg.translate_source, style=cfg.translate_style, reflow=cfg.ai_reflow,
+                                      srt_path=item.srt_path, on_progress=progress, log=log, cancel=cancel)
         out = self.translated_path(item)
         reviewed: list[dict] = []
-        if self.state.settings.translate_review and out_cues:
+        # VideoLingo đã tự phê bình từng câu ở bước dịch thoát → bỏ lượt rà soát thêm (nút «AI rà soát» vẫn dùng được)
+        if self.state.settings.translate_review and out_cues and not videolingo:
             # AI đọc lại cả bản dịch, sửa câu sai nghĩa / cứng / lệch xưng hô / dài quá khung (1 lượt gọi thêm)
             from app.services.translate_router import review_cues
 

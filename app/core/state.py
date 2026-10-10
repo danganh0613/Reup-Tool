@@ -51,6 +51,9 @@ SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
 AI_ENGINES = ["Gemini"]
+#: cách dịch: VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát → khớp thời lượng lồng tiếng) ·
+#: Edit Studio (lô 40 câu có ngữ cảnh cả video + ngân sách ký tự, ít lượt gọi)
+TRANSLATE_METHODS = ["VideoLingo (dịch 2 bước, sát nghĩa)", "Edit Studio (gọn, ít lượt gọi)"]
 GEMINI_MODELS = DEFAULT_TEXT          # danh sách đầy đủ / cập nhật: app/services/gemini_models.py
 
 TEXTURE_BLENDS = ["screen", "overlay", "softlight", "multiply", "lighten", "addition"]
@@ -125,6 +128,7 @@ class SubtitleConfig:
     gemini_model: str = GEMINI_MODELS[0]
     translate_target: str = TRANSLATE_TARGETS[0]
     translate_style: str = ""          # ghi chú phong cách dịch (tuỳ chọn)
+    translate_method: str = TRANSLATE_METHODS[0]
     srt_mode: str = SRT_MODES[0]
     sub_font: str = "Arial"
     sub_size: int = 36
