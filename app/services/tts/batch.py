@@ -58,7 +58,7 @@ def split(pcm: bytes, rate: int, lines: list[str], compute: str = "auto") -> lis
     from app.services.whisper_stt import load_model
 
     with quality._asr_lock:                                  # model dùng chung với phần kiểm chất lượng
-        model = load_model(quality._local_whisper(), "auto", compute)
+        model = load_model(quality.local_whisper(), "auto", compute)
         segs, _info = model.transcribe(quality._to16k(a, rate), language="vi" if vi else None, beam_size=5,
                                        word_timestamps=True, vad_filter=False, condition_on_previous_text=False)
         hyp = [(tok, w.start, w.end) for s in segs for w in (s.words or []) for tok in _tokens(w.word, vi)]

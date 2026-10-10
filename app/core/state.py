@@ -36,24 +36,19 @@ VIDEO_CODECS = ["H.264 / AVC", "H.265 / HEVC", "AV1"]
 ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
-# SenseVoice: tiếng Trung chính xác hơn Whisper nhiều; OCR: đọc phụ đề in sẵn trên video (Douyin) — đúng từng chữ
-STT_ENGINES = ["Qwen3-ASR (local, như VideoLingo)", "Whisper (local)", "Gemini (cloud)", "SenseVoice (local, tiếng Trung)",
-               "OCR phụ đề in sẵn"]
+#: lấy lời thoại từ: "asr" = AI nghe giọng nói (Qwen3-ASR, chạy trên máy) · "ocr" = đọc phụ đề in sẵn trên video
+#: (Douyin…) — đúng từng chữ, kể cả tên riêng
+STT_ENGINES = ["asr", "ocr"]
+STT_LABELS = {"asr": "Giọng nói trong video", "ocr": "Chữ in sẵn trên video"}
 TEXT_EFFECTS = ["Không có (Khuyên dùng)", "Viền đậm", "Bóng đổ", "Viền + bóng", "Phát sáng (glow)"]
 SUB_BG_STYLES = ["Không nền", "Hộp mờ bo góc", "Hộp đen", "Dải ngang toàn khung", "Bóng mềm"]
-TRANSLATE_PROVIDERS = ["Gemini", "Groq", "DeepSeek", "OpenAI"]
 TRIM_MODES = ["Ghép các đoạn thành 1 video", "Xuất mỗi đoạn thành 1 file"]
 COLOR_PRESETS = ["Mặc định", "Ấm áp", "Điện ảnh", "Tươi sáng", "Cổ điển", "Lạnh"]
-STT_MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
-STT_DEVICES = ["auto", "cpu", "cuda"]
 STT_LANGUAGES = ["auto", "vi", "en", "zh", "ja", "ko", "fr", "de", "es", "th", "id", "ru"]
 SRT_MODES = ["Sub gốc", "Sub đã dịch", "Song ngữ (dịch trên, gốc dưới)"]
 SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
-#: cách dịch: VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát → khớp thời lượng lồng tiếng) ·
-#: Edit Studio (lô 40 câu có ngữ cảnh cả video + ngân sách ký tự, ít lượt gọi)
-TRANSLATE_METHODS = ["VideoLingo (dịch 2 bước, sát nghĩa)", "Edit Studio (gọn, ít lượt gọi)"]
 
 TEXTURE_BLENDS = ["screen", "overlay", "softlight", "multiply", "lighten", "addition"]
 BLUR_STYLES = ["Mờ (Gaussian)", "Ô vuông (pixelate)", "Che kín (màu đen)"]
@@ -64,15 +59,22 @@ SAFE_ZONES = ["Toàn khung", "TikTok/Reels (né UI phải & dưới)"]
 KENBURNS = ["Không", "Zoom vào", "Zoom ra", "Trái → phải", "Phải → trái", "Trên → dưới"]
 
 VIENEU = "VieNeu (local, tiếng Việt)"
-#: VieNeu (local, miễn phí) mặc định — so trên video thử đọc tự nhiên hơn Gemini TTS / Gemini Live
-TTS_PROVIDERS = [VIENEU, "Edge TTS", "ElevenLabs", "Google Cloud TTS", "FPT.AI"]
-#: engine đã gỡ khỏi danh sách chọn — cấu hình cũ còn ghi thì tự chuyển sang VieNeu (code engine vẫn giữ)
-RETIRED_TTS = ("Gemini TTS (Google AI)", "Gemini Live (không giới hạn lượt)")
+#: VieNeu (chạy trên máy, miễn phí) mặc định · Edge TTS (cần mạng) — cũng là giọng dự phòng khi VieNeu đọc lỗi
+TTS_PROVIDERS = [VIENEU, "Edge TTS"]
+TTS_LABELS = {VIENEU: "VieNeu — giọng Việt, chạy trên máy", "Edge TTS": "Edge TTS — cần mạng, nhiều thứ tiếng"}
+#: engine đã gỡ — cấu hình cũ còn ghi thì tự chuyển sang VieNeu
+RETIRED_TTS = ("Gemini TTS (Google AI)", "Gemini Live (không giới hạn lượt)", "ElevenLabs", "Google Cloud TTS", "FPT.AI")
+
+
+def provider_or_default(provider: str) -> str:
+    """Engine đã gỡ (nhân vật Dựng truyện, mẫu cũ…) → VieNeu."""
+    return provider if provider in TTS_PROVIDERS else VIENEU
+
+
 #: giọng VieNeu thay cho giọng Gemini cũ theo giới tính
 VIENEU_BY_GENDER = {"Female": "Trúc Ly", "Male": "Thanh Bình"}
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
-ELEVEN_MODELS = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
 
 
 # ── Dataclass cấu hình ───────────────────────────────────────────────────
@@ -115,13 +117,10 @@ class VideoConfig:
 class SubtitleConfig:
     enable_subtitle: bool = True
     srt_source: str = SRT_SOURCES[0]
-    stt_model: str = "base"
     stt_language: str = "auto"
-    stt_device: str = "auto"
     translate_enable: bool = False
     translate_target: str = TRANSLATE_TARGETS[0]
     translate_style: str = ""          # ghi chú phong cách dịch (tuỳ chọn)
-    translate_method: str = TRANSLATE_METHODS[0]
     srt_mode: str = SRT_MODES[0]
     sub_font: str = "Arial"
     sub_size: int = 36
@@ -155,10 +154,13 @@ class SubtitleConfig:
     bg_style: str = "Không nền"
     karaoke: bool = False
     karaoke_color: str = "#FFD400"
-    stt_engine: str = "Whisper (local)"
-    weak_pc: bool = False
-    ai_reflow: bool = False            # AI tối ưu câu + gộp timeline
+    stt_engine: str = STT_ENGINES[0]
     translate_source: str = "Tự nhận diện"
+
+    def migrate(self) -> None:
+        """Cấu hình cũ (Whisper / Gemini / SenseVoice / Qwen3-ASR ghi bằng tên dài) → «asr»; OCR → «ocr»."""
+        if self.stt_engine not in STT_ENGINES:
+            self.stt_engine = "ocr" if self.stt_engine.upper().startswith("OCR") else "asr"
 
 
 @dataclass
@@ -168,25 +170,13 @@ class TTSConfig:
     tts_source: str = TTS_SOURCES[0]
     edge_language: str = "vi-VN"
     edge_voice: str = "vi-VN-HoaiMyNeural"
-    eleven_voice_id: str = ""
-    eleven_voice_name: str = ""
-    eleven_model: str = ELEVEN_MODELS[0]
-    eleven_stability: float = 0.5
-    eleven_similarity: float = 0.75
-    eleven_style: float = 0.0
-    eleven_speaker_boost: bool = True
-    google_language: str = "vi-VN"
-    google_voice: str = "vi-VN-Neural2-A"
     vieneu_voice: str = "Minh Quân Pro"
-    fpt_voice: str = "banmai"
     tts_speed: float = 1.0
     tts_pitch: int = 0                 # Hz, Edge only
-    max_tempo: float = 1.5             # tăng tốc tối đa để khớp thời lượng cue
+    #: khớp mềm (luôn bật): dời câu vào khoảng lặng, nén từ 1,10× tăng dần tới trần này, câu bị đẩy trễ đọc nhanh hơn
+    #: để đuổi kịp hình (đo: «đọc tự nhiên không nén» làm giọng trễ dồn tới 4,8 s với bản dịch câu dài)
+    max_tempo: float = 1.5
     min_gap: float = 0.08              # khoảng nghỉ tối thiểu giữa 2 cue (giây)
-    natural_sync: bool = False         # đọc tốc độ tự nhiên, dời phụ đề theo giọng (không tăng tốc)
-    #: dời câu vào khoảng lặng, nén từ 1,10× tăng dần tới trần, câu bị đẩy trễ đọc nhanh hơn để đuổi kịp hình — mặc định
-    #: (đo: bản dịch kiểu VideoLingo câu dài hơn, «Voice tự nhiên» làm giọng trễ dồn tới 4,8 s)
-    soft_timing: bool = True
     multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
     speaker_count: str = SPEAKER_COUNTS[0]
     #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
@@ -194,20 +184,21 @@ class TTSConfig:
 
     def set_voice(self, voice_id: str) -> None:
         """Ghi cùng một mã giọng cho mọi nhà cung cấp (dùng khi đổi giọng theo nhân vật / người nói)."""
-        self.edge_voice = self.google_voice = self.eleven_voice_id = self.vieneu_voice = voice_id
-        self.fpt_voice = voice_id
+        self.edge_voice = self.vieneu_voice = voice_id
 
     def migrate(self, data: dict | None = None) -> bool:
-        """Cấu hình cũ dùng Gemini TTS / Gemini Live (đã gỡ) → VieNeu, giọng theo giới tính giọng Gemini cũ
-        (``data``: dict gốc của cấu hình — trường ``gemini_voice`` không còn trong TTSConfig). True nếu có đổi."""
+        """Cấu hình cũ dùng engine đã gỡ (Gemini TTS / Live, ElevenLabs, Google, FPT.AI) → VieNeu: giọng Gemini cũ đổi
+        theo giới tính (``data``: dict gốc — trường ``gemini_voice`` không còn trong TTSConfig), giọng trả phí của
+        người nói thì để trống cho máy tự gợi ý lại. True nếu có đổi."""
         changed = False
         if self.tts_provider in RETIRED_TTS:
+            if self.tts_provider.startswith("Gemini"):
+                self.vieneu_voice = vieneu_for_gemini(str((data or {}).get("gemini_voice") or ""))
             self.tts_provider = VIENEU
-            self.vieneu_voice = vieneu_for_gemini(str((data or {}).get("gemini_voice") or ""))
             changed = True
         for sv in self.speaker_voices:
             if isinstance(sv, dict) and sv.get("provider") in RETIRED_TTS:
-                v = vieneu_for_gemini(str(sv.get("voice_id") or ""))
+                v = vieneu_for_gemini(str(sv.get("voice_id") or "")) if str(sv["provider"]).startswith("Gemini") else ""
                 sv.update(provider=VIENEU, locale="vi-VN", voice_id=v, voice_name=v)
                 changed = True
         return changed
@@ -358,30 +349,16 @@ class Settings:
     """Cài đặt gắn với máy — lưu riêng ở ``settings.json``."""
     ffmpeg_path: str = ""
     ffprobe_path: str = ""
-    gemini_api_key: str = ""
-    elevenlabs_api_key: str = ""
-    google_api_key: str = ""
     appearance_mode: str = "dark"      # dark | oled
     accent: str = "lime"
     theme: str = "studio"             # studio · midnight · graphite · orchid · oled
     output_dir: str = ""
     windows_toast: bool = True
-    tts_workers: int = 4
-    whisper_compute: str = "auto"      # auto | int8 | float16 | float32
     vieneu_precision: str = "int8"     # int8 (nhanh) | fp32 (chất lượng)
-    translate_provider: str = "Gemini"
+    #: model Gemini dùng để dịch / tách câu / sửa phụ đề — hết lượt hay quá tải thì dừng và báo, không tự đổi model
     translate_model: str = "gemini-flash-latest"
-    translate_review: bool = True      # dịch xong, AI rà soát cả bản dịch rồi sửa câu chưa hay (1 lượt gọi thêm)
-    #: model đang chọn hết lượt / quá tải → tự đổi sang model dự phòng (Flash Lite, Groq…). Tắt (mặc định): dừng và báo,
-    #: người dùng tự chọn model — đổi model giữa chừng làm bản dịch kém hay, lệch giọng văn
-    translate_fallback: bool = False
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
-    groq_api_key: str = ""
-    deepseek_api_key: str = ""
-    openai_api_key: str = ""
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
-    elevenlabs_api_keys: str = ""      # nhiều key, mỗi dòng một key
-    fpt_api_key: str = ""              # FPT.AI (console.fpt.ai) — nhiều key, mỗi dòng một key
 
     @staticmethod
     def split_keys(text: str) -> list[str]:
@@ -390,33 +367,13 @@ class Settings:
         return list(dict.fromkeys(k.strip() for k in raw.splitlines() if k.strip()))
 
     def gemini_keys(self) -> list[str]:
-        """Key Gemini theo thứ tự ưu tiên: ô nhiều key → ô key đơn → các Google API key (cùng loại AIza…, dùng chung)."""
-        out = self.split_keys(self.gemini_api_keys)
-        for k in [self.gemini_api_key, *self.split_keys(self.google_api_key)]:
-            k = (k or "").strip()
-            if k and k not in out:
-                out.append(k)
-        return out
-
-    def google_keys(self) -> list[str]:
-        """Google Cloud API key (TTS): mỗi dòng một key, xoay vòng khi hết hạn mức."""
-        return self.split_keys(self.google_api_key)
-    google_sa_json: str = ""           # đường dẫn service account JSON (thay cho API key)
+        return self.split_keys(self.gemini_api_keys)
     show_waveform: bool = True
     show_guide_on_start: bool = True     # mở Hướng dẫn ở lần chạy đầu (tắt trong cửa sổ hướng dẫn)
-    ffmpeg_fast: bool = False
-    gpu_encoder: str = "auto"
-    # chất lượng giọng đọc (TTS)
-    tts_qc: bool = True                  # kiểm từng câu (đọc lặp, cắt cụt, «rẹt» cuối câu…) → câu hỏng thì đọc lại
-    tts_qc_retries: int = 3              # số lần đọc lại tối đa mỗi câu (Gemini tối đa 1, engine trả phí khác không đọc lại)
-    tts_qc_asr: str = "auto"             # Whisper nghe lại: auto (có GPU + model sẵn) | on | off
-    #: câu lỗi hẳn (đọc lại vẫn hỏng / engine trả phí hết hạn mức) thì đọc bằng engine này ("" = để trống câu đó)
-    tts_fallback: str = "Edge TTS"
-    tts_batch: bool = True               # đọc gộp rồi tách lại: VieNeu đọc liền câu kề nhau · Gemini TTS gộp ~25 câu một lượt
+    # hậu kỳ từng câu lồng tiếng (kiểm lỗi + đọc lại, đọc liền, AI rút gọn câu tràn, dự phòng Edge: luôn bật)
     tts_fade_in_ms: int = 10             # fade đầu / cuối mỗi câu — hết «tách» chỗ nối
     tts_fade_out_ms: int = 25
     tts_level_db: float = -18.0          # đưa mọi câu về cùng độ to (dBFS phần có tiếng); 0 = giữ nguyên
-    tts_auto_shorten: bool = True        # câu đọc tràn khung (đã nén tối đa) → AI tự rút gọn bản dịch rồi đọc lại
     loudness_target: float = -14.0       # độ to file xuất (LUFS) khi bật «Chuẩn hoá âm lượng»: TikTok/FB/YouTube −14
 
 
@@ -503,6 +460,8 @@ def _from_dict(cls, data: dict[str, Any] | None):
         setattr(obj, f.name, value)
     if isinstance(obj, TTSConfig):
         obj.migrate(data)             # cấu hình / mẫu / cấu hình riêng từng video còn ghi engine đã gỡ
+    elif isinstance(obj, SubtitleConfig):
+        obj.migrate()
     return obj
 
 
@@ -529,6 +488,7 @@ class AppState:
         self.color = ColorConfig()
         self.story = StoryConfig()
         self.settings = Settings()
+        self._settings_extra: dict[str, Any] = {}       # khoá lạ trong settings.json (tính năng đã gỡ) — ghi lại y nguyên
         self.videos: list[VideoItem] = []
         self.active_index: int = -1
         self.output_dir: str = str(VIDEOS_DIR)
@@ -801,6 +761,7 @@ class AppState:
             setattr(obj, attr, migrate_model(getattr(obj, attr)))
         if self.story.provider in RETIRED_TTS:
             self.story.provider = VIENEU
+            # giọng Gemini nam → giọng nam VieNeu; còn lại (cả giọng trả phí) → giọng nữ
             self.story.voice_id = self.story.voice_name = vieneu_for_gemini(self.story.voice_id)
             self.story.voice_language = "vi-VN"
         if include_videos:
@@ -863,20 +824,25 @@ class AppState:
     def load_settings(self) -> None:
         if SETTINGS_FILE.exists():
             try:
-                self.settings = _from_dict(Settings, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                self.settings = _from_dict(Settings, data)
+                if isinstance(data, dict):
+                    # key / cài đặt của tính năng đã gỡ (Groq, ElevenLabs…) giữ nguyên trong file, không xoá
+                    known = {f.name for f in fields(Settings)}
+                    self._settings_extra = {k: v for k, v in data.items() if k not in known}
+                    if data.get("translate_provider", "Gemini") != "Gemini":   # model của nhà cung cấp khác → Gemini
+                        self.settings.translate_model = Settings.translate_model
+                    # một ô key Gemini: chuyển key ở ô key đơn cũ + ô «Google API keys» (vẫn được dùng làm key Gemini)
+                    moved = [self._settings_extra.pop(k, "") for k in ("gemini_api_key", "google_api_key")]
+                    keys = Settings.split_keys("\n".join([self.settings.gemini_api_keys, *(str(v or "") for v in moved)]))
+                    self.settings.gemini_api_keys = "\n".join(keys)
                 self.settings.translate_model = migrate_model(self.settings.translate_model)
-                if self.settings.tts_fallback in RETIRED_TTS:            # dự phòng Gemini Live đã gỡ → Edge
-                    self.settings.tts_fallback = "Edge TTS"
-                if self.settings.translate_provider == "Groq":           # model Groq đã gỡ → model thay thế
-                    from app.services.groq_models import migrate_model as migrate_groq
-
-                    self.settings.translate_model = migrate_groq(self.settings.translate_model)
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
 
     def save_settings(self) -> None:
         try:
-            SETTINGS_FILE.write_text(json.dumps(dataclasses.asdict(self.settings), ensure_ascii=False, indent=2),
-                                     encoding="utf-8")
+            data = {**self._settings_extra, **dataclasses.asdict(self.settings)}
+            SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             logger.exception("Không lưu được settings.json")

@@ -85,7 +85,7 @@ _asr_lock = threading.Lock()
 _asr_sizes = ("large-v3-turbo", "small", "base")
 
 
-def _local_whisper() -> str | None:
+def local_whisper() -> str | None:
     from app.config.paths import MODELS_DIR
 
     for size in _asr_sizes:
@@ -96,7 +96,7 @@ def _local_whisper() -> str | None:
 
 def asr_available(require_gpu: bool = True) -> bool:
     """Có model Whisper sẵn trên máy (không tải mới) và — nếu ``require_gpu`` — có GPU CUDA."""
-    if _local_whisper() is None:
+    if local_whisper() is None:
         return False
     if not require_gpu:
         return True
@@ -127,7 +127,7 @@ def _words(text: str) -> str:
 
 def asr_check(a: np.ndarray, rate: int, text: str, v: Verdict, compute: str = "auto") -> None:
     """Whisper nghe lại câu vừa đọc, so với chữ gốc (đã đổi số → chữ ở cả hai phía)."""
-    size = _local_whisper()
+    size = local_whisper()
     if size is None:
         return
     from app.services.whisper_stt import load_model

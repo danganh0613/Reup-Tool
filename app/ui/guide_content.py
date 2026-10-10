@@ -70,18 +70,18 @@ TOPICS: list[dict] = [
               "mỗi bước bấm ở một mục bên cột trái."),
         ("steps", [
             "Mục Video: đưa video vào.",
-            "Mục STT: bấm «Tạo SRT từ Video trong hàng đợi». Máy nghe video rồi ghi ra chữ (tiếng gốc). Chờ vài chục giây. "
-            "Máy nào có card NVIDIA thì chọn Model = large-v3-turbo cho chữ đúng nhất.",
-            "Mục SRT: bật «Dịch AI», chọn «Tiếng Việt», bấm «Dịch». Cần có API key Gemini (miễn phí, lấy tại aistudio.google.com, "
-            "dán vào Cài đặt). Muốn sửa câu nào thì mở tab «Lời thoại».",
+            "Mục STT: bấm «Tạo phụ đề cho video đang chọn». Máy nghe video rồi ghi ra chữ (tiếng gốc), chạy ngay trên máy. "
+            "Lần đầu cần cài bộ nghe lời thoại (Cài đặt › AI trên máy › «Cài», ~11 GB, một lần).",
+            "Mục Lời thoại: chọn «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Cần có API key Gemini (miễn phí, lấy tại "
+            "aistudio.google.com, dán vào Cài đặt › AI dùng API key). Muốn sửa câu nào thì sửa ngay ở đầu tab.",
             "Mục Phụ đề: chọn «Sub đã dịch». Chữ Việt hiện trên video. Muốn dời chữ thì bấm T rồi kéo ô chữ.",
-            "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không. Để «Khớp mềm» bật.",
+            "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không.",
             "Mục Che mờ (nếu video có chữ tiếng nước ngoài dính sẵn trên hình): bấm B rồi vẽ một ô đè lên dòng chữ đó.",
             "Mục Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung/Anh, giữ nhạc nền & tiếng động), «Âm gốc / nền» "
             "khoảng 70, «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
         ]),
-        ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh. "
-                 "Nếu cuối video bị mất tiếng: tab Lời thoại, ô «Phong cách dịch» chọn «Ngắn gọn hơn», bấm «Dịch lại»."),
+        ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh, câu vẫn "
+                 "dài quá thì AI tự rút gọn. Muốn gọn hơn nữa: tab Lời thoại, ô «Nhờ AI sửa» gõ «ngắn gọn hơn»."),
     ]},
     {"key": "flow_short", "title": "Video ngang → video dọc TikTok", "group": "Bắt đầu", "blocks": [
         ("steps", [
@@ -150,20 +150,14 @@ TOPICS: list[dict] = [
               "dùng để hiện phụ đề, để dịch, để lồng tiếng."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Chọn «Nhận dạng» = Whisper (chạy ngay trên máy, không cần mạng sau lần đầu) hoặc Gemini (qua mạng, cần API key, không cần card màn hình).",
-            "Video tiếng Trung: chọn «SenseVoice» — đúng chữ và đúng nhịp nói hơn Whisper nhiều (lần đầu tải model ~0,9 GB). "
-            "Video Douyin có phụ đề in sẵn: chọn «OCR phụ đề in sẵn» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
+            "«Lấy lời từ» = «Giọng nói trong video»: AI nghe lời thoại ngay trên máy (có card NVIDIA thì nhanh hơn nhiều), "
+            "không cần mạng, không tốn lượt AI. Lần đầu bấm «Cài bộ nghe lời thoại» (~11 GB, một lần).",
+            "Video Douyin có phụ đề in sẵn: chọn «Chữ in sẵn trên video» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
             "mốc thời gian lấy theo tiếng nói.",
-            "Với Whisper, chọn Model: máy có card NVIDIA → «large-v3-turbo» (đúng nhất). Máy thường → «small». Lần đầu máy sẽ tải model, chờ vài phút.",
-            "Ngôn ngữ để «auto» — máy tự nhận.",
-            "Bấm «Tạo SRT từ Video trong hàng đợi». Xong sẽ thấy dòng «SRT: … cue». Bấm «Mở SRT» để xem chữ.",
-            "Chữ sai chỗ nào, mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó).",
-        ]),
-        ("kv", [
-            ("Thiết bị = auto", "Máy tự thử card NVIDIA trước, không được thì dùng CPU."),
-            ("Nút «Tải / Cài CUDA runtime»", "Chỉ hiện khi máy có card NVIDIA nhưng còn thiếu phần mềm đi kèm. Bấm một lần, chờ tải (~1.3 GB, cần Internet), từ đó nghe nhanh gấp 5–10 lần. Bản Setup đủ đã có sẵn, không cần bấm."),
-            ("Nút «Tải trước model Whisper»", "Tải model đang chọn về máy ngay (lần nhận dạng đầu khỏi chờ, dùng được khi không có mạng)."),
-            ("PC yếu", "Bật nếu máy chậm, hay bị treo."),
+            "Ngôn ngữ để «Tự nhận diện» — máy tự nhận.",
+            "Bấm «Tạo phụ đề cho video đang chọn». Xong sẽ thấy dòng «Phụ đề: … câu». Bấm «Xem / sửa lời thoại» để xem chữ.",
+            "Tên riêng hiếm có thể sai: mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó) hoặc gõ vào ô "
+            "«Nhờ AI sửa».",
         ]),
     ]},
     {"key": "srt", "title": "Lời thoại: xem, sửa, dịch câu thoại của video", "group": "Từng mục", "blocks": [
@@ -171,31 +165,29 @@ TOPICS: list[dict] = [
         ("p", "Dịch file chữ (.srt) sang tiếng Việt hoặc tiếng khác bằng AI. Sửa lại câu nào chưa hay."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Cần API key một lần: mở Cài đặt (nút trên cùng), cột giữa «API keys Gemini», dán key vào, bấm «Lưu tất cả». "
+            "Cần API key một lần: mở Cài đặt (nút trên cùng), cột «AI dùng API key», dán key Gemini vào, bấm «Lưu tất cả». "
             "Key lấy miễn phí ở aistudio.google.com → «Get API key».",
-            "Bật «Dịch AI», chọn ngôn ngữ đích (Tiếng Việt).",
-            "Ô «Phong cách dịch» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
-            "Bấm «Dịch». Chờ khoảng 30 giây cho video 5 phút. Xong thấy «Dịch xong».",
+            "Chọn «Dịch sang» (Tiếng Việt).",
+            "Ô «Phong cách» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
+            "Bấm «Dịch phụ đề». AI dịch 2 bước: dịch sát nghĩa rồi tự đọc lại, viết cho tự nhiên; có lồng tiếng thì rút gọn "
+            "câu đọc không kịp. Khoảng 10–15 lượt gọi AI mỗi video ngắn.",
             "Đọc lại ngay ở mục «Lời thoại của video đang chọn» đầu tab. Sửa trực tiếp, bấm «Lưu & tạo lại giọng» — chỉ câu nào sửa mới đọc lại giọng.",
         ]),
-        ("h", "Dịch chưa hay — bảo AI dịch lại"),
+        ("h", "Dịch chưa hay — nhờ AI sửa"),
         ("steps", [
-            "Bấm «Dịch phụ đề» lần nữa KHÔNG ra bản mới (máy nhớ bản cũ). Muốn bản khác: ghi yêu cầu vào ô «Phong cách dịch», "
-            "ví dụ «xưng anh–em, văn nói», «ngắn gọn hơn», rồi bấm «Dịch lại (bản mới)». AI xem bản cũ để biết bạn chưa ưng chỗ nào.",
-            "Chỉ vài câu dở: bấm ↻ cạnh câu đó, hoặc gõ yêu cầu vào ô «Nhờ AI sửa» — AI chỉ sửa đúng những câu liên quan.",
-            "Nhờ AI rà soát cả bản: tab «Lời thoại» bấm «AI rà soát» — AI đọc lại cả video, sửa câu dịch sai nghĩa, cứng, lệch "
-            "xưng hô hay dài quá khung. Câu sửa tô vàng, dòng nhỏ ghi lý do + câu cũ; bấm ↶ cạnh câu để trả lại câu cũ, "
-            "«Hoàn tác» trả lại hết, ưng thì «Lưu & tạo lại giọng».",
-            "Mặc định dịch xong máy TỰ rà soát một lượt (thêm 1 lượt gọi AI mỗi video, tắt ở Cài đặt → «Dịch xong, AI rà "
-            "soát & sửa bản dịch»). Mở tab «Lời thoại» sẽ thấy các câu AI đã sửa tô vàng — bấm «Lưu & tạo lại giọng» để chấp nhận.",
-            "Đang duyệt: từ tab Duyệt bấm «Sửa ›» ở dòng Lời thoại để tới đây; nút ↻ cạnh từng câu, hoặc ô «Nhờ AI sửa» — gõ yêu cầu, AI chỉ sửa đúng những câu liên quan "
-            "(tô vàng, xem trước được) — ưng thì bấm «Lưu & tạo lại giọng».",
-            "Bản dịch mới được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
+            "Gõ yêu cầu vào ô «Nhờ AI sửa», ví dụ «xưng anh – em, văn nói», «ngắn gọn hơn», «sửa tên Lý Tiểu Long». AI tự tìm "
+            "đúng các câu cần sửa trong cả video, câu khác giữ nguyên.",
+            "Chỉ một câu dở: bấm ↻ cạnh câu đó để AI dịch lại riêng câu ấy.",
+            "Câu AI sửa được tô vàng, dòng nhỏ ghi câu cũ; bấm ↶ cạnh câu để trả lại, «Hoàn tác» trả lại hết, ưng thì "
+            "«Lưu & tạo lại giọng».",
+            "Đang duyệt: từ tab Duyệt bấm «Sửa ›» ở dòng Lời thoại để tới đây.",
+            "Bản sửa được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
         ("kv", [
-            ("Dịch thủ công", "Bảng từng câu để bạn tự gõ bản dịch, không cần AI."),
-            ("Dự án dịch dang dở", "Đang dịch mà mất mạng hay tắt app? Vào đây bấm tiếp tục, không phải dịch lại từ đầu."),
-            ("Từ điển thuật ngữ (trong Cài đặt)", "Gõ «tên gốc=tên Việt» mỗi dòng để AI dịch đúng tên riêng, ví dụ 松下=Panasonic."),
+            ("Dán bản dịch ngoài", "Bảng từng câu để bạn tự gõ / dán bản dịch, không cần AI."),
+            ("Dịch dở giữa chừng", "Mất mạng hay model hết lượt? Mỗi lô dịch đều được lưu — bấm «Thử lại» là dịch tiếp phần "
+                                   "còn lại, không dịch lại từ đầu."),
+            ("Từ điển tên riêng (trong Cài đặt)", "Gõ «tên gốc=tên Việt» mỗi dòng để AI dịch đúng tên riêng, ví dụ 松下=Panasonic."),
         ]),
     ]},
     {"key": "tts", "title": "TTS: máy đọc chữ thành tiếng (lồng tiếng)", "group": "Từng mục", "blocks": [
@@ -205,23 +197,23 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bật «Thêm lồng tiếng vào video».",
             "«Đọc từ»: chọn «Sub đã dịch» (đọc tiếng Việt) hoặc «Sub gốc».",
-            "Chọn «Nhà cung cấp»: VieNeu (mặc định, khuyên dùng) — 25 giọng Việt 3 miền chạy ngay trên máy, miễn phí, không "
+            "Chọn «Giọng đọc»: VieNeu (mặc định, khuyên dùng) — 25 giọng Việt 3 miền chạy ngay trên máy, miễn phí, không "
             "giới hạn lượt; máy đọc liền vài câu kề nhau cho tự nhiên rồi tách lại, câu đọc lỗi tự đọc lại. Edge TTS miễn phí "
-            "(HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng). FPT.AI: giọng Việt 3 miền. ElevenLabs: có thư viện "
-            "giọng Việt 🌐 cộng đồng chia sẻ. Google Cloud: 30 giọng Chirp3-HD.",
+            "(HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng) — cũng đọc tạm câu VieNeu đọc hỏng.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
-            "Để «Khớp mềm» bật: giọng đọc tự nhiên, máy tự dồn cho vừa video.",
+            "Giọng luôn khớp mềm với hình: câu dài đọc nhanh dần, câu bị trễ đọc nhanh hơn để đuổi kịp, câu vẫn tràn thì AI "
+            "rút gọn bản dịch rồi đọc lại.",
             "Bấm «Render MP4» ở trên. Giọng đã tạo được giữ lại, lần sau render lại rất nhanh.",
         ]),
         ("kv", [
             ("Thư viện voice", "Giọng đã tạo trước đây. Chọn để dùng lại, khỏi tạo mới."),
-            ("Nén tối đa (tổng)", "Máy được phép đọc nhanh tới mức này khi câu dài, tính cả «Tốc độ đọc» — tối đa 1,25 "
-                                  "để giọng không méo. Câu vẫn dài quá: máy nhờ AI rút gọn bản dịch rồi đọc lại."),
-            ("Đồng bộ tự nhiên", "Không ép giọng nhanh lên; chữ và giọng đi cùng nhau, video có thể cần bật «Lặp video cho đủ giọng»."),
+            ("Nén tối đa", "Máy được phép đọc nhanh tới mức này khi câu dài, tính cả «Tốc độ đọc» — tối đa 1,25 "
+                           "để giọng không méo. Câu vẫn dài quá: máy nhờ AI rút gọn bản dịch rồi đọc lại."),
+            ("Nghỉ giữa câu", "Khoảng lặng tối thiểu giữa hai câu thoại."),
         ]),
         ("h", "Video có nhiều người nói"),
         ("steps", [
-            "Cần có phụ đề gốc trước (mục STT bấm «Nhận diện ngay», hoặc chọn file SRT).",
+            "Cần có phụ đề gốc trước (mục STT bấm «Tạo phụ đề cho video đang chọn», hoặc chọn file SRT).",
             "Mục TTS bật «Mỗi người nói một giọng», bấm «Nhận diện người nói». Lần đầu máy tải model ~28 MB.",
             "Máy chia ra Người 1, Người 2… và tự gợi ý giọng (nam/nữ). Bấm «Nghe giọng gốc» để biết ai là ai, rồi chọn giọng "
             "cho từng người. Edge tiếng Việt chỉ có 2 giọng — người thứ ba dùng lại giọng nhưng đổi «Cao độ» cho khác đi.",
@@ -320,13 +312,15 @@ TOPICS: list[dict] = [
     {"key": "settings", "title": "Cài đặt & API key", "group": "Khác", "blocks": [
         ("p", "Mở bằng nút «Cài đặt» ở góc trên bên trái."),
         ("kv", [
-            ("Cột trái", "Card màn hình, chuẩn nén, Giao diện (bấm một thẻ màu là đổi ngay: Studio, Midnight, Graphite, Orchid, OLED), dọn file tạm."),
-            ("Cột giữa — API keys", "Dán key Gemini vào đây để dịch AI, nghe cloud, dựng truyện. Mọi ô key (Gemini, Groq, DeepSeek, "
-                                    "OpenAI, ElevenLabs, Google) đều nhận nhiều key: mỗi dòng một key, hết hạn mức hay key hỏng máy tự đổi key kế tiếp."),
-            ("Cột phải", "Key giọng đọc trả tiền (ElevenLabs, Google). «Preset 1-click»: lưu toàn bộ cài đặt hiện tại để lần sau bấm một cái là xong. Chọn thư mục xuất video."),
+            ("🖥 AI trên máy", "Nghe lời thoại (Qwen3-ASR), giọng đọc Việt (VieNeu), kiểm lỗi giọng đọc (Whisper), CUDA cho card "
+                              "NVIDIA: xem đã cài chưa, bấm «Cài» / «Tải» một lần. Miễn phí, không giới hạn lượt."),
+            ("☁ AI dùng API key", "Key Gemini (mỗi dòng một key) + model, và từ điển tên riêng. Gemini dùng để dịch, «Nhờ AI "
+                                  "sửa», rút gọn câu đọc không kịp, dựng truyện. Model hết lượt thì máy dừng và báo — bấm "
+                                  "«Chọn model…» để đổi."),
+            ("⚙ Chung", "Thư mục xuất, độ to file xuất, từ điển phát âm, Giao diện (bấm một thẻ màu là đổi ngay), dọn file tạm."),
         ]),
         ("steps", ["Lấy key Gemini: vào aistudio.google.com → đăng nhập Google → «Get API key» → «Create API key» → copy.",
-                   "Dán vào ô «API keys Gemini» → bấm «Lưu tất cả»."]),
+                   "Dán vào ô «API key» ở cột «AI dùng API key» → bấm «Lưu tất cả»."]),
         ("warn", "Key nằm trong file settings.json cùng thư mục app. Đừng gửi file này cho người khác."),
     ]},
     {"key": "shortcuts", "title": "Phím tắt", "group": "Khác", "blocks": [("shortcuts", None)]},
@@ -337,11 +331,13 @@ TOPICS: list[dict] = [
              "việc trước xong (dòng trên cùng ghi «chờ: …»). Trong lúc chờ cứ chuyển tab, chọn video khác, chỉnh tiếp thoải "
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
-            ("Nghe video (STT) chậm dù có card NVIDIA", "Mục STT → bấm «Tải CUDA runtime» một lần (hoặc cài bản Setup đủ)."),
-            ("Video bị giữ khung cuối thêm vài giây", "Giọng dài hơn video nên máy giữ khung cuối cho đọc hết (không cắt giọng). Câu dịch quá dài: Cài đặt → «Câu đọc tràn khung → AI tự rút gọn bản dịch» (bật sẵn), hoặc tab Lời thoại: «Phong cách dịch» chọn «Ngắn gọn hơn» rồi «Dịch lại (bản mới)»; hoặc mục Video bật «Lặp video cho đủ thời lượng giọng đọc»."),
+            ("Báo «Chưa cài bộ nghe lời thoại»", "Bấm «Cài…» trên thanh trạng thái (hoặc Cài đặt › AI trên máy) — cài một lần ~11 GB."),
+            ("Video bị giữ khung cuối thêm vài giây", "Giọng dài hơn video nên máy giữ khung cuối cho đọc hết (không cắt giọng). Máy đã tự nhờ AI rút gọn câu tràn; muốn gọn hơn nữa: tab Lời thoại, ô «Nhờ AI sửa» gõ «ngắn gọn hơn»; hoặc mục Video bật «Lặp video cho đủ thời lượng giọng đọc»."),
             ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm Render lại là được."),
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
-            ("Gemini báo 429 / hết hạn mức", "Đợi 1 phút rồi thử lại, hoặc dán thêm key khác. Tạo ảnh/video AI cần tài khoản trả tiền."),
+            ("Gemini báo hết lượt / quá tải", "Máy dừng và báo (không tự đổi model). Bấm «Chọn model…» để chọn model khác, hoặc "
+                                              "đợi hạn mức đặt lại (≈ 14–15 giờ chiều). Đã dịch được lô nào thì «Thử lại» dịch "
+                                              "tiếp phần còn lại. Tạo ảnh/video AI cần tài khoản trả tiền."),
             ("Video bị xoay sai", "Mục Hiệu ứng → Xoay."),
             ("Giọng gốc (Trung, Anh…) vẫn nghe thấy", "Tab Video › Âm thanh: bật «Khử giọng nói gốc (AI)». AI bỏ giọng nói, giữ nhạc nền & tiếng động (lần đầu tải model ~64 MB, mỗi video khử một lần ~1 phút/phút video)."),
         ]),

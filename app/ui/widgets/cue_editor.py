@@ -1,9 +1,9 @@
 """Sửa lời thoại của video đang chọn — danh sách câu gắn với khung xem trước (dùng trong tab «Lời thoại»).
 
 Bấm vào ô câu → khung xem trước nhảy tới cảnh câu đó · ▶ phát đúng câu đó (có giọng lồng) rồi tự dừng · đang phát thì
-câu đang đọc được tô sáng · ↻ AI dịch lại một câu · «AI rà soát» (AI đọc lại cả bản dịch, sửa câu chưa ổn kèm lý do — dịch
-xong cũng tự chạy, xem Cài đặt) · ô «Nhờ AI sửa» (gõ yêu cầu, AI chỉ sửa đúng các câu liên quan). Câu AI sửa tô vàng, ↶ trả
-lại từng câu, «Hoàn tác» trả lại hết · «Lưu & tạo lại giọng» (câu không đổi dùng lại giọng cũ nên rất nhanh).
+câu đang đọc được tô sáng · ↻ AI dịch lại một câu · ô «Nhờ AI sửa» (gõ yêu cầu, AI chỉ sửa đúng các câu liên quan — cả
+video). Câu AI sửa tô vàng, ↶ trả lại từng câu, «Hoàn tác» trả lại hết · «Lưu & tạo lại giọng» (câu không đổi dùng lại
+giọng cũ nên rất nhanh).
 
 Danh sách chia trang (không có thanh cuộn riêng) để nằm gọn trong bảng tính năng vốn đã cuộn được.
 """
@@ -19,7 +19,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts, load_srt, save_srt, wrap_lines
-from app.ui.widgets.common import StatusLabel
+from app.ui.widgets.common import StatusLabel, info_icon
 from app.ui.widgets.ui import Tooltip, button
 
 
@@ -46,7 +46,6 @@ class CueEditor(ctk.CTkFrame):
         self._tick_id: str | None = None
         self._ai_marks: set[int] = set()          # câu AI vừa sửa (tô vàng tới khi lưu / đổi video)
         self._ai_before: dict[int, str] = {}      # câu trước khi AI sửa (↶ / Hoàn tác)
-        self._ai_notes: dict[int, str] = {}       # lý do AI sửa (rà soát)
         self.grid_columnconfigure(0, weight=1)
 
         self.head = ctk.CTkLabel(self, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
@@ -100,19 +99,19 @@ class CueEditor(ctk.CTkFrame):
                                command=self.save,
                                tip="Lưu các câu đã sửa; video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
         self.save_btn.pack(side="right")
-        self.review_btn = button(nav, "AI rà soát", icon_name="sparkle", size="sm", command=self.ai_review,
-                                 tip="AI đọc lại cả bản dịch, sửa câu dịch sai nghĩa / cứng / lệch xưng hô / dài quá khung. "
-                                     "Câu sửa tô vàng kèm lý do, chưa lưu — ↶ trả lại từng câu.")
-        self.review_btn.pack(side="right", padx=(0, 6))
 
         # ── Nhờ AI sửa (kiểu chat): AI tự tìm câu liên quan tới yêu cầu và chỉ sửa đúng những câu đó ──
         ai = ctk.CTkFrame(self, fg_color="transparent")
         ai.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         ai.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(ai, text="Nhờ AI sửa — AI tự tìm đúng câu cần sửa, câu khác giữ nguyên", font=T.font(11),
-                     text_color=T.TEXT_DIM, anchor="w").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
+        head = ctk.CTkFrame(ai, fg_color="transparent")
+        head.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
+        ctk.CTkLabel(head, text="Nhờ AI sửa", font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        info_icon(head, "Gõ yêu cầu bằng lời, vd «xưng anh – em», «văn nói tự nhiên hơn», «sửa tên Lý Tiểu Long». AI tự "
+                        "tìm đúng các câu cần sửa trong cả video, câu khác giữ nguyên. Câu sửa tô vàng, chưa lưu — "
+                        "↶ trả lại từng câu.").pack(side="left", padx=(4, 0))
         self.ai_req = ctk.CTkEntry(ai, height=32, font=T.font(12),
-                                   placeholder_text="vd: câu hỏi «bắt về nuôi» thêm «Con này» ở đầu")
+                                   placeholder_text="vd: xưng anh – em, văn nói tự nhiên hơn")
         self.ai_req.grid(row=1, column=0, sticky="ew")
         self.ai_req.bind("<Return>", lambda _e: (self.ai_edit(), "break")[1])
         self.ai_send = button(ai, "Gửi", icon_name="sparkle", size="sm", command=self.ai_edit,
@@ -156,29 +155,8 @@ class CueEditor(ctk.CTkFrame):
         self._starts = [c.start for c in self.cues]
         self.texts = [c.text.replace("\n", " ") for c in self.cues]
         self._orig_texts = list(self.texts)
-        n = self._load_review()
-        self.show_page(min(self._ai_marks) // self.PAGE if n else 0, sync=False)
-        if n:
-            self.status.warn(f"AI rà soát bản dịch đã sửa {n} câu (tô vàng, kèm lý do) — ↶ trả lại câu không ưng, "
-                             "bấm «Lưu & tạo lại giọng» để chấp nhận.")
-        else:
-            self.status.info("")
-
-    def _load_review(self) -> int:
-        """Câu AI rà soát đã sửa lúc dịch (``<srt>.review.json``) mà chữ hiện tại vẫn là bản AI sửa → tô vàng + lý do."""
-        from app.services.translate_router import load_review
-
-        if not self.is_translation:
-            return 0
-        for x in load_review(self.edit_path):
-            i = x["i"]
-            if i < len(self.texts) and " ".join(self.texts[i].split()) == x.get("new") and x.get("old"):
-                self._ai_before[i] = str(x["old"])
-                self._ai_marks.add(i)
-                self._ai_notes[i] = str(x.get("why") or "")
-        if self._ai_marks:
-            self.ai_undo.grid()
-        return len(self._ai_marks)
+        self.show_page(0, sync=False)
+        self.status.info("")
 
     def _range(self) -> range:
         a = self.page * self.PAGE
@@ -224,18 +202,15 @@ class CueEditor(ctk.CTkFrame):
         self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
         self.save_btn.configure(state="normal" if self.cues else "disabled")
         self.ai_send.configure(state="normal" if self.cues else "disabled")
-        self.review_btn.configure(state="normal" if self.cues else "disabled")
 
     def _paint_ref(self, label: ctk.CTkLabel, i: int) -> None:
-        """Dòng chữ nhỏ trên ô sửa: câu gốc; câu AI đã sửa thì thêm lý do + câu cũ (tô vàng)."""
+        """Dòng chữ nhỏ trên ô sửa: câu gốc; câu AI đã sửa thì thêm câu cũ (tô vàng)."""
         base = self.ref[i].plain if i < len(self.ref) else ""
         if i not in self._ai_before:
             label.configure(text=base, text_color=T.TEXT_MUTED)
             return
-        why = self._ai_notes.get(i, "")
         old = self._ai_before[i]
-        old = old if len(old) <= 90 else old[:89] + "…"
-        note = f"✎ {why} — trước: «{old}»" if why else f"✎ trước: «{old}»"
+        note = f"✎ trước: «{old if len(old) <= 90 else old[:89] + '…'}»"
         label.configure(text=f"{base}\n{note}" if base else note, text_color=T.WARNING)
 
     # ── Gắn với khung xem trước ──────────────────────────────────────────
@@ -342,17 +317,13 @@ class CueEditor(ctk.CTkFrame):
                 c.text = wrap_lines(new.strip())
                 changed += 1
         if not changed:
-            if self._ai_marks:                   # câu AI rà soát lúc dịch (đã nằm trong SRT) → chấp nhận, bỏ tô vàng
-                n = len(self._ai_marks)
-                self._accept_ai()
-                self.status.ok(f"Đã chấp nhận {n} câu AI sửa.")
-            else:
-                self.status.info("Không có câu nào thay đổi.")
+            self.status.info("Không có câu nào thay đổi.")
             return
         save_srt(self.cues, self.edit_path)
         self._orig_texts = list(self.texts)
-        if self._ai_marks or self._ai_before:
-            self._accept_ai()
+        if self._ai_marks or self._ai_before:          # đã lưu → bỏ tô vàng
+            self._clear_ai_marks()
+            self.show_page(self.page, sync=False)
         self.window.log(f"{it.name}: đã sửa {changed} câu lời thoại.")
         st = self.app_state.state_for(it)
         if st.tts.enable_tts:
@@ -394,20 +365,9 @@ class CueEditor(ctk.CTkFrame):
     def _clear_ai_marks(self) -> None:
         self._ai_marks = set()
         self._ai_before = {}
-        self._ai_notes = {}
         self.ai_undo.grid_remove()
 
-    def _accept_ai(self) -> None:
-        """Lưu xong / chấp nhận: bỏ tô vàng, xoá danh sách câu rà soát kèm SRT (mở lại không tô nữa)."""
-        from app.services.translate_router import load_review, save_review
-
-        self._clear_ai_marks()
-        if self.edit_path and load_review(self.edit_path):
-            save_review(self.edit_path, [])
-        self.show_page(self.page, sync=False)
-
-    def _apply_ai(self, edits: dict[int, str], notes: dict[int, str] | None = None,
-                  expect: list[str] | None = None) -> list[int]:
+    def _apply_ai(self, edits: dict[int, str], expect: list[str] | None = None) -> list[int]:
         """Điền câu AI sửa vào ô (chưa lưu), nhớ câu cũ cho ↶ / Hoàn tác. ``expect``: chữ lúc gửi AI — câu người dùng
         đã sửa tiếp trong lúc chờ thì không ghi đè."""
         self._sync()
@@ -421,8 +381,6 @@ class CueEditor(ctk.CTkFrame):
             self._ai_before.setdefault(i, self.texts[i])
             self.texts[i] = t
             self._ai_marks.add(i)
-            if notes and notes.get(i):
-                self._ai_notes[i] = notes[i]
             changed.append(i)
         if self._ai_marks:
             self.ai_undo.grid()
@@ -435,52 +393,10 @@ class CueEditor(ctk.CTkFrame):
         self._sync()
         self.texts[i] = self._ai_before.pop(i)
         self._ai_marks.discard(i)
-        self._ai_notes.pop(i, None)
         if not self._ai_before:
             self.ai_undo.grid_remove()
         self.show_page(self.page, sync=False)
         self.status.info(f"Đã trả lại câu {i + 1} như trước khi AI sửa (chưa lưu).")
-
-    def ai_review(self) -> None:
-        """AI đọc lại cả bản dịch (kèm câu gốc + thời lượng), chỉ sửa câu chưa ổn — tô vàng, kèm lý do, chưa lưu."""
-        it = self.item
-        if it is None or not self.cues:
-            return
-        from app.services.translate_router import review_translation
-
-        self._sync()
-        current = list(self.texts)
-        source = [c.plain for c in self.ref] if self.is_translation else []
-        durations = [c.end - c.start for c in self.cues]
-        st = self.app_state.state_for(it)
-        win = self.window
-        self.status.warn(f"AI đang rà soát {len(current)} câu (sai nghĩa, câu cứng, xưng hô, dài quá khung)…")
-        self.review_btn.configure(state="disabled")
-
-        def work(cancel):
-            return review_translation(source, current, durations, settings=st.settings,
-                                      target=st.subtitle.translate_target, style=st.subtitle.translate_style,
-                                      log=win.log_bg, cancel=cancel)
-
-        def done(result, error):
-            if not self.winfo_exists():
-                return
-            self.review_btn.configure(state="normal")
-            if self.item is not it:
-                return
-            if error:
-                self.status.error(f"AI rà soát lỗi: {str(error).splitlines()[0][:200]}")
-                return
-            items, note = result
-            changed = self._apply_ai({x["i"]: x["new"] for x in items}, {x["i"]: x["why"] for x in items}, current)
-            if not changed:
-                self.status.ok(f"AI rà soát: bản dịch ổn, không câu nào cần sửa. {note}".strip())
-                return
-            self.show_page(changed[0] // self.PAGE, sync=False)
-            self.status.ok(f"AI rà soát sửa {len(changed)} câu (tô vàng, kèm lý do, chưa lưu) — ↶ trả lại câu không ưng "
-                           f"rồi bấm «Lưu & tạo lại giọng». {note}".strip())
-
-        win.run_task("AI rà soát bản dịch", work, done)
 
     def ai_edit(self) -> None:
         """Gửi yêu cầu tự do cho AI; AI trả về đúng các câu cần đổi → điền vào ô sửa, tô vàng, chưa lưu."""
@@ -515,7 +431,7 @@ class CueEditor(ctk.CTkFrame):
                 self.status.error(f"AI sửa lỗi: {str(error).splitlines()[0][:200]}")
                 return
             edits, note = result
-            changed = self._apply_ai(edits)
+            changed = self._apply_ai(edits, current)     # câu người dùng sửa tiếp trong lúc chờ: giữ chữ của họ
             if not changed:
                 self.status.info(f"AI không thấy câu nào cần sửa. {note}".strip())
                 return
@@ -559,7 +475,7 @@ class CueEditor(ctk.CTkFrame):
             if error:
                 self.status.error(f"Dịch lại lỗi: {str(error).splitlines()[0][:200]}")
                 return
-            changed = len(self._apply_ai(result))
+            changed = len(self._apply_ai(result, previous))
             self.show_page(self.page, sync=False)
             if changed:
                 self.status.ok(f"AI đã dịch lại {changed} câu (tô vàng, chưa lưu) — xem rồi bấm «Lưu & tạo lại giọng».")

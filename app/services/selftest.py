@@ -82,8 +82,18 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
             out.append(Check("Render GPU", "warn", f"{gpu} · không encoder GPU nào dùng được → render bằng CPU (chậm hơn, vẫn đúng)",
                              "Cập nhật driver card màn hình (NVIDIA cần driver ≥ 610)." if nvidia else "Máy không có card hỗ trợ — bình thường."))
 
-    # 4. Whisper (STT)
-    step("Whisper")
+    # 4. Nghe lời thoại (Qwen3-ASR) + Whisper kiểm lỗi giọng đọc
+    step("Nhận diện lời")
+    try:
+        from app.services.qwen_asr import INSTALL_GB, is_installed as qwen_installed
+
+        if qwen_installed():
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "ok", "Đã cài — chạy trên máy" + (f" ({gpu})" if nvidia else " (CPU, chậm)")))
+        else:
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", "Chưa cài → chỉ nhận diện được chữ in sẵn trên video",
+                             f"Cài đặt › AI trên máy › «Cài» (một lần, ~{INSTALL_GB} GB)."))
+    except Exception as exc:
+        out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", f"Không kiểm tra được: {exc}"))
     try:
         import faster_whisper  # noqa: F401
 
@@ -91,19 +101,16 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
 
         if nvidia:
             if cuda_ready():
-                out.append(Check("Whisper GPU", "ok", f"cuBLAS/cuDNN sẵn sàng — nhận dạng chạy trên {gpu}"))
+                out.append(Check("Whisper GPU", "ok", f"cuBLAS/cuDNN sẵn sàng — kiểm lỗi giọng đọc chạy trên {gpu}"))
             else:
-                out.append(Check("Whisper GPU", "warn", f"Có {gpu} nhưng thiếu CUDA runtime → nhận dạng chạy CPU (chậm 5–10 lần)",
-                                 "Mục STT → nút «Tải CUDA runtime» (~1.3 GB, một lần)" if _frozen()
-                                 else "Mục STT → nút «Cài CUDA runtime»"))
-        else:
-            out.append(Check("Whisper", "ok", "Không có GPU NVIDIA → nhận dạng bằng CPU (int8)"))
+                out.append(Check("Whisper GPU", "warn", f"Có {gpu} nhưng thiếu CUDA runtime → bỏ bước Whisper nghe lại giọng đọc",
+                                 "Cài đặt › AI trên máy › «Cài CUDA»"))
         models = sorted(re.sub(r"^models--.*?--faster-whisper-", "", p.name) for p in MODELS_DIR.glob("models--*faster-whisper-*"))
         if models:
             out.append(Check("Model Whisper", "ok", "Đã có trên máy: " + ", ".join(models)))
         else:
-            out.append(Check("Model Whisper", "warn", "Chưa tải model nào — lần nhận dạng đầu sẽ tự tải (cần Internet)",
-                             "Mục STT → nút «Tải trước model Whisper» để tải sẵn."))
+            out.append(Check("Model Whisper", "warn", "Chưa có → không nghe lại được câu lồng tiếng, không đọc liền câu",
+                             "Cài đặt › AI trên máy › «Tải» ở mục kiểm lỗi giọng đọc."))
     except Exception as exc:
         out.append(Check("Whisper", "bad", f"Không nạp được faster-whisper: {exc}", "Cài lại bộ cài."))
 
@@ -125,7 +132,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                              "Sẵn sàng, model đã tải" if has_model else "Có sẵn — lần dùng đầu sẽ tự tải model (~300 MB, cần Internet)",
                              "" if has_model else "Mục TTS → chọn VieNeu → «Nghe thử giọng» để tải."))
         else:
-            out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS / ElevenLabs / Google thay thế",
+            out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS thay thế",
                              "Bản đóng gói: cài lại bản mới nhất." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
     except Exception as exc:
         out.append(Check("VieNeu", "warn", f"Không kiểm tra được: {exc}"))
@@ -134,16 +141,8 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     step("API key")
     if settings is not None:
         g = len(settings.gemini_keys())
-        out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / STT cloud / dựng truyện được",
-                         "" if g else "Cài đặt → cột giữa «API keys Gemini» (miễn phí tại aistudio.google.com)."))
-        e = len(settings.split_keys(settings.elevenlabs_api_keys)) + bool(settings.elevenlabs_api_key)
-        gg = len(settings.google_keys())
-        fp = len(settings.split_keys(settings.fpt_api_key))
-        any_key = e or gg or fp
-        out.append(Check("Key giọng trả phí", "ok" if any_key else "warn",
-                         f"ElevenLabs {e} · Google {gg} · FPT.AI {fp} key" if any_key
-                         else "Chưa có — dùng VieNeu (trên máy) hoặc Edge (miễn phí)",
-                         "" if any_key else "Chỉ cần khi muốn giọng ElevenLabs / Google / FPT.AI."))
+        out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / dựng truyện được",
+                         "" if g else "Cài đặt › AI dùng API key (miễn phí tại aistudio.google.com)."))
 
     # 7. Font icon
     step("Font")

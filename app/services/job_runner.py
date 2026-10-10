@@ -1,6 +1,6 @@
 """Điều phối xử lý: probe → nhận diện → dịch → lồng tiếng → render, chạy nền.
 
-- ``Pipeline`` chứa từng bước, dùng được riêng lẻ (nút "Nhận diện ngay"…).
+- ``Pipeline`` chứa từng bước, dùng được riêng lẻ (nút «Tạo phụ đề cho video đang chọn»…).
 - ``JobRunner`` chạy cả hàng đợi trong một thread.
 - ``TaskRunner`` chạy một tác vụ lẻ trong thread riêng (mỗi lúc một tác vụ).
 Mọi callback về UI đều đi qua ``ui_call`` (root.after) nên an toàn thread.
@@ -20,7 +20,6 @@ from app.config.paths import JOBS_DIR, PREVIEW_CACHE_DIR, SUBS_DIR, VOICE_DIR
 from app.core.state import ENCODE_PRESETS, SRT_MODES, SRT_SOURCES, TRIM_MODES, TTS_SOURCES, AppState, VideoItem
 from app.services import render_pipeline as rp
 from app.services import stages as stages_mod
-from app.services.direction import apply as direction_apply
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, ensure_min_duration, load_srt, merge_bilingual, save_srt, shift, wrap_lines
 from app.services.subtitle_style import write_ass
@@ -82,42 +81,20 @@ class Pipeline:
                    cancel: threading.Event | None = None, source_path: str | None = None) -> list[Cue]:
         cfg = self.state.subtitle
         src = source_path or item.path
-        if cfg.stt_engine.startswith("Gemini"):
-            from app.services.stt_gemini import transcribe as gemini_transcribe
-
-            res = gemini_transcribe(src, self.ffmpeg, api_key=self.state.settings.gemini_keys(), model=self.state.settings.translate_model
-                                    if self.state.settings.translate_provider == "Gemini" else "gemini-flash-latest",
-                                    language=cfg.stt_language, work_dir=self.job_dir(item), on_progress=progress,
-                                    log=log, cancel=cancel, fallback=self.state.settings.translate_fallback)
-        elif cfg.stt_engine.startswith("Qwen3"):
-            from app.services.qwen_asr import transcribe as qwen_transcribe
-
-            res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
-                                  work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
-        elif cfg.stt_engine.startswith("SenseVoice"):
-            from app.services.asr_funasr import transcribe as sensevoice_transcribe
-
-            res = sensevoice_transcribe(src, self.ffmpeg, language=cfg.stt_language, work_dir=self.job_dir(item),
-                                        on_progress=progress, log=log, cancel=cancel)
-        elif cfg.stt_engine.startswith("OCR"):
+        if cfg.stt_engine == "ocr":
             from app.services.ocr_hardsub import transcribe as ocr_transcribe
 
             res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
                                  log=log, cancel=cancel)
         else:
-            from app.services.whisper_stt import transcribe
+            # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
+            from app.services.qwen_asr import transcribe as qwen_transcribe
 
-            model = cfg.stt_model
-            compute = self.state.settings.whisper_compute
-            if cfg.weak_pc:
-                model = "tiny" if model in ("large-v3", "large-v3-turbo", "medium") else model
-                compute = "int8"
-            res = transcribe(src, self.ffmpeg, model_size=model, language=cfg.stt_language,
-                             device=cfg.stt_device, compute=compute,
-                             work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
+            res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
+                                  work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
         if not res.cues:
-            raise RuntimeError("Không nhận ra lời nói nào trong file — file có tiếng nói không? Thử model lớn hơn "
-                               "(small / large-v3-turbo) hoặc chọn đúng ngôn ngữ thay vì auto.")
+            raise RuntimeError("Không nhận ra lời nói nào trong file — file có tiếng nói không? Thử chọn đúng ngôn ngữ "
+                               "thay vì «Tự nhận diện».")
         out = SUBS_DIR / f"{_safe_stem(Path(src).stem)}.srt"
         save_srt(res.cues, out)
         item.srt_path = str(out)
@@ -133,50 +110,23 @@ class Pipeline:
 
     def translate(self, item: VideoItem, cues: list[Cue] | None = None, *, progress: ProgressCb | None = None,
                   log: LogCb | None = None, cancel: threading.Event | None = None) -> list[Cue]:
-        from app.services.translate_router import translate_cues
+        """Dịch 2 bước như VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát) + khớp thời lượng
+        lồng tiếng theo nhịp đọc thật (nếu bật lồng tiếng)."""
+        from app.services.translate_vl import translate_cues_vl
 
         cfg = self.state.subtitle
         if cues is None:
             if not item.srt_path:
                 raise RuntimeError("Chưa có phụ đề gốc để dịch.")
             cues = load_srt(item.srt_path)
-        videolingo = cfg.translate_method.startswith("VideoLingo")
-        if videolingo:
-            # dịch kiểu VideoLingo (tóm tắt + thuật ngữ → dịch sát → tự phê bình + dịch thoát) + khớp thời lượng lồng
-            # tiếng theo nhịp đọc thật (nếu bật lồng tiếng)
-            from app.services.translate_vl import translate_cues_vl
-
-            t = self.state.tts
-            fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100,
-                    "min_gap": t.min_gap if (t.soft_timing or t.natural_sync) else 0.15} if t.enable_tts else None)
-            out_cues = translate_cues_vl(cues, settings=self.state.settings, target=cfg.translate_target,
-                                         source_hint=cfg.translate_source, style=cfg.translate_style,
-                                         srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel)
-        else:
-            out_cues = translate_cues(cues, settings=self.state.settings, target=cfg.translate_target,
-                                      source_hint=cfg.translate_source, style=cfg.translate_style, reflow=cfg.ai_reflow,
-                                      srt_path=item.srt_path, on_progress=progress, log=log, cancel=cancel)
+        t = self.state.tts
+        fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100, "min_gap": t.min_gap}
+               if t.enable_tts else None)
+        out_cues = translate_cues_vl(cues, settings=self.state.settings, target=cfg.translate_target,
+                                     source_hint=cfg.translate_source, style=cfg.translate_style,
+                                     srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel)
         out = self.translated_path(item)
-        reviewed: list[dict] = []
-        # VideoLingo đã tự phê bình từng câu ở bước dịch thoát → bỏ lượt rà soát thêm (nút «AI rà soát» vẫn dùng được)
-        if self.state.settings.translate_review and out_cues and not videolingo:
-            # AI đọc lại cả bản dịch, sửa câu sai nghĩa / cứng / lệch xưng hô / dài quá khung (1 lượt gọi thêm)
-            from app.services.translate_router import review_cues
-
-            try:
-                reviewed = review_cues(cues, out_cues, settings=self.state.settings, target=cfg.translate_target,
-                                       style=cfg.translate_style, log=log, cancel=cancel)
-            except RenderCancelled:
-                raise
-            except Exception as exc:                   # noqa: BLE001 — phụ, giữ bản dịch chưa rà soát
-                logger.warning("Không rà soát được bản dịch: %s", exc)
-                if log:
-                    log(f"⚠ AI rà soát bản dịch lỗi — giữ bản dịch gốc ({str(exc).splitlines()[0][:120]})")
         save_srt(out_cues, out)
-        if reviewed or self.state.settings.translate_review:
-            from app.services.translate_router import save_review
-
-            save_review(out, reviewed)                 # tab «Lời thoại» tô vàng câu AI sửa (trống = không câu nào)
         item.srt_translated_path = str(out)
         if log:
             log(f"Dịch xong → {out.name}")
@@ -261,7 +211,7 @@ class Pipeline:
         from app.services.diarize import diarize
 
         if not item.srt_path or not Path(item.srt_path).exists():
-            raise RuntimeError("Chưa có phụ đề gốc — bấm «Nhận diện ngay» ở mục STT hoặc chọn file SRT trước.")
+            raise RuntimeError("Chưa có phụ đề gốc — bấm «Tạo phụ đề cho video đang chọn» ở mục STT hoặc chọn file SRT trước.")
         sc = self.state.tts.speaker_count
         n = int(sc) if sc.isdigit() else 0
         smap = diarize(item.path, load_srt(item.srt_path), self.ffmpeg, n_speakers=n, on_progress=progress, log=log,
@@ -277,8 +227,6 @@ class Pipeline:
             mtime = int(Path(srt_path).stat().st_mtime)
         except OSError:
             mtime = 0
-        # cảm xúc từng câu: chỉ thêm vào chữ ký khi có file direction (track cũ không có thì giữ nguyên chữ ký)
-        dsig = direction_apply.signature(srt_path)
         multi = ""
         if t.multi_voice:
             try:
@@ -286,13 +234,10 @@ class Pipeline:
             except OSError:
                 multi = repr(t.speaker_voices)
         raw = "|".join(str(x) for x in (
-            t.tts_provider, t.edge_voice, t.eleven_voice_id, t.eleven_model, t.eleven_stability, t.eleven_similarity,
-            t.eleven_style, t.eleven_speaker_boost, t.google_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo,
-            t.min_gap, t.soft_timing, t.natural_sync, srt_path, mtime, extra_key, post_signature(self.state.settings),
+            "v2", t.tts_provider, t.edge_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo, t.min_gap,
+            srt_path, mtime, extra_key, post_signature(self.state.settings),
             self.state.video.speed)                # track dựng theo mốc video ra → phụ thuộc tốc độ video
-            + ((multi,) if multi else ())
-            + ((t.fpt_voice,) if t.tts_provider.startswith("FPT") else ())
-            + ((f"dir{dsig}",) if dsig else ()))
+            + ((multi,) if multi else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,
@@ -306,7 +251,6 @@ class Pipeline:
             cues = load_srt(srt_path)
             self.ensure_speakers(item, log=log, cancel=cancel)
             self.annotate_speakers(item, cues)
-            direction_apply.annotate(cues, srt_path)          # cảm xúc câu chỉnh tay (+ gợi ý AI nếu bật)
         srt_path = srt_path or item.srt_path or ""
         out = (out_dir or VOICE_DIR) / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
         if out.exists() and not force:
@@ -639,7 +583,6 @@ class Pipeline:
                 if tcfg.multi_voice:
                     self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
                     self.annotate_speakers(item, src_cues)
-                direction_apply.annotate(src_cues, src_path)     # cảm xúc câu chỉnh tay (+ gợi ý AI nếu bật)
                 src_cues = rp.remap_cues_for_trim(src_cues, trim)
                 fit = trim.kept_duration if trim.active else info.duration      # thời lượng nguồn (÷ tốc độ khi dựng)
                 return self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,
@@ -651,7 +594,7 @@ class Pipeline:
             # câu ≤ 3 tiếng («Không bắt», «Trắng tinh») không rút gọn được nữa — nhờ AI chỉ tốn lượt dịch + lượt đọc lại
             over = [o for o in self.voice_overflow(voice_path, untried=True) if o[1] > 0.15
                     and cues_tr and 0 <= o[0] < len(cues_tr) and len(cues_tr[o[0]].plain.split()) > 3]
-            if (over and use_tr and preview_out is None and st.settings.tts_auto_shorten and scfg.translate_enable
+            if (over and use_tr and preview_out is None and scfg.translate_enable
                     and item.srt_path and Path(item.srt_path).exists()):
                 # đã nén tới trần mà vẫn tràn → câu dịch quá dài: AI rút gọn đúng các câu đó (một lượt) rồi đọc lại
                 from app.services.translate_router import SHORTEN_REQUEST

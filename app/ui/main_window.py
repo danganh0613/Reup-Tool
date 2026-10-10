@@ -187,7 +187,7 @@ class MainWindow(_Root):
         self.version_label = ctk.CTkLabel(left, text=f"v{APP_VERSION}", font=T.font(11), text_color=T.TEXT_MUTED)
         self.version_label.pack(side="left", padx=(8, 0))
         self.header_btns: list[list] = []   # [nút, nhãn đầy đủ, bề rộng đầy đủ] — cửa sổ hẹp thì chỉ còn icon
-        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: API key, GPU, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
+        self._hbtn(left, "Cài đặt", "settings", self.open_settings, tip="Cài đặt: AI trên máy, API key, giao diện, thư mục xuất").pack(side="left", padx=(24, 4))
         self._hbtn(left, "Hướng dẫn", "book", lambda: self.toggle_help(), tip="Bật / tắt bảng hướng dẫn bên cạnh (Ctrl+H)").pack(side="left", padx=4)
         self._hbtn(left, "Phím tắt", "keyboard", self.open_shortcuts, tip="Danh sách phím tắt").pack(side="left", padx=4)
         self.notif_btn = self._hbtn(left, "Thông báo", "bell", self.open_notifications, tip="Trung tâm thông báo (kết quả render, lỗi)")
@@ -506,9 +506,11 @@ class MainWindow(_Root):
             win.lift()
             win.focus_force()
             if tab == "shortcuts":
-                win._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn")
+                win._switch_tab(win.TAB_GUIDE)
             elif tab == "model":
                 win.focus_model()
+            elif tab == "local":
+                win._switch_tab(win.TAB_SETTINGS)
             return
         self._settings_win = SettingsWindow(self, tab=tab)
 
@@ -649,8 +651,16 @@ class MainWindow(_Root):
                command=lambda: (dlg.destroy(), self.open_settings(tab="model"))).pack(side="right", padx=(0, 8))
         dlg.after(50, dlg.lift)
 
-    def _choose_model_action(self) -> tuple:
-        return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
+    def _error_action(self, message: str | None) -> tuple | None:
+        """Nút nên bấm cho câu lỗi: model hết lượt → «Chọn model…»; chưa cài AI trên máy → «Cài…»."""
+        from app.services.qwen_asr import MISSING_MARK
+        from app.services.translate_router import UNAVAILABLE_MARK
+
+        if UNAVAILABLE_MARK in (message or ""):
+            return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
+        if MISSING_MARK in (message or ""):
+            return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
+        return None
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
@@ -782,11 +792,8 @@ class MainWindow(_Root):
             self.after(400, self._run_waiting)
             if error:
                 stopped = "huỷ" in str(error).lower()
-                from app.services.translate_router import UNAVAILABLE_MARK
-
                 self.progress.result("stopped" if stopped else "error", f"{name}: đã dừng" if stopped else f"{name} lỗi",
-                                     "" if stopped else friendly_error(str(error)),
-                                     self._choose_model_action() if UNAVAILABLE_MARK in str(error) else None)
+                                     "" if stopped else friendly_error(str(error)), self._error_action(str(error)))
                 self.log(f"✖ {name}: {error}")
                 if not stopped:
                     self.add_notification(f"{name} lỗi", str(error)[:300], "error")
@@ -859,12 +866,9 @@ class MainWindow(_Root):
         took = f"mất {_clock(elapsed)}"
         if fail:
             first = next(it for it in items if it.status == "Lỗi")
-            from app.services.translate_router import UNAVAILABLE_MARK
-
             self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
                                  f"{first.name}: {friendly_error(first.message, first)}",
-                                 self._choose_model_action() if UNAVAILABLE_MARK in (first.message or "")
-                                 else ("Thử lại", self.retry_failed, "refresh", True))
+                                 self._error_action(first.message) or ("Thử lại", self.retry_failed, "refresh", True))
         elif any(it.status == "Đã huỷ" for it in items):
             self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
         elif prep:

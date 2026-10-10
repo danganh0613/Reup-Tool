@@ -388,14 +388,14 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     if len(results) < total:
         if "theme" not in ckpt.extra:
             if log:
-                log("VideoLingo: tóm tắt nội dung + lấy thuật ngữ…")
+                log("Dịch: tóm tắt nội dung + lấy thuật ngữ…")
             summ = _ask(router, summary_prompt(src_lang, target, " ".join(lines)[:SUMMARY_CHARS], custom),
                         lambda d: isinstance(d.get("terms"), list) and all(
                             isinstance(t, dict) and {"src", "tgt", "note"} <= set(t) for t in d["terms"]))
             ckpt.extra = {"theme": str(summ.get("theme", "")), "terms": summ["terms"] + custom}
             ckpt.save(total)
             if log:
-                log(f"VideoLingo: {len(summ['terms'])} thuật ngữ — "
+                log(f"Dịch: {len(summ['terms'])} thuật ngữ — "
                     + ", ".join(f"{t['src']}={t['tgt']}" for t in summ["terms"][:8]))
     theme, terms = ckpt.extra.get("theme", ""), ckpt.extra.get("terms", custom)
 
@@ -443,7 +443,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         if on_progress:
             on_progress(len(results) / max(1, total))
         if log:
-            log(f"VideoLingo: dịch xong lô {ci + 1}/{len(chunks)} ({router.current.provider}/{router.current.model})")
+            log(f"Dịch: xong lô {ci + 1}/{len(chunks)} ({router.current.provider}/{router.current.model})")
 
     texts = [results.get(i, lines[i]) for i in range(total)]
     # 3) câu còn sót chữ Hán / Kana / Hangul → dịch lại riêng (của Edit Studio)
@@ -504,7 +504,7 @@ def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log:
             out[i] = new
             trimmed += 1
     if log:
-        log(f"VideoLingo: khớp thời lượng lồng tiếng — rút gọn {trimmed} câu đọc không kịp")
+        log(f"Dịch: khớp thời lượng lồng tiếng — rút gọn {trimmed} câu đọc không kịp")
     return out
 
 

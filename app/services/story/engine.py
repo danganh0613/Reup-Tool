@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
 
-from app.core.state import AppState, TTSConfig
+from app.core.state import TTS_PROVIDERS, AppState, TTSConfig, provider_or_default
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.gemini_client import GeminiClient
 from app.services.story import ai as story_ai
@@ -54,11 +54,12 @@ class StoryEngine:
         """TTSConfig cho một người nói: giọng riêng của nhân vật nếu có, không thì giọng kể mặc định."""
         base = replace(self.state.tts)
         cfg = self.state.story
-        base.tts_provider, base.tts_speed = cfg.provider, cfg.speed
+        base.tts_provider, base.tts_speed = provider_or_default(cfg.provider), cfg.speed
         base.set_voice(cfg.voice_id)
         ch = proj.character(speaker)
-        if ch and ch.voice_id:
-            base.tts_provider = ch.voice_provider or cfg.provider
+        prov = (ch.voice_provider or cfg.provider) if ch else ""
+        if ch and ch.voice_id and prov in TTS_PROVIDERS:     # nhân vật còn ghi engine đã gỡ (ElevenLabs…) → giọng kể
+            base.tts_provider = prov
             base.set_voice(ch.voice_id)
             base.tts_speed = ch.speed or cfg.speed
         return base
@@ -97,7 +98,7 @@ class StoryEngine:
 
         def engine_for(sc: Scene) -> tuple[TTSConfig, object, str]:
             cfg = self._tts_config_for(proj, sc.speaker)
-            key = f"{cfg.tts_provider}|{cfg.edge_voice}|{cfg.eleven_model}"
+            key = f"{cfg.tts_provider}|{cfg.edge_voice}"
             eng = engines.get(key)
             if eng is None:
                 eng = engines[key] = make_engine(cfg, settings)
@@ -122,7 +123,7 @@ class StoryEngine:
             cfg, eng, vid = engine_for(sc)
             jobs.append((eng, vid, cfg.tts_speed, cfg.tts_pitch, sc.narration.strip()))
         prefill_batches(jobs, settings, qc, log=log, check=lambda: _check(cancel, "tạo giọng"))
-        with ThreadPoolExecutor(max_workers=max(1, min(4, settings.tts_workers))) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             futs = [pool.submit(work, s) for s in targets]
             for fut in as_completed(futs):
                 sc, dst = fut.result()

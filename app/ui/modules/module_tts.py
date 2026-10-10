@@ -1,11 +1,10 @@
-"""Module TTS: thư viện voice đã tạo, dịch vụ/giọng đọc, đồng bộ mềm, dự án TTS."""
+"""Module TTS: thư viện voice đã tạo, giọng đọc (VieNeu / Edge), nhiều giọng theo người nói, khớp thời gian, dự án TTS."""
 
 from __future__ import annotations
 
 import json
 import logging
 import shutil
-import sys
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -14,7 +13,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import VOICE_DIR
-from app.core.state import ELEVEN_MODELS, SPEAKER_COUNTS, TTS_PROVIDERS, TTS_SOURCES
+from app.core.state import SPEAKER_COUNTS, TTS_LABELS, TTS_PROVIDERS, TTS_SOURCES
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list, voice_id_for
 from app.ui.modules.base_module import BaseModule
@@ -54,19 +53,23 @@ class TTSModule(BaseModule):
         self.enable.pack(fill="x", pady=(8, 0))
         hint(sec.body, "Bật để tạo giọng đọc AI hoặc dùng lại voice trộn vào video MP4.").pack(fill="x")
 
-        sec = Section(self, "Dịch vụ")
+        sec = Section(self, "Bộ đọc")
         sec.pack(fill="x", pady=4)
-        self.provider = OptionRow(sec.body, "Nhà cung cấp", TTS_PROVIDERS, on_change=self._provider_changed)
+        self.provider = OptionRow(sec.body, "Dùng", TTS_PROVIDERS, labels=TTS_LABELS, on_change=self._provider_changed,
+                                  info="VieNeu (khuyên dùng): giọng Việt chạy trên máy, miễn phí, không giới hạn lượt. "
+                                       "Edge TTS: cần mạng, nhiều thứ tiếng. Câu VieNeu đọc lỗi (đọc lại vẫn hỏng) "
+                                       "được đọc tạm bằng Edge thay vì để im lặng.")
         self.source = OptionRow(sec.body, "Đọc từ", TTS_SOURCES, on_change=s(cfg, "tts_source", preview=False))
         pack_rows(sec.body, [self.provider, self.source])
         ButtonRow(sec.body, [("Tải danh sách giọng", lambda: self._load_voices(force=True), None)]).pack(fill="x", pady=(4, 0))
         self.provider_hint = hint(sec.body, "")
         self.provider_hint.pack(fill="x")
         self.vieneu_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
-        ButtonRow(self.vieneu_frame, [("⬇ Cài VieNeu (local)", self._install_vieneu, T.primary_button()),
-                                      ("🎤 Thêm giọng clone…", self._add_clone_voice, None)]).pack(fill="x", pady=(2, 2))
-        hint(self.vieneu_frame, "VieNeu chạy trên CPU, không cần mạng sau khi tải model (~300MB). Giọng clone: file WAV "
-                                "5–15 giây, rõ tiếng, bỏ vào thư mục voices/.").pack(fill="x")
+        self.vieneu_install = ButtonRow(self.vieneu_frame, [("⬇ Cài VieNeu (một lần)", self._install_vieneu,
+                                                             T.primary_button())])
+        self.clone_row = ButtonRow(self.vieneu_frame, [("🎤 Thêm giọng clone…", self._add_clone_voice, None)])
+        self.clone_row.pack(fill="x", pady=(2, 2))
+        hint(self.vieneu_frame, "Giọng clone: file WAV 5–15 giây, rõ tiếng (bỏ vào thư mục voices/).").pack(fill="x")
 
         sec = Section(self, "Giọng đọc")
         sec.pack(fill="x", pady=4)
@@ -83,20 +86,6 @@ class TTSModule(BaseModule):
                                on_change=s(cfg, "tts_pitch", cast=int, preview=False))
         pack_rows(sec.body, [self.speed, self.pitch])
         hint(sec.body, "Âm lượng lồng tiếng chỉnh ở tab «Video».").pack(fill="x")
-        self.eleven_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
-        self.eleven_model = OptionRow(self.eleven_frame, "Model", ELEVEN_MODELS, on_change=s(cfg, "eleven_model", preview=False))
-        self.stability = SliderRow(self.eleven_frame, "Stability", from_=0, to=1, step=0.05, fmt="{:.2f}",
-                                   on_change=s(cfg, "eleven_stability", cast=float, preview=False))
-        self.similarity = SliderRow(self.eleven_frame, "Similarity", from_=0, to=1, step=0.05, fmt="{:.2f}",
-                                    on_change=s(cfg, "eleven_similarity", cast=float, preview=False))
-        self.style = SliderRow(self.eleven_frame, "Style", from_=0, to=1, step=0.05, fmt="{:.2f}",
-                               on_change=s(cfg, "eleven_style", cast=float, preview=False))
-        self.boost = SwitchRow(self.eleven_frame, "Speaker boost", on_change=s(cfg, "eleven_speaker_boost", preview=False))
-        pack_rows(self.eleven_frame, [self.eleven_model, self.stability, self.similarity, self.style, self.boost])
-        self.eleven_quota = StatusLabel(self.eleven_frame, "")
-        self.eleven_quota.pack(fill="x")
-        hint(self.eleven_frame, "Danh sách có cả giọng 🌐 do cộng đồng ElevenLabs chia sẻ (tiếng Việt, xếp theo lượt dùng) — "
-                                "lần đầu đọc máy tự thêm giọng vào tài khoản của bạn.").pack(fill="x")
 
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
@@ -117,18 +106,20 @@ class TTSModule(BaseModule):
         self.speakers = SpeakerPanel(self.multi_frame, self)
         self.speakers.pack(fill="x", pady=(4, 0))
 
-        sec = Section(self, "Đồng bộ mềm")
+        sec = Section(self, "Khớp thời gian", info="Giọng luôn khớp mềm với hình: câu được vào sớm một chút khi câu trước "
+                                                   "đã đọc xong, câu dài đọc nhanh dần (tối đa mức «Nén tối đa»), câu "
+                                                   "bị trễ đọc nhanh hơn để đuổi kịp hình. Câu vẫn tràn thì AI tự rút gọn "
+                                                   "bản dịch rồi đọc lại. Phụ đề dời theo đúng chỗ giọng đọc.")
         sec.pack(fill="x", pady=4)
-        self.soft = SwitchRow(sec.body, "Bật Soft Timing (dời câu vào khoảng lặng, nén ≤1.10×)", on_change=s(cfg, "soft_timing", preview=False))
-        self.natural = SwitchRow(sec.body, "Voice tự nhiên (không nén, phụ đề dời theo giọng)", on_change=s(cfg, "natural_sync", preview=False))
         # trần TỔNG (tốc độ đọc × nén cho vừa khung) — quá 1,25× giọng méo, nuốt chữ (câu còn tràn: AI rút gọn bản dịch)
-        self.max_tempo = SliderRow(sec.body, "Nén tối đa (tổng)", from_=1.0, to=1.25, step=0.05, fmt="{:.2f}", suffix="×",
-                                   on_change=s(cfg, "max_tempo", cast=float, preview=False))
+        self.max_tempo = SliderRow(sec.body, "Nén tối đa", from_=1.0, to=1.25, step=0.05, fmt="{:.2f}", suffix="×",
+                                   on_change=s(cfg, "max_tempo", cast=float, preview=False),
+                                   info="Câu dài được đọc nhanh hơn tối đa bao nhiêu lần (tính cả tốc độ đọc). Quá 1,25× "
+                                        "giọng dễ méo, nuốt chữ.")
         self.min_gap = SliderRow(sec.body, "Nghỉ giữa câu", from_=0, to=1, step=0.02, fmt="{:.2f}", suffix="s",
-                                 on_change=s(cfg, "min_gap", cast=float, preview=False))
-        pack_rows(sec.body, [self.soft, self.natural, self.max_tempo, self.min_gap])
-        hint(sec.body, "💡 Gợi ý:\n• Video dài (> 1 phút), kể chuyện, review: nên bật Soft Timing.\n"
-                       "• Video ngắn TikTok / Shorts: giữ nguyên (tắt Soft Timing, bật Voice tự nhiên).").pack(fill="x")
+                                 on_change=s(cfg, "min_gap", cast=float, preview=False),
+                                 info="Khoảng lặng tối thiểu giữa hai câu thoại.")
+        pack_rows(sec.body, [self.max_tempo, self.min_gap])
 
         sec = Section(self, "Dự án TTS")
         sec.pack(fill="x", pady=4)
@@ -146,18 +137,11 @@ class TTSModule(BaseModule):
             self.enable.set(cfg.enable_tts)
             self.provider.set(cfg.tts_provider)
             self.source.set(cfg.tts_source)
-            self.eleven_model.set(cfg.eleven_model)
-            self.stability.set(cfg.eleven_stability)
-            self.similarity.set(cfg.eleven_similarity)
-            self.style.set(cfg.eleven_style)
-            self.boost.set(cfg.eleven_speaker_boost)
             sp = f"{cfg.tts_speed:g}"
             if sp not in SPEED_OPTIONS:
                 sp = min(SPEED_OPTIONS, key=lambda v: abs(float(v) - cfg.tts_speed))
             self.speed.set(sp)
             self.pitch.set(cfg.tts_pitch)
-            self.soft.set(cfg.soft_timing)
-            self.natural.set(cfg.natural_sync)
             self.max_tempo.set(cfg.max_tempo)
             self.min_gap.set(cfg.min_gap)
             self.multi.set(cfg.multi_voice)
@@ -186,25 +170,19 @@ class TTSModule(BaseModule):
 
     def _layout_provider(self) -> None:
         p = self.state.tts.tts_provider
-        self.eleven_frame.pack_forget()
         self.vieneu_frame.pack_forget()
-        hints = {
-            "Edge TTS": "Edge TTS: miễn phí, cần mạng. Tiếng Việt: HoaiMy (nữ), NamMinh (nam) + các giọng 🌐 đa ngôn ngữ.",
-            "ElevenLabs": "ElevenLabs: cần API key trong Cài đặt (nhiều key sẽ tự xoay khi hết quota). Có thư viện giọng Việt cộng đồng.",
-            "Google Cloud TTS": "Google Chirp3-HD (30 giọng tiếng Việt chất lượng cao) / Neural2 / Wavenet: cần API key hoặc "
-                                "Service Account JSON trong Cài đặt.",
-            "FPT.AI": "FPT.AI: giọng Việt 3 miền (Bắc / Trung / Nam), cần key console.fpt.ai trong Cài đặt.",
-        }
         if p.startswith("VieNeu"):
-            hint_text = ("VieNeu (khuyên dùng): 25 giọng tiếng Việt chạy trên máy (Bắc / Trung / Nam), miễn phí, không "
-                         "giới hạn lượt, có clone giọng. Câu đọc lỗi tự đọc lại.")
-        else:
-            hint_text = hints.get(p, "")
-        self.provider_hint.configure(text=hint_text)
-        if p == "ElevenLabs":
-            self.eleven_frame.pack(fill="x", pady=(4, 0))
-        elif p.startswith("VieNeu"):
+            from app.services.tts.vieneu import is_installed
+
+            hint_text = "25 giọng Việt (Bắc / Trung / Nam), có clone giọng. Câu đọc lỗi tự đọc lại."
             self.vieneu_frame.pack(fill="x", pady=(4, 0))
+            if is_installed():                    # đã cài → chỉ còn nút thêm giọng clone
+                self.vieneu_install.pack_forget()
+            elif not self.vieneu_install.winfo_ismapped():
+                self.vieneu_install.pack(fill="x", pady=(2, 0), before=self.clone_row)
+        else:
+            hint_text = "Tiếng Việt: HoaiMy (nữ), NamMinh (nam) + các giọng 🌐 đa ngôn ngữ."
+        self.provider_hint.configure(text=hint_text)
         if not uses_language_list(p):
             self.language.pack_forget()
         else:
@@ -251,8 +229,6 @@ class TTSModule(BaseModule):
             self._voices_sig = sig
             self._fill_voice_lists()
             self.voice_status.info(f"{len(self._voices)} giọng khả dụng.")
-            if cfg.tts_provider == "ElevenLabs":
-                self._load_quota()
 
         self.window.run_bg(engine.list_voices, done)
 
@@ -270,13 +246,13 @@ class TTSModule(BaseModule):
                 for v in self._voices:
                     locales.setdefault(v.locale, None)
                 loc_list = list(locales) or ["vi-VN"]
-                want = cfg.edge_language if p == "Edge TTS" else cfg.google_language
+                want = cfg.edge_language
                 if want not in loc_list:
                     want = loc_list[0]
                 self.language.set_values(loc_list, keep=False)
                 self.language.set(want)
                 subset = [v for v in self._voices if v.locale == want]
-                wanted = cfg.edge_voice if p == "Edge TTS" else cfg.google_voice
+                wanted = cfg.edge_voice
             if q:
                 subset = [v for v in subset if q in v.label.lower() or q in v.id.lower()]
             self._filtered = subset
@@ -292,24 +268,14 @@ class TTSModule(BaseModule):
 
     def _store_voice(self, v: Voice, *, auto: bool = False) -> None:
         cfg = self.state.tts
-        if cfg.tts_provider == "ElevenLabs":
-            cfg.eleven_voice_id, cfg.eleven_voice_name = v.id, v.name
-        elif cfg.tts_provider.startswith("VieNeu"):
+        if cfg.tts_provider.startswith("VieNeu"):
             cfg.vieneu_voice = v.id
-        elif cfg.tts_provider.startswith("FPT"):
-            cfg.fpt_voice = v.id
-        elif cfg.tts_provider == "Google Cloud TTS":
-            cfg.google_voice, cfg.google_language = v.id, v.locale
         else:
             cfg.edge_voice, cfg.edge_language = v.id, v.locale
         self.state.config_changed("tts", auto=auto)
 
     def _language_changed(self, loc: str) -> None:
-        cfg = self.state.tts
-        if cfg.tts_provider == "Google Cloud TTS":
-            cfg.google_language = loc
-        else:
-            cfg.edge_language = loc
+        self.state.tts.edge_language = loc
         self._fill_voice_lists()
         self.state.config_changed("tts")
 
@@ -317,19 +283,6 @@ class TTSModule(BaseModule):
         v = self._voice_by_label.get(label)
         if v:
             self._store_voice(v)
-
-    def _load_quota(self) -> None:
-        engine = self._engine
-        if not hasattr(engine, "subscription"):
-            return
-
-        def done(result, error):
-            if error or not result:
-                self.eleven_quota.info("")
-                return
-            self.eleven_quota.info(f"Ký tự đã dùng: {result['used']:,}/{result['limit']:,} ({result['tier']})")
-
-        self.window.run_bg(engine.subscription, done)
 
     # ── Nhiều giọng ───────────────────────────────────────────────────────
     def _layout_multi(self) -> None:
@@ -352,7 +305,7 @@ class TTSModule(BaseModule):
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
         if not item.srt_path or not Path(item.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào mục STT bấm «Nhận diện ngay» "
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào mục STT bấm «Tạo phụ đề cho video đang chọn» "
                                                "(hoặc chọn file SRT) trước — máy dựa vào từng câu phụ đề để biết ai nói.")
             return
         if not onnx_available():
@@ -393,25 +346,20 @@ class TTSModule(BaseModule):
 
     # ── VieNeu ────────────────────────────────────────────────────────────
     def _install_vieneu(self) -> None:
-        from app.services.tts.vieneu import install_vieneu, is_installed
+        from app.ui.local_ai import install_vieneu
 
-        if is_installed():
-            self.voice_status.ok("VieNeu đã được cài.")
-            self._load_voices(force=True)
-            return
-        if getattr(sys, "frozen", False):
-            self.voice_status.error("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat / run.command).")
-            return
-        self.voice_status.warn("Đang cài VieNeu (vài phút)… xem log")
-
-        def done(result, error):
-            if error or not result:
+        def done(ok: bool, error: Exception | None) -> None:
+            if not self.winfo_exists():
+                return
+            if not ok:
                 self.voice_status.error(f"Cài VieNeu thất bại: {error or 'xem log'}")
-            else:
-                self.voice_status.ok("Đã cài VieNeu — đang nạp giọng…")
-                self._load_voices(force=True)
+                return
+            self.voice_status.ok("VieNeu đã cài — đang nạp giọng…")
+            self._layout_provider()
+            self._load_voices(force=True)
 
-        self.window.run_bg(lambda: install_vieneu(self.window.log_bg), done)
+        if install_vieneu(self.window, done):
+            self.voice_status.warn("Đang cài VieNeu (vài phút)… xem log")
 
     def _add_clone_voice(self) -> None:
         from app.services.tts.vieneu import CLONE_DIR

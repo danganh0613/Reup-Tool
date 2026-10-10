@@ -10,18 +10,38 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.ui.widgets.ui import Popover, Select, button
+from app.ui.widgets.ui import Popover, Select, Tooltip, button
+
+
+def info_icon(master, text: str) -> ctk.CTkLabel:
+    """Dấu «ⓘ» nhỏ cạnh nhãn: rê chuột vào xem giải thích dài — nhãn giữ ngắn gọn."""
+    lbl = ctk.CTkLabel(master, text="ⓘ", font=T.font(13), text_color=T.TEXT_MUTED, width=16, cursor="hand2")
+    Tooltip(lbl, text, delay=150, wrap=60)
+    return lbl
+
+
+def row_label(master, text: str, info: str = "", width: int = 120):
+    """Nhãn cột trái của một hàng (rộng cố định để các hàng thẳng cột); ``info`` → thêm ⓘ ngay sau nhãn."""
+    if not info:
+        return ctk.CTkLabel(master, text=text, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=width)
+    cell = ctk.CTkFrame(master, fg_color="transparent", width=width, height=30)
+    cell.pack_propagate(False)
+    ctk.CTkLabel(cell, text=text, font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+    info_icon(cell, info).pack(side="left", padx=(3, 0))
+    return cell
 
 
 class Section(ctk.CTkFrame):
     """Khối có tiêu đề; nội dung đặt vào ``self.body``."""
 
-    def __init__(self, master, title: str, *, subtitle: str = "") -> None:
+    def __init__(self, master, title: str, *, subtitle: str = "", info: str = "") -> None:
         super().__init__(master, fg_color=T.BG_CARD, corner_radius=T.RADIUS_CARD, border_width=0)
         self.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
         ctk.CTkLabel(head, text=title, font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        if info:
+            info_icon(head, info).pack(side="left", padx=(4, 0))
         if subtitle:
             ctk.CTkLabel(head, text=subtitle, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(
                 side="left", padx=(8, 0))
@@ -33,14 +53,13 @@ class Section(ctk.CTkFrame):
 class SliderRow(ctk.CTkFrame):
     def __init__(self, master, label: str, *, from_: float, to: float, step: float = 1, value: float = 0,
                  fmt: str = "{:.0f}", suffix: str = "", on_change: Callable[[float], None] | None = None,
-                 on_release: Callable[[float], None] | None = None) -> None:
+                 on_release: Callable[[float], None] | None = None, info: str = "") -> None:
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
         self.fmt, self.suffix, self.step = fmt, suffix, step
         self.on_change, self.on_release = on_change, on_release
         self._value = value
-        ctk.CTkLabel(self, text=label, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
-            row=0, column=0, sticky="w")
+        row_label(self, label, info).grid(row=0, column=0, sticky="w")
         steps = int(round((to - from_) / step)) if step else None
         self.slider = ctk.CTkSlider(self, from_=from_, to=to, number_of_steps=steps, command=self._slid, height=16)
         self.slider.grid(row=0, column=1, sticky="ew", padx=6)
@@ -95,12 +114,11 @@ class SliderRow(ctk.CTkFrame):
 class OptionRow(ctk.CTkFrame):
     def __init__(self, master, label: str, values: list[str], *, value: str | None = None,
                  on_change: Callable[[str], None] | None = None, width: int = 200,
-                 labels: dict[str, str] | None = None) -> None:
+                 labels: dict[str, str] | None = None, info: str = "") -> None:
         """``labels``: tên hiển thị cho từng giá trị (giá trị lưu vẫn là mã, vd. "vi" → "Tiếng Việt")."""
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(self, text=label, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", width=120).grid(
-            row=0, column=0, sticky="w")
+        row_label(self, label, info).grid(row=0, column=0, sticky="w")
         self.menu = Select(self, values or [""], value=value, command=on_change, width=width, height=34, labels=labels)
         self.var = self.menu.var
         self.menu.grid(row=0, column=1, sticky="ew")
@@ -150,13 +168,15 @@ class ComboRow(ctk.CTkFrame):
 
 class SwitchRow(ctk.CTkFrame):
     def __init__(self, master, label: str, *, value: bool = False, on_change: Callable[[bool], None] | None = None,
-                 hint: str = "") -> None:
+                 hint: str = "", info: str = "") -> None:
         super().__init__(master, fg_color="transparent")
         self.var = tk.BooleanVar(value=value)
         self.on_change = on_change
         self.switch = ctk.CTkSwitch(self, text=label, variable=self.var, command=self._toggled, font=T.font(12),
                                     onvalue=True, offvalue=False)
         self.switch.pack(side="left")
+        if info:
+            info_icon(self, info).pack(side="left", padx=(4, 0))
         if hint:
             ctk.CTkLabel(self, text=hint, font=T.font(11), text_color=T.TEXT_MUTED).pack(side="left", padx=(8, 0))
 

@@ -494,7 +494,7 @@ def suggest_voices(speakers: list[SpeakerInfo], voices: list, *, provider: str, 
     out = [dict(sv) for sv in (existing or []) if isinstance(sv, dict) and sv.get("name")]
     have = {sv["name"] for sv in out if sv.get("voice_id")}
     lang = (locale or "").split("-")[0].lower()
-    if provider in ("Edge TTS", "Google Cloud TTS") and locale:
+    if provider == "Edge TTS" and locale:
         pool = [v for v in voices if v.locale == locale] or [v for v in voices if v.locale.lower().startswith(lang)]
     else:
         pool = list(voices)

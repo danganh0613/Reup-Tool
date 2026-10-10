@@ -82,7 +82,7 @@ def load_model(precision: str = "int8", log: Callable[[str], None] | None = None
             return _model
         if not is_installed():
             if getattr(sys, "frozen", False):
-                raise RuntimeError("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS / ElevenLabs / Google, hoặc chạy bản mã nguồn (run.bat / run.command).")
+                raise RuntimeError("Bản đóng gói (.exe / .app) không có VieNeu — chọn Edge TTS, hoặc chạy bản mã nguồn (run.bat / run.command).")
             raise RuntimeError("Chưa cài VieNeu — bấm “Cài VieNeu” trong module Lồng tiếng.")
         os.environ.setdefault("HF_HOME", str(MODELS_DIR / "hf"))
         from vieneu import Vieneu

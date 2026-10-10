@@ -9,7 +9,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.widgets.ui import button
-from app.core.state import STORY_RATIOS, STORY_RESOLUTIONS
+from app.core.state import STORY_RATIOS, STORY_RESOLUTIONS, provider_or_default
 from app.services.gemini_models import image_models, text_models, video_models
 from app.services.story.engine import StoryEngine
 from app.services.story.project import StoryProject
@@ -200,7 +200,7 @@ class StoryModule(BaseModule):
             if c.get("master_prompt_custom"):
                 cfg.master_prompt_custom = c["master_prompt_custom"]
             if c.get("voice_id"):
-                cfg.provider = c.get("voice_provider", cfg.provider)
+                cfg.provider = provider_or_default(c.get("voice_provider", cfg.provider))
                 cfg.voice_id = c["voice_id"]
                 cfg.voice_language = "-".join(c["voice_id"].split("-")[:2]) if c["voice_id"].count("-") >= 2 else cfg.voice_language
             if c.get("voice_speed"):

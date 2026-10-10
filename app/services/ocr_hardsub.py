@@ -148,7 +148,7 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
     info = ffmpeg.probe(item.path)
     reg = hardsub.ensure_region(item, ffmpeg, duration, log=log)
     if not reg:
-        raise RuntimeError("Không thấy phụ đề in sẵn trên video — chọn SenseVoice / Whisper để nhận diện giọng nói.")
+        raise RuntimeError("Không thấy phụ đề in sẵn trên video — tab STT chọn «Giọng nói trong video» để nhận diện lời nói.")
     W, H = info.width, info.height
     pad = 0.01                                          # nới dải chữ một chút trên / dưới
     y0 = max(0, int((reg["y"] - pad) * H))

@@ -196,9 +196,10 @@ class Tooltip:
     DELAY = 450
     _open: Tooltip | None = None          # chỉ một tooltip hiện tại một thời điểm
 
-    def __init__(self, widget, text: str, *, delay: int | None = None) -> None:
+    def __init__(self, widget, text: str, *, delay: int | None = None, wrap: int = 0) -> None:
         self.w, self.text = widget, text
         self.delay = self.DELAY if delay is None else delay
+        self.wrap = wrap                  # > 0: tự xuống dòng ~``wrap`` ký tự, căn trái (giải thích dài của nút ⓘ)
         self._after: str | None = None
         self._hide_after: str | None = None
         self._tip: tk.Toplevel | None = None
@@ -266,7 +267,12 @@ class Tooltip:
             key = T.BG
         font = tkfont.Font(family=T.UI_FONT, size=-round(12 * k))
         pad_x, pad_y, r = round(10 * k), round(6 * k), round(6 * k)
-        lines = self.text.split("\n")
+        text = self.text
+        if self.wrap:
+            import textwrap
+
+            text = "\n".join(textwrap.fill(p, self.wrap) if p else "" for p in text.split("\n"))
+        lines = text.split("\n")
         tw = max(font.measure(ln) for ln in lines) + 2 * pad_x
         th = font.metrics("linespace") * len(lines) + 2 * pad_y
         cv = tk.Canvas(tip, width=tw, height=th, bg=key, highlightthickness=0, bd=0)
@@ -276,7 +282,10 @@ class Tooltip:
         cv.create_rectangle(0, r, tw, th - r, fill=bg, outline="")
         for ox, oy in ((0, 0), (tw - 2 * r, 0), (0, th - 2 * r), (tw - 2 * r, th - 2 * r)):
             cv.create_oval(ox, oy, ox + 2 * r, oy + 2 * r, fill=bg, outline="")
-        cv.create_text(tw / 2, th / 2, text=self.text, fill=fg, font=font, justify="center")
+        if self.wrap:
+            cv.create_text(pad_x, th / 2, text=text, fill=fg, font=font, justify="left", anchor="w")
+        else:
+            cv.create_text(tw / 2, th / 2, text=text, fill=fg, font=font, justify="center")
         # đặt dưới widget, căn giữa; hết chỗ thì đặt phía trên; kẹp trong màn hình
         x = self.w.winfo_rootx() + (self.w.winfo_width() - tw) // 2
         y = self.w.winfo_rooty() + self.w.winfo_height() + round(6 * k)

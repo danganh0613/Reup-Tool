@@ -32,6 +32,8 @@ PACKAGES = ("qwen-asr==0.0.6", "transformers>=4.57.6,<5", "spacy>=3.8,<3.9", "si
 ZH_SPACY = "https://github.com/explosion/spacy-models/releases/download/zh_core_web_md-3.8.0/zh_core_web_md-3.8.0-py3-none-any.whl"
 INSTALL_GB = 11                          # ~6 GB môi trường (torch CUDA) + ~5,5 GB model lần đầu nhận diện
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+#: dấu ở đầu câu lỗi «chưa cài» — giao diện thấy dấu này thì hiện nút «Cài…» (mở Cài đặt › AI trên máy)
+MISSING_MARK = "⟦cài-ai-trên-máy⟧"
 
 
 def env_python() -> Path:
@@ -135,7 +137,8 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, language: str = "auto"
     from app.services.whisper_stt import STTResult
 
     if not is_installed():
-        raise RuntimeError("Chưa cài Qwen3-ASR — tab STT → «⬇ Cài Qwen3-ASR» (một lần, ~11 GB), hoặc chọn bộ nhận diện khác.")
+        raise RuntimeError(f"{MISSING_MARK} Chưa cài bộ nghe lời thoại (Qwen3-ASR) — Cài đặt › AI trên máy › «Cài» "
+                           f"(một lần, ~{INSTALL_GB} GB), hoặc chọn «Chữ in sẵn trên video» nếu video có phụ đề in sẵn.")
     work_dir.mkdir(parents=True, exist_ok=True)
     wav, out = work_dir / "qwen_audio.wav", work_dir / "qwen_asr.json"
     if log:

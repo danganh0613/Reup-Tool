@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = PRESETS_DIR / "templates"
 NO_TEMPLATE = "— Cấu hình tự chỉnh —"
-#: thông số máy / nhận diện giọng: mẫu không đè (model Whisper, GPU… mỗi máy một khác)
+#: thông số máy / cách nhận diện lời: mẫu không đè (GPU, bộ nhận diện đã cài… mỗi máy một khác)
 KEEP_FIELDS: dict[str, tuple[str, ...]] = {
     **MACHINE_FIELDS,
-    "subtitle": ("stt_model", "stt_device", "stt_engine", "weak_pc"),
+    "subtitle": ("stt_engine",),
 }
 
 
@@ -71,8 +71,8 @@ BUILTIN: list[Template] = [
                          "sub_stroke_width": 3.0, "sub_stroke_color": "#000000", "sub_shadow": 1.0,
                          "sub_bg_enable": False, "use_box": True, "box_x": 0.06, "box_y": 0.70, "box_w": 0.88,
                          "box_h": 0.06, "follow_hardsub": True, "text_effect": TEXT_EFFECTS[1], "bg_style": "Không nền", "karaoke": False},
-            "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "soft_timing": True, "natural_sync": False,
-                    "tts_speed": 1.1, "max_tempo": 1.4, "multi_voice": True, "speaker_count": "Tự động"},
+            "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "tts_speed": 1.1, "max_tempo": 1.4,
+                    "multi_voice": True, "speaker_count": "Tự động"},
             "blur": {"auto_detect": True},             # tự che phụ đề tiếng Trung in sẵn
             "trim": {"enable": False, "head": "0", "tail": "0", "segments": []},
             "color": {**_COLOR_OFF, "enable": True, "contrast": 1.05, "saturation": 1.1, "sharpen": 0.3,
@@ -98,8 +98,8 @@ BUILTIN: list[Template] = [
                          "box_x": 0.08, "box_y": 0.85, "box_w": 0.84, "box_h": 0.08, "follow_hardsub": True,
                          "text_effect": TEXT_EFFECTS[0],
                          "bg_style": "Hộp mờ bo góc", "karaoke": False},
-            "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "soft_timing": True, "natural_sync": False,
-                    "tts_speed": 1.0, "max_tempo": 1.35, "multi_voice": True, "speaker_count": "Tự động"},
+            "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "tts_speed": 1.0, "max_tempo": 1.35,
+                    "multi_voice": True, "speaker_count": "Tự động"},
             "blur": {"auto_detect": True},
             "trim": {"enable": False, "head": "0", "tail": "0", "segments": []},
             "color": dict(_COLOR_OFF),
@@ -240,8 +240,7 @@ def voice_summary(tts: dict) -> str:
         return "Lồng tiếng: tắt"
     try:
         cfg = TTSConfig(**{k: v for k, v in tts.items() if k in TTSConfig.__dataclass_fields__})
-        main = short(cfg.eleven_voice_name if cfg.tts_provider == "ElevenLabs" and cfg.eleven_voice_name
-                     else voice_id_for(cfg))
+        main = short(voice_id_for(cfg))
         prov = cfg.tts_provider.split(" (")[0]
     except Exception:
         main, prov = "—", ""

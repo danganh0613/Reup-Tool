@@ -119,7 +119,7 @@ class SubtitleModule(BaseModule):
                                    on_change=lambda v: self.set_value(cfg, "secondary_scale", v / 100, preview=False),
                                    on_release=rel)
         pack_rows(sec.body, [self.mode, self.delay, self.sec_scale])
-        hint(sec.body, "Nhận diện / chọn / dịch phụ đề ở tab STT và SRT.").pack(fill="x")
+        hint(sec.body, "Nhận diện phụ đề ở tab STT; chọn file / dịch ở tab «Lời thoại».").pack(fill="x")
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:
