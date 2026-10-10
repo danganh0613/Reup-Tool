@@ -87,10 +87,41 @@ def budget_for(duration: float, target: str) -> int:
     return max(10, int(round(duration * _CHARS_PER_SEC.get(LANG_CODE.get(target, ""), _DEFAULT_CPS))))
 
 
+#: dấu trong câu lỗi «model chính hết lượt / quá tải» — giao diện thấy dấu này thì hiện nút «Chọn model…»
+UNAVAILABLE_MARK = "⟦chọn-model⟧"
+#: giao diện đặt: gọi (model, câu báo) khi model chính không dùng được — hiện hộp báo + nút mở chỗ chọn model
+on_unavailable: Callable[[str, str], None] | None = None
+
+
+class ModelUnavailable(RuntimeError):
+    """Model đang chọn hết lượt hôm nay / quá tải lâu và KHÔNG được tự đổi model (Cài đặt «tự đổi model» tắt):
+    dừng, báo người dùng chọn model khác."""
+
+    def __init__(self, provider: str, model: str, daily: bool) -> None:
+        self.model, self.daily = model, daily
+        if daily:
+            why = (f"{provider} {model} đã hết lượt hôm nay (gói miễn phí). Chọn model khác ở ☰ › Cài đặt › Dịch thuật, "
+                   "hoặc đợi hạn mức đặt lại (nửa đêm giờ Mỹ ≈ 14–15 giờ chiều).")
+        else:
+            why = f"{provider} {model} đang quá tải. Đợi vài phút rồi Thử lại, hoặc chọn model khác ở ☰ › Cài đặt › Dịch thuật."
+        self.message = why
+        super().__init__(f"{why} {UNAVAILABLE_MARK}")
+
+
+def notify_unavailable(exc: ModelUnavailable) -> None:
+    if on_unavailable is not None:
+        try:
+            on_unavailable(exc.model, exc.message)
+        except Exception:                              # noqa: BLE001 — báo lỗi không được làm hỏng việc đang chạy
+            logger.debug("on_unavailable lỗi", exc_info=True)
+
+
 class QuotaError(RuntimeError):
-    def __init__(self, msg: str, retry_after: float | None = None) -> None:
+    def __init__(self, msg: str, retry_after: float | None = None, status: int = 0, per_day: bool = False) -> None:
         super().__init__(msg)
         self.retry_after = retry_after          # máy chủ bảo «thử lại sau N giây» (giới hạn theo phút)
+        self.status = status
+        self.per_day = per_day                  # hết lượt NGÀY (quotaId …PerDay… — có khi nằm sau 300 ký tự đầu)
 
 
 def _quota_error(r: requests.Response, name: str) -> QuotaError:
@@ -103,7 +134,8 @@ def _quota_error(r: requests.Response, name: str) -> QuotaError:
         except ValueError:
             m = re.search(r'try again in ([\d.]+)s|"retryDelay":\s*"([\d.]+)s"', r.text)
             wait = float(m.group(1) or m.group(2)) if m else None
-    return QuotaError(f"{name} {r.status_code}: {r.text[:200]}", wait)
+    return QuotaError(f"{name} {r.status_code}: {r.text[:200]}", wait, r.status_code,
+                      r.status_code == 429 and "PerDay" in r.text)
 
 
 @dataclass
@@ -130,7 +162,16 @@ LAST_RESORT = {"Groq": ["openai/gpt-oss-120b"]}
 
 
 def build_candidates(settings: Settings) -> list[Candidate]:
-    """Danh sách (provider, key, model) theo thứ tự ưu tiên: mọi key của model chính → model dự phòng → nhà cung cấp khác."""
+    """Danh sách (provider, key, model) theo thứ tự ưu tiên: mọi key của model chính → model dự phòng → nhà cung cấp khác.
+    Tắt «tự đổi model» (mặc định): chỉ model đang chọn — đổi model giữa chừng làm bản dịch kém hay, lệch giọng văn."""
+    if not settings.translate_fallback:
+        prov = settings.translate_provider
+        model = settings.translate_model or DEFAULT_MODELS.get(prov, "")
+        if prov == "Groq":
+            model = groq_models.migrate_model(model)
+        keys = (settings.gemini_keys() if prov == "Gemini" else _keys(settings.groq_api_key) if prov == "Groq"
+                else _keys(settings.deepseek_api_key) if prov == "DeepSeek" else _keys(settings.openai_api_key))
+        return [Candidate(prov, k, model) for k in keys]
     order = [settings.translate_provider] + [p for p in ("Gemini", "Groq", "DeepSeek", "OpenAI")
                                              if p != settings.translate_provider]
     out: list[Candidate] = []
@@ -198,6 +239,9 @@ class Router:
         self.cands = build_candidates(settings)
         self.idx = 0
         self.log = log
+        # không tự đổi model: quá tải thì kiên nhẫn hơn (chờ 10 → 50 s, 5 lần) trước khi dừng báo người dùng
+        self.strict = not settings.translate_fallback
+        self.tries = 5 if self.strict else 3
         if not self.cands:
             raise RuntimeError("Chưa có API key dịch nào (Cài đặt → API Dịch Thuật).")
 
@@ -208,6 +252,7 @@ class Router:
     def call(self, prompt: str, max_tokens: int | None = None) -> str:
         tried = 0
         last = ""
+        daily = None                            # lần hỏng cuối: True = hết lượt ngày · False = quá tải · None = lỗi khác
         waited = 0.0                            # giây đã chờ vì giới hạn mỗi phút — chung cả lượt gọi, mọi key / model
         down: set[tuple[str, str]] = set()      # model đã hỏng trong lượt gọi này
         while tried < len(self.cands):
@@ -217,11 +262,13 @@ class Router:
             # quá tải / hết giờ / model bị gỡ / chờ hết ngân sách giới hạn phút: lỗi theo MODEL (key cùng tài khoản dùng
             # chung hạn mức) → đổi key không giúp gì, sang model kế
             model_down = False
-            while attempt < 3:
+            while attempt < self.tries:
                 try:
                     return fn(c, prompt, max_tokens=max_tokens)
                 except QuotaError as exc:
                     last = str(exc)
+                    if exc.status == 429:               # 401/403 = key hỏng → không phải hết lượt
+                        daily = exc.per_day or exc.retry_after is None or exc.retry_after > 60
                     if exc.retry_after is not None and exc.retry_after <= 60 and waited < 150:
                         # chạm giới hạn token/phút → chờ cho đầy lại rồi thử lại CHÍNH key/model này: giữ model tốt
                         # thay vì rơi xuống model kém hơn; key khác cùng tài khoản dùng chung hạn mức (đo: 2 key kế
@@ -239,8 +286,9 @@ class Router:
                 except requests.RequestException as exc:
                     last = str(exc)
                     _wait(2.0 * (attempt + 1))
-                    if attempt == 2:
+                    if attempt == self.tries - 1:
                         model_down = True
+                        daily = False
                         if self.log:
                             self.log(f"⚠ {c.provider} lỗi mạng: {exc}")
                     attempt += 1
@@ -252,13 +300,16 @@ class Router:
                         if self.log:
                             self.log(f"⚠ {c.provider}: model {c.model} không còn khả dụng → đổi model")
                         break
-                    if attempt == 2:
+                    if attempt == self.tries - 1:
                         model_down = busy
+                        daily = False if busy else None
                         if self.log:
                             self.log(f"⚠ {c.provider} {c.model}: {str(exc)[:110]}")
                         break
-                    # máy chủ quá tải → chờ lâu hơn (4 s, 8 s) rồi thử lại; lỗi khác chờ ngắn
-                    _wait(4.0 * (attempt + 1) if busy else 1.5)
+                    # máy chủ quá tải → chờ lâu hơn rồi thử lại (4 s, 8 s; không tự đổi model: 10 → 40 s); lỗi khác chờ ngắn
+                    if busy and self.log and self.strict:
+                        self.log(f"⏳ {c.provider} {c.model} đang quá tải → chờ {10 * (attempt + 1)}s rồi thử lại")
+                    _wait((10.0 if self.strict else 4.0) * (attempt + 1) if busy else 1.5)
                     attempt += 1
             nxt = (self.idx + 1) % len(self.cands)
             if model_down:
@@ -275,6 +326,12 @@ class Router:
                 self.log(f"→ Thử tiếp: {n.provider} · {n.model}")
             self.idx = nxt
             tried += 1
+        if self.strict and daily is not None and self.cands:
+            exc = ModelUnavailable(self.cands[0].provider, self.cands[0].model, daily)
+            if self.log:
+                self.log(f"✖ {exc.message}")
+            notify_unavailable(exc)
+            raise exc
         raise RuntimeError(f"Tất cả API key/model đều thất bại. Lỗi cuối: {last[:200]}")
 
 

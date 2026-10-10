@@ -88,7 +88,7 @@ class Pipeline:
             res = gemini_transcribe(src, self.ffmpeg, api_key=self.state.settings.gemini_keys(), model=self.state.settings.translate_model
                                     if self.state.settings.translate_provider == "Gemini" else "gemini-flash-latest",
                                     language=cfg.stt_language, work_dir=self.job_dir(item), on_progress=progress,
-                                    log=log, cancel=cancel)
+                                    log=log, cancel=cancel, fallback=self.state.settings.translate_fallback)
         elif cfg.stt_engine.startswith("SenseVoice"):
             from app.services.asr_funasr import transcribe as sensevoice_transcribe
 

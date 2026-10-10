@@ -105,6 +105,18 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(foot, text="Đóng", width=110, height=36, command=self.destroy, **T.secondary_button()).pack(side="right")
         button(foot, "Lưu tất cả", icon_name="save", variant="primary", command=self._save).pack(side="right", padx=8)
         self._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn" if tab == "shortcuts" else "⚙ Cài Đặt Hệ Thống & API")
+        if tab == "model":
+            self.after(150, self.focus_model)
+
+    def focus_model(self) -> None:
+        """Từ nút «Chọn model…» (model đang chọn hết lượt / quá tải): chỉ đúng chỗ đổi model dịch."""
+        self._switch_tab("⚙ Cài Đặt Hệ Thống & API")
+        self.models_status.configure(text="⬆ Model đang chọn hết lượt / quá tải — chọn model khác ở ô «Model» rồi bấm «Lưu tất cả».",
+                                     text_color=T.WARNING)
+        try:
+            self.tr_model.focus_set()
+        except Exception:                          # noqa: BLE001 — chỉ là đưa con trỏ tới, không quan trọng
+            pass
 
     def _switch_tab(self, name: str) -> None:
         guide = "Phím" in name
@@ -224,6 +236,10 @@ class SettingsWindow(ctk.CTkToplevel):
         self.models_btn.pack(side="left", padx=(6, 0))
         self.models_status = hint(b, "")
         self.models_status.pack(fill="x")
+        self.tr_fallback = SwitchRow(b, "Hết lượt / quá tải → tự đổi sang model dự phòng", value=st.translate_fallback)
+        self.tr_fallback.pack(fill="x", pady=3)
+        hint(b, "Nên để TẮT: model đang chọn hết lượt thì máy dừng và báo để bạn tự chọn model khác — đổi model giữa chừng "
+                "làm bản dịch kém hay. Bật: tự chuyển sang model dự phòng (Flash Lite, Groq…) cho xong việc.").pack(fill="x")
         self.tr_review = SwitchRow(b, "Dịch xong, AI rà soát & sửa bản dịch", value=st.translate_review)
         self.tr_review.pack(fill="x", pady=3)
         hint(b, "Thêm 1 lượt gọi mỗi video: AI đọc lại cả bản dịch, sửa câu dịch sai nghĩa / cứng / lệch xưng hô / dài quá "
@@ -521,6 +537,7 @@ class SettingsWindow(ctk.CTkToplevel):
         st.tts_auto_shorten = self.auto_shorten.get()
         st.tts_batch = self.tts_batch.get()
         st.translate_review = self.tr_review.get()
+        st.translate_fallback = self.tr_fallback.get()
         st.loudness_target = float(self.loudness.get())
         st.theme = T.THEME_NAME
         st.show_waveform = self.waveform.get()

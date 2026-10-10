@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
 from app.services.ffmpeg import FFmpeg, RenderCancelled
-from app.services.gemini_client import GeminiBusy, GeminiClient, GeminiModelGone
+from app.services.gemini_client import GeminiBusy, GeminiClient, GeminiError, GeminiModelGone
 from app.services.srt_utils import Cue, wrap_lines
 from app.services.whisper_stt import STTResult
 
@@ -83,11 +82,13 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
                language: str = "auto", work_dir: Path | None = None,
                on_progress: Callable[[float], None] | None = None,
                log: Callable[[str], None] | None = None,
-               cancel: threading.Event | None = None) -> STTResult:
+               cancel: threading.Event | None = None, fallback: bool = False) -> STTResult:
+    """``fallback``: model quá tải → thử model dự phòng; tắt (mặc định, Cài đặt «tự đổi model») → dừng, báo người dùng."""
     client = GeminiClient(api_key)
     from app.services.gemini_models import DEFAULT_TEXT
+    from app.services.translate_router import ModelUnavailable, _load_json, notify_unavailable
 
-    models = [model] + [m for m in DEFAULT_TEXT if m != model and "pro" not in m][:2]
+    models = [model] + ([m for m in DEFAULT_TEXT if m != model and "pro" not in m][:2] if fallback else [])
     work_dir = work_dir or Path(video_path).parent
     work_dir.mkdir(parents=True, exist_ok=True)
     duration = ffmpeg.duration_of(video_path)
@@ -121,25 +122,40 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, api_key: str | list[st
                                                     {"inlineData": {"mimeType": "audio/mp3", "data": audio_b64}}]}],
             "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json", "maxOutputTokens": 65536},
         }
-        data = None
-        for m in models:                    # máy chủ quá tải / model bị gỡ → thử model dự phòng, không bỏ cả video
+        parsed = None
+        for attempt in range(3):            # model trả JSON hỏng (thiếu dấu phẩy, bị cắt…) → gọi lại, không bỏ cả video
+            data = None
+            for m in models:                # máy chủ quá tải / model bị gỡ → thử model dự phòng (nếu cho phép)
+                try:
+                    data = client._post(f"models/{m}:generateContent", body, timeout=600)
+                    break
+                except (GeminiBusy, GeminiModelGone, GeminiError) as exc:
+                    quota = "(429)" in str(exc)
+                    if m == models[-1]:
+                        if fallback or not (quota or isinstance(exc, GeminiBusy)):
+                            raise
+                        err = ModelUnavailable("Gemini", model, daily=quota)
+                        if log:
+                            log(f"✖ {err.message}")
+                        notify_unavailable(err)
+                        raise err from exc
+                    nxt = models[models.index(m) + 1]
+                    logger.warning("Gemini STT: %s lỗi (%s) → thử %s", m, exc, nxt)
+                    if log:
+                        log(f"⚠ Gemini {m} đang quá tải / lỗi — chuyển sang {nxt}…")
+            cands = data.get("candidates") or []
+            text = "".join(p.get("text", "") for p in (cands[0].get("content", {}).get("parts", []) if cands else []))
             try:
-                data = client._post(f"models/{m}:generateContent", body, timeout=600)
+                parsed = _load_json(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and isinstance(parsed.get("cues"), list):
                 break
-            except (GeminiBusy, GeminiModelGone) as exc:
-                if m == models[-1]:
-                    raise
-                nxt = models[models.index(m) + 1]
-                logger.warning("Gemini STT: %s lỗi (%s) → thử %s", m, exc, nxt)
-                if log:
-                    log(f"⚠ Gemini {m} đang quá tải / lỗi — chuyển sang {nxt}…")
-        cands = data.get("candidates") or []
-        text = "".join(p.get("text", "") for p in (cands[0].get("content", {}).get("parts", []) if cands else []))
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            s, e = text.find("{"), text.rfind("}")
-            parsed = json.loads(text[s:e + 1]) if s >= 0 else {}
+            logger.warning("Gemini STT: đoạn %d trả JSON hỏng (lần %d) — gọi lại", i + 1, attempt + 1)
+            if log:
+                log(f"⚠ Gemini trả kết quả hỏng ở đoạn {i + 1} — nhận diện lại đoạn này…")
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"Gemini trả kết quả nhận diện hỏng 3 lần liền ở đoạn {i + 1} — thử lại sau.")
         if not detected:
             detected = str(parsed.get("language", "")).strip()
         chunk_len = max(0.5, min(seg_len, duration - start))

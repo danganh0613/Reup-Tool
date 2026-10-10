@@ -81,6 +81,11 @@ class MainWindow(_Root):
         self._waiting: list[tuple[str, Callable[[], None]]] = []   # việc xếp hàng chờ tác vụ / render đang chạy
         self.runner = JobRunner(self.pipeline, self.ui_call)
         self.tasks = TaskRunner(self.ui_call)
+        # model AI đang chọn hết lượt / quá tải (không tự đổi model) → báo + nút mở đúng chỗ chọn model
+        from app.services import translate_router
+
+        self._unavailable_shown: set[str] = set()
+        translate_router.on_unavailable = lambda model, msg: self.ui_call(lambda: self.model_unavailable(model, msg))
         self.player = AudioPlayer(self.ffmpeg)
         self.modules: dict[str, BaseModule] = {}
         self._rail_buttons: dict[str, ctk.CTkButton] = {}
@@ -502,6 +507,8 @@ class MainWindow(_Root):
             win.focus_force()
             if tab == "shortcuts":
                 win._switch_tab("📖 Phím Tắt & Cẩm Nang Hướng Dẫn")
+            elif tab == "model":
+                win.focus_model()
             return
         self._settings_win = SettingsWindow(self, tab=tab)
 
@@ -619,6 +626,31 @@ class MainWindow(_Root):
         d = self.app_state.output_dir or str(VIDEOS_DIR)
         Path(d).mkdir(parents=True, exist_ok=True)
         open_path(d)
+
+    def model_unavailable(self, model: str, msg: str) -> None:
+        """Model dịch / nhận diện đang chọn hết lượt hôm nay hoặc quá tải lâu: máy KHÔNG tự đổi model — báo một lần
+        mỗi model (hộp nhỏ, không chặn) kèm nút «Chọn model…» mở đúng chỗ đổi model."""
+        self.add_notification("Model AI không dùng được", msg, "error")
+        if model in self._unavailable_shown:
+            return
+        self._unavailable_shown.add(model)
+        from app.ui.widgets.ui import button
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Model AI không dùng được")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        ctk.CTkLabel(dlg, text=msg, font=T.font(12), wraplength=420, justify="left", anchor="w").pack(
+            fill="x", padx=16, pady=(16, 10))
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(0, 14))
+        button(row, "Để sau", variant="ghost", command=dlg.destroy).pack(side="right")
+        button(row, "Chọn model…", icon_name="settings", variant="primary",
+               command=lambda: (dlg.destroy(), self.open_settings(tab="model"))).pack(side="right", padx=(0, 8))
+        dlg.after(50, dlg.lift)
+
+    def _choose_model_action(self) -> tuple:
+        return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
@@ -750,8 +782,11 @@ class MainWindow(_Root):
             self.after(400, self._run_waiting)
             if error:
                 stopped = "huỷ" in str(error).lower()
+                from app.services.translate_router import UNAVAILABLE_MARK
+
                 self.progress.result("stopped" if stopped else "error", f"{name}: đã dừng" if stopped else f"{name} lỗi",
-                                     "" if stopped else friendly_error(str(error)))
+                                     "" if stopped else friendly_error(str(error)),
+                                     self._choose_model_action() if UNAVAILABLE_MARK in str(error) else None)
                 self.log(f"✖ {name}: {error}")
                 if not stopped:
                     self.add_notification(f"{name} lỗi", str(error)[:300], "error")
@@ -824,9 +859,12 @@ class MainWindow(_Root):
         took = f"mất {_clock(elapsed)}"
         if fail:
             first = next(it for it in items if it.status == "Lỗi")
+            from app.services.translate_router import UNAVAILABLE_MARK
+
             self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else ""),
                                  f"{first.name}: {friendly_error(first.message, first)}",
-                                 ("Thử lại", self.retry_failed, "refresh", True))
+                                 self._choose_model_action() if UNAVAILABLE_MARK in (first.message or "")
+                                 else ("Thử lại", self.retry_failed, "refresh", True))
         elif any(it.status == "Đã huỷ" for it in items):
             self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong")
         elif prep:

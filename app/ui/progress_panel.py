@@ -95,6 +95,10 @@ def friendly_error(message: str, item: VideoItem | None = None) -> str:
     m = " ".join((message or "").splitlines()[:1])
     if item is not None:
         m = m.replace(item.path, item.name)
+    from app.services.translate_router import UNAVAILABLE_MARK
+
+    if UNAVAILABLE_MARK in m:                       # model hết lượt / quá tải: câu báo đã dễ hiểu, kèm nút «Chọn model…»
+        return m.replace(UNAVAILABLE_MARK, "").strip()
     low = m.lower()
     if "ffprobe" in low or "invalid data" in low or "moov atom" in low:
         return "file hỏng hoặc không phải video — mở thử bằng trình phát khác"

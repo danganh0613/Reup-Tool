@@ -377,6 +377,9 @@ class Settings:
     translate_provider: str = "Gemini"
     translate_model: str = "gemini-flash-latest"
     translate_review: bool = True      # dịch xong, AI rà soát cả bản dịch rồi sửa câu chưa hay (1 lượt gọi thêm)
+    #: model đang chọn hết lượt / quá tải → tự đổi sang model dự phòng (Flash Lite, Groq…). Tắt (mặc định): dừng và báo,
+    #: người dùng tự chọn model — đổi model giữa chừng làm bản dịch kém hay, lệch giọng văn
+    translate_fallback: bool = False
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
     groq_api_key: str = ""
     deepseek_api_key: str = ""
