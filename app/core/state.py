@@ -37,7 +37,8 @@ ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
 # SenseVoice: tiếng Trung chính xác hơn Whisper nhiều; OCR: đọc phụ đề in sẵn trên video (Douyin) — đúng từng chữ
-STT_ENGINES = ["Whisper (local)", "Gemini (cloud)", "SenseVoice (local, tiếng Trung)", "OCR phụ đề in sẵn"]
+STT_ENGINES = ["Qwen3-ASR (local, như VideoLingo)", "Whisper (local)", "Gemini (cloud)", "SenseVoice (local, tiếng Trung)",
+               "OCR phụ đề in sẵn"]
 TEXT_EFFECTS = ["Không có (Khuyên dùng)", "Viền đậm", "Bóng đổ", "Viền + bóng", "Phát sáng (glow)"]
 SUB_BG_STYLES = ["Không nền", "Hộp mờ bo góc", "Hộp đen", "Dải ngang toàn khung", "Bóng mềm"]
 TRANSLATE_PROVIDERS = ["Gemini", "Groq", "DeepSeek", "OpenAI"]

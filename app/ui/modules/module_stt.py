@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox
 from app.config import theme as T
 from app.core.languages import language_label
 from app.core.state import STT_DEVICES, STT_ENGINES, STT_LANGUAGES, STT_MODELS, SRT_SOURCES
+from app.services.qwen_asr import INSTALL_GB
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
@@ -42,6 +43,8 @@ class STTModule(BaseModule):
         hint(sec.body, "tiny/base: nhanh, hợp tiếng Anh · small: khá · large-v3-turbo: chính xác gần large mà nhanh gần small — "
                        "khuyên dùng khi có GPU, nhất là tiếng Trung/Nhật. Gemini (cloud): không cần GPU, cần API key, "
                        "nhận diện theo câu có dấu câu.").pack(fill="x")
+        self.qwen_btn = ButtonRow(sec.body, [(f"⬇ Cài Qwen3-ASR (một lần, ~{INSTALL_GB} GB)", self._install_qwen,
+                                              T.primary_button())])
         self.cuda_hint = hint(sec.body, "")
         self.cuda_hint.pack(fill="x", pady=(4, 0))
         cuda_label = "⬇ Tải CUDA runtime cho Whisper GPU (~1.3 GB, một lần)" if getattr(sys, "frozen", False) \
@@ -148,17 +151,54 @@ class STTModule(BaseModule):
 
     def _layout_engine(self) -> None:
         eng = self.state.subtitle.stt_engine
-        hints = {"Gemini": "Gửi audio lên Gemini, không cần GPU (cần Gemini API key trong Cài đặt)",
+        hints = {"Qwen3": "Như VideoLingo: Qwen3-ASR 1.7B + mốc từng chữ (Qwen3-ForcedAligner), tách câu theo nghĩa; chạy "
+                          "trên máy (GPU NVIDIA nhanh, CPU chậm), không tốn lượt AI. Tên riêng hiếm có thể sai — sửa ở "
+                          "tab «Lời thoại» → «Nhờ AI sửa»",
+                 "Gemini": "Gửi audio lên Gemini, không cần GPU (cần Gemini API key trong Cài đặt)",
                  "SenseVoice": "Tiếng Trung chính xác hơn Whisper nhiều; chạy trên máy (CPU được), lần đầu tải model "
                                "~0,9 GB. Tên riêng hiếm vẫn có thể sai — video có chữ in sẵn thì dùng OCR",
                  "OCR": "Đọc phụ đề in sẵn trên video (Douyin…): đúng từng chữ, kể cả tên riêng. Video không có chữ "
                         "in sẵn thì báo lỗi — chọn SenseVoice / Whisper"}
         self.engine_hint.configure(text=next((t for k, t in hints.items() if eng.startswith(k)),
                                              "Model chạy trên máy, không cần mạng"))
+        if eng.startswith("Qwen3"):
+            from app.services.qwen_asr import is_installed
+
+            if not is_installed() and not self.qwen_btn.winfo_ismapped():
+                self.qwen_btn.pack(fill="x", pady=(2, 0), after=self.engine_hint)
+            elif is_installed():
+                self.qwen_btn.pack_forget()
+        else:
+            self.qwen_btn.pack_forget()
         whisper = eng.startswith("Whisper")                # model / thiết bị / máy yếu chỉ dành cho Whisper
         for r in (self.model, self.device, self.weak):
             if hasattr(r, "menu"):
                 r.menu.configure(state="normal" if whisper else "disabled")
+
+    def _install_qwen(self) -> None:
+        from app.services.qwen_asr import install, is_installed
+
+        if is_installed():
+            self._layout_engine()
+            return
+        if not messagebox.askyesno("Edit Studio", "Cài Qwen3-ASR (nhận diện như VideoLingo) vào models/qwen_asr_env?\n\n"
+                                   f"Tải khoảng {INSTALL_GB} GB (thư viện + model lần đầu nhận diện), mất vài chục phút. "
+                                   "Thư viện của Edit Studio không bị thay đổi."):
+            return
+        self.status.warn("Đang cài Qwen3-ASR (vài chục phút)… xem log")
+
+        def done(ok, error):
+            if not self.winfo_exists():
+                return
+            if error or not ok:
+                self.status.error(f"Cài Qwen3-ASR thất bại: {error or 'xem log'}")
+                return
+            self.set_value(self.state.subtitle, "stt_engine", STT_ENGINES[0], preview=False)
+            self.engine.set(STT_ENGINES[0])
+            self._layout_engine()
+            self.status.ok("Đã cài Qwen3-ASR — chọn sẵn làm bộ nhận diện.")
+
+        self.window.run_task("Cài Qwen3-ASR", lambda cancel: install(self.window.log_bg, cancel), done)
 
     def _engine_changed(self, v: str) -> None:
         self.set_value(self.state.subtitle, "stt_engine", v, preview=False)

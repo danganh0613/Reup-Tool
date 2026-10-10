@@ -89,6 +89,11 @@ class Pipeline:
                                     if self.state.settings.translate_provider == "Gemini" else "gemini-flash-latest",
                                     language=cfg.stt_language, work_dir=self.job_dir(item), on_progress=progress,
                                     log=log, cancel=cancel, fallback=self.state.settings.translate_fallback)
+        elif cfg.stt_engine.startswith("Qwen3"):
+            from app.services.qwen_asr import transcribe as qwen_transcribe
+
+            res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
+                                  work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
         elif cfg.stt_engine.startswith("SenseVoice"):
             from app.services.asr_funasr import transcribe as sensevoice_transcribe
 
