@@ -23,6 +23,21 @@ from app.config.paths import APP_VERSION  # noqa: E402
 
 DIST = ROOT / "dist" / "EditStudio"
 RELEASE = ROOT / "release"
+
+
+def _arg(name: str) -> str | None:
+    """--dist <thư mục build> / --out <thư mục ra>: đóng gói bản build khác, xuất sang thư mục khác (không đè bộ cài cũ)."""
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return None
+
+
+if _arg("--dist"):
+    DIST = Path(_arg("--dist")).resolve()
+if _arg("--out"):
+    RELEASE = Path(_arg("--out")).resolve()
 RAR = Path(r"C:\Program Files\WinRAR\Rar.exe")
 ICON = ROOT / "app" / "assets" / "icon.ico"
 #: file/thư mục KHÔNG được lọt vào bộ cài (dữ liệu cá nhân, cache, model tải về)
@@ -48,8 +63,8 @@ MÁY KHÁC CẦN GÌ?
   • Card màn hình: tự nhận (NVIDIA → Intel → AMD → CPU). Không có card rời vẫn chạy, chỉ chậm hơn.
   • Internet: cần khi tải model Whisper lần đầu (vài trăm MB, tự tải), khi dịch AI/giọng cloud.
     Giọng đọc Edge-TTS (miễn phí, cần mạng) và VieNeu (giọng Việt offline, tải model 300 MB lần đầu) không cần key.
-  • API key (Gemini, ElevenLabs, Google…): vào Cài đặt dán vào. Key lưu trong settings.json tại thư mục cài,
-    KHÔNG có sẵn trong bộ cài — mỗi máy tự nhập.
+  • API key (Gemini miễn phí / DeepSeek trả phí — để dịch): vào ☰ Cài đặt › AI dùng API key dán vào. Key lưu trong
+    settings.json tại thư mục cài, KHÔNG có sẵn trong bộ cài — mỗi máy tự nhập.
 
 CẬP NHẬT
   Chạy bộ cài mới đè lên thư mục cũ. Cài đặt, key và video đã xuất (thư mục output) được giữ nguyên.
@@ -131,7 +146,7 @@ def main() -> None:
     elif "--full" in sys.argv:
         flavors = ["full"]
     check_dist()
-    RELEASE.mkdir(exist_ok=True)
+    RELEASE.mkdir(parents=True, exist_ok=True)
     (DIST / "DOC_TRUOC.txt").write_text(DOC, encoding="utf-8-sig")
     shutil.copy(DIST / "DOC_TRUOC.txt", RELEASE / "DOC_TRUOC.txt")
     outs = [build(f) for f in flavors]

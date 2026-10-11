@@ -22,7 +22,7 @@ MÁY CẦN GÌ?
   • Không cần cài Python hay FFmpeg — đã có sẵn trong app.
   • Render dùng bộ mã hóa phần cứng VideoToolbox của chip Apple; không dùng được thì tự chuyển sang CPU.
   • Nhận dạng giọng nói (Whisper) chạy bằng CPU. Lần đầu tự tải model (cần Internet).
-  • API key (Gemini, ElevenLabs, Google…): nhập trong Cài đặt.
+  • API key (Gemini miễn phí / DeepSeek trả phí — để dịch): nhập trong ☰ Cài đặt › AI dùng API key.
 
 DỮ LIỆU CỦA BẠN NẰM Ở ĐÂU?
   ~/Library/Application Support/Edit Studio   (cài đặt, video xuất, model, preset, nhạc/sfx thêm vào)

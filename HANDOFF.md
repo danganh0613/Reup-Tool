@@ -266,6 +266,21 @@
       `_parse_items`, `ai_edit`, dịch cả lượt / từng lô, lưới cuối của `translate_cues_vl`). Trước đó câu 36 / 44 của
       video trên bị ghi «{'id': 6, 'text': …}» vào phụ đề và giọng đọc đọc luôn.
 
+37. **Dịch / rà soát bằng AI bên ngoài** (test `audit_out/qa/test_external_ai.py` 22; `app/services/external_ai.py`):
+    - Tab Lời thoại › Dịch › «AI bên ngoài»: «Xuất» → SRT lời gốc (để dịch) hoặc song ngữ gốc + bản dịch (để rà soát),
+      UTF-8 có BOM (Notepad / web đọc đúng chữ Hán) + lời dặn (giữ số câu + mốc, phong cách của mẫu, từ điển tên riêng)
+      chép vào clipboard và lưu `.loi-dan.txt`. «Nhập bản dịch» → từ file hoặc dán SRT từ khung chat.
+    - Nhập luôn dùng MỐC THỜI GIAN GỐC: đủ câu → theo thứ tự; thiếu câu mà số thứ tự khớp mốc → theo số; AI gộp / đánh
+      số lại → theo mốc thời gian. Bỏ khối ```, bỏ dòng chữ Hán khi AI trả song ngữ, nhận cả danh sách «1. câu». Câu
+      thiếu giữ bản dịch cũ (chưa có thì lời gốc) + báo số câu; < 80 % khớp thì hỏi trước khi nhập; bản cũ → `.srt.bak`.
+    - Nhờ AI sửa thêm luật: rà lỗi thì chỉ sửa lỗi thật — tiếng lóng / biệt danh đúng nghĩa («ngáo đá», «chó gù») không
+      phải lỗi (thử thật: trước flash-lite đổi «chó gù» → «chó ta» sai nghĩa, nay giữ).
+
+38. **Đóng gói**: Windows — `tools/make_installer.py --dist <build> --out <thư mục>` (không đè bộ cài cũ). macOS chip M
+    — không build được trên Windows; `build_mac.command` / `tools/build_mac.sh` chạy trên máy Mac (làm như job macos
+    của CI: venv riêng, FFmpeg arm64, PyInstaller, LSMinimumSystemVersion, ký ad-hoc, selftest với dữ liệu tạm, DMG →
+    `release/mac/`). CI GitHub vẫn bị chặn vì billing (repo riêng tư).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

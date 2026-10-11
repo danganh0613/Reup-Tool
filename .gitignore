@@ -17,3 +17,5 @@ release/
 settings.json.bak
 settings.json.tmp
 settings.json.hong
+/build_mac/
+/.venv-mac/
