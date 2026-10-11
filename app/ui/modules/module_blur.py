@@ -143,6 +143,10 @@ class BlurModule(BaseModule):
         if self._loading:
             return
         self.set_value(self.state.blur, "auto_detect", bool(on))
+        if on and not self.state.blur.enable:         # công tắc «Bật che chữ» tắt thì tự dò cũng không che → bật luôn
+            self.state.blur.enable = True
+            self.enable.set(True)
+            self.state.config_changed("blur")
         self._update_auto_status()
         if on:
             self.window.preview.ensure_hardsub()

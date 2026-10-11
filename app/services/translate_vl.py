@@ -333,6 +333,30 @@ def source_name(texts: list[str], hint: str = "") -> str:
     return name
 
 
+#: chữ chỉ tiếng Việt có (không tính à / é / ô… mà tiếng Pháp / Tây Ban Nha cũng dùng)
+_VI_CHARS = re.compile(r"[ăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", re.I)
+
+
+def same_language(texts: list[str], target: str, hint: str = "") -> bool:
+    """Lời gốc đã là ngôn ngữ đích (video tiếng Việt mà mẫu bật «Dịch sang Tiếng Việt») → khỏi dịch Việt → Việt tốn
+    lượt Gemini. Chỉ nhận chắc: tiếng Việt (chữ riêng của tiếng Việt) và Trung / Nhật / Hàn (bộ chữ); còn lại cứ dịch."""
+    from app.services.translate_router import LANG_CODE
+
+    if hint and hint == target:
+        return True
+    code = LANG_CODE.get(target, "")
+    lines = [t for t in texts if t and t.strip()]
+    if not lines:
+        return False
+    if code == "vi":
+        vi = sum(1 for t in lines if _VI_CHARS.search(t))
+        cjk = sum(1 for t in lines if re.search(r"[぀-ヿ一-鿿가-힯]", t))
+        return vi >= 0.5 * len(lines) and cjk <= 0.05 * len(lines)
+    if code in ("zh", "ja", "ko"):
+        return source_code(lines) == code
+    return False
+
+
 def source_code(texts: list[str], hint: str = "") -> str:
     """Mã ngôn ngữ nguồn như get_source_language() của VideoLingo (zh / ja / ko …)."""
     joined = "".join(texts)
@@ -483,6 +507,10 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             raise
         except Exception as exc:                        # noqa: BLE001 — phụ
             logger.warning("Không dịch lại được câu sót chữ gốc: %s", exc)
+        left = [i + 1 for i in range(total) if _leaks(texts[i], target)]
+        if left and log:                                # vẫn sót → báo đúng câu để sửa tay (giọng đọc sẽ bỏ qua chữ đó)
+            log(f"⚠ {len(left)} câu dịch còn sót chữ Hán / Nhật / Hàn: câu {', '.join(map(str, left[:12]))}"
+                + ("…" if len(left) > 12 else "") + " — sửa tay ở tab Lời thoại.")
     # 4) khớp thời lượng lồng tiếng
     if fit and not stopped():
         texts = fit_texts(cues, texts, router, fit, log)

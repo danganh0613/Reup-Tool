@@ -36,15 +36,20 @@ def _clip(s: str, n: int = 70) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def _count(path: str | None) -> tuple[int, str]:
+def _count(path: str | None, target: str = "") -> tuple[int, str, int]:
+    """(số câu, câu đầu, số câu còn sót chữ Hán / Kana / Hangul khi dịch sang ngôn ngữ không dùng các chữ đó)."""
     if not path or not Path(path).exists():
-        return 0, ""
+        return 0, "", 0
     try:
         cues = load_srt(path)
     except Exception:
-        return 0, ""
+        return 0, "", 0
     first = next((c.plain for c in cues if c.plain.strip()), "")
-    return len(cues), first
+    if target:
+        from app.services.translate_router import _leaks
+
+        return len(cues), first, sum(1 for c in cues if _leaks(c.plain, target))
+    return len(cues), first, 0
 
 
 def summarize(window, item: VideoItem) -> list[Row]:
@@ -67,8 +72,8 @@ def summarize(window, item: VideoItem) -> list[Row]:
     # 2. Lời thoại
     uses_text = s.enable_subtitle or t.enable_tts
     need_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or (t.enable_tts and t.tts_source == TTS_SOURCES[0])
-    n_orig, first_orig = _count(item.srt_path)
-    n_tr, first_tr = _count(item.srt_translated_path)
+    n_orig, first_orig, _ = _count(item.srt_path)
+    n_tr, first_tr, leaks = _count(item.srt_translated_path, s.translate_target)
     if not uses_text:
         rows.append(Row("srt", "doc", "Lời thoại", "Không dùng (mẫu không phụ đề / lồng tiếng)", OFF))
     elif not n_orig:
@@ -78,6 +83,9 @@ def summarize(window, item: VideoItem) -> list[Row]:
         level = OK
         if n_tr:
             val += f" · đã dịch sang {s.translate_target}"
+            if leaks:                                    # giọng đọc bỏ qua chữ Hán, phụ đề vẫn hiện → nhắc sửa
+                val += f" · {leaks} câu còn sót chữ gốc"
+                level = WARN
         elif need_tr:
             val += " · CHƯA DỊCH"
             level = WARN
@@ -197,13 +205,13 @@ def summarize(window, item: VideoItem) -> list[Row]:
     else:
         rows.append(Row("trim", "cut", "Cắt", "Giữ nguyên cả video", OFF))
 
-    # 10. Hiệu ứng & chống trùng
+    # 10. Hiệu ứng & chống trùng (chống trùng chạy cả khi công tắc chỉnh màu / hiệu ứng tắt)
+    dup = sum(bool(x) for x in (c.dup_shift, c.dup_noise, c.dup_color, c.dup_zoompan, c.dup_audio, c.dup_gop))
     if c.enable:
         parts = []
         if any(abs(x - d) > 1e-3 for x, d in ((c.brightness, 0.0), (c.contrast, 1.0), (c.saturation, 1.0),
                                                (c.gamma, 1.0), (c.temperature, 0.0))):
             parts.append("chỉnh màu")
-        dup = sum(bool(x) for x in (c.dup_shift, c.dup_noise, c.dup_color, c.dup_zoompan, c.dup_audio, c.dup_gop))
         if dup:
             parts.append(f"chống trùng ×{dup}")
         if c.grain:
@@ -213,6 +221,8 @@ def summarize(window, item: VideoItem) -> list[Row]:
         if c.texture_enable:
             parts.append("texture")
         rows.append(Row("color", "color", "Hiệu ứng & chống trùng", " · ".join(parts) or "Bật (chưa chỉnh gì)"))
+    elif dup:
+        rows.append(Row("color", "color", "Hiệu ứng & chống trùng", f"chống trùng ×{dup}"))
     else:
         rows.append(Row("color", "color", "Hiệu ứng & chống trùng", "Không", OFF))
     return rows

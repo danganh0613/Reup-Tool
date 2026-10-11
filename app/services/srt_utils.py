@@ -71,14 +71,40 @@ def parse_srt(text: str) -> list[Cue]:
     return cues
 
 
-def load_srt(path: str | Path) -> list[Cue]:
-    raw = Path(path).read_bytes()
-    for enc in ("utf-8-sig", "utf-8", "utf-16", "cp1258", "cp1252"):
+_CJK_TEXT = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
+_CJK_CODECS = ("gb", "big5", "shift_jis", "cp932", "euc", "cp949", "johab", "hz", "iso2022")
+
+
+def decode_subtitle(raw: bytes) -> str:
+    """Chữ của file phụ đề tải ngoài: UTF-8 (có / không BOM) · UTF-16 (chỉ khi có BOM — không BOM thì gần như byte nào
+    cũng «giải mã được» thành rác) · bảng mã Trung / Nhật / Hàn cũ (GBK, Big5, Shift-JIS, EUC-KR — đoán bằng
+    charset_normalizer đi kèm requests) · cuối cùng cp1258 (Việt cũ) / cp1252."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        from charset_normalizer import from_bytes
+
+        best = from_bytes(raw).best()
+        if best is not None and best.encoding.lower().replace("-", "_").startswith(_CJK_CODECS):
+            text = str(best)
+            if _CJK_TEXT.search(text):
+                return text
+    except Exception:                                    # noqa: BLE001 — không đoán được thì thử bảng mã Latin
+        pass
+    for enc in ("cp1258", "cp1252"):
         try:
-            return parse_srt(raw.decode(enc))
+            return raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    return parse_srt(raw.decode("utf-8", "replace"))
+    return raw.decode("utf-8", "replace")
+
+
+def load_srt(path: str | Path) -> list[Cue]:
+    return parse_srt(decode_subtitle(Path(path).read_bytes()))
 
 
 def to_srt(cues: list[Cue]) -> str:

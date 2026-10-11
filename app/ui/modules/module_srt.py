@@ -242,11 +242,15 @@ class SRTModule(BaseModule):
             return
         if it.srt_path and Path(it.srt_path).exists():
             try:
-                info = f"{Path(it.srt_path).name} · {stats(load_srt(it.srt_path))}"
+                cues = load_srt(it.srt_path)
             except Exception:
-                info = Path(it.srt_path).name
-            self.file_status.ok(info)
-            self.file_section.set_subtitle(Path(it.srt_path).name)
+                cues = None
+            name = Path(it.srt_path).name
+            if cues == []:                          # sai bảng mã / file hỏng → báo, không để «0 cue» màu xanh
+                self.file_status.warn(f"{name}: không đọc được câu nào — mở bằng Notepad, lưu lại dạng UTF-8.")
+            else:
+                self.file_status.ok(f"{name} · {stats(cues)}" if cues else name)
+            self.file_section.set_subtitle(name)
         else:
             self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab STT.")
             self.file_section.set_subtitle("chưa có")

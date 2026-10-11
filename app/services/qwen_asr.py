@@ -55,12 +55,53 @@ def _has_nvidia() -> bool:
         return False
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Dừng pip cùng các tiến trình con của nó (Windows: taskkill /T)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           creationflags=_NO_WINDOW)
+        else:
+            proc.terminate()
+    except OSError:
+        pass
+
+
+def _step(cmd: list[str], cancel: threading.Event | None) -> tuple[int | None, str]:
+    """Chạy một bước cài; bấm Dừng → dừng ngay (không chờ pip tải xong 3,5 GB). Trả (mã thoát | None nếu bị dừng, lỗi)."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                            errors="replace", creationflags=_NO_WINDOW)
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.5)
+            return proc.returncode, (err or out or "")
+        except subprocess.TimeoutExpired:
+            if cancel is not None and cancel.is_set():
+                _kill_tree(proc)
+                proc.communicate()
+                return None, ""
+
+
+def _pip_reason(err: str) -> str:
+    """Đuôi lỗi pip → lý do người dùng hiểu được."""
+    low = err.lower()
+    if "no space left" in low or "errno 28" in low:
+        return "ổ đĩa đầy — giải phóng ~12 GB rồi cài lại"
+    if "could not find a version" in low or "no matching distribution" in low:
+        return (f"không có bản thư viện cho Python {sys.version_info.major}.{sys.version_info.minor} — cần Python "
+                "3.10–3.12")
+    if any(k in low for k in ("connection", "timed out", "temporary failure", "getaddrinfo", "ssl")):
+        return "mất mạng / tải bị ngắt — kiểm tra mạng rồi cài lại (phần đã tải được dùng lại)"
+    lines = [ln.strip() for ln in err.strip().splitlines() if ln.strip()]
+    return lines[-1][:160] if lines else "không rõ — xem log"
+
+
 def install(log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> bool:
-    """Tạo môi trường riêng + cài thư viện (vài phút, tải ~3,5 GB torch nếu có GPU NVIDIA). Chạy trong luồng nền."""
+    """Tạo môi trường riêng + cài thư viện (vài phút, tải ~3,5 GB torch nếu có GPU NVIDIA). Chạy trong luồng nền.
+    Lỗi → RuntimeError kèm lý do; bấm Dừng → RenderCancelled (dừng pip ngay, cài lại sẽ làm tiếp)."""
     if getattr(sys, "frozen", False):
-        if log:
-            log("Bản đóng gói (.exe / .app) không cài thêm được Qwen3-ASR — chạy bản mã nguồn (run.bat / run.command).")
-        return False
+        raise RuntimeError("Bản đóng gói (.exe / .app) không cài thêm được Qwen3-ASR — chạy bản mã nguồn "
+                           "(run.bat / run.command).")
     gpu = _has_nvidia()
     index = "https://download.pytorch.org/whl/cu128" if gpu else "https://download.pytorch.org/whl/cpu"
     py = str(env_python())
@@ -70,24 +111,25 @@ def install(log: Callable[[str], None] | None = None, cancel: threading.Event | 
              ([py, "-m", "pip", "install", *PACKAGES, ZH_SPACY], "qwen-asr, transformers, spaCy tiếng Trung, Silero VAD")]
     for cmd, what in steps:
         if cancel is not None and cancel.is_set():
-            return False
+            raise RenderCancelled("Đã huỷ cài Qwen3-ASR")
         if cmd[0] != sys.executable and not Path(py).exists():
-            return False
+            raise RuntimeError("Cài Qwen3-ASR lỗi: không tạo được môi trường riêng (models/qwen_asr_env)")
         if log:
             log(f"Qwen3-ASR: {what}…")
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              creationflags=_NO_WINDOW)
-        if proc.returncode != 0:
+        code, err = _step(cmd, cancel)
+        if code is None:
+            raise RenderCancelled("Đã huỷ cài Qwen3-ASR — bấm Cài lại sẽ làm tiếp")
+        if code != 0:
             if log:
-                log(f"Cài Qwen3-ASR lỗi ở bước «{what}»: {(proc.stderr or proc.stdout)[-600:]}")
-            return False
+                log(f"Cài Qwen3-ASR lỗi ở bước «{what}»: {err[-600:]}")
+            raise RuntimeError(f"Cài Qwen3-ASR lỗi ở bước «{what}»: {_pip_reason(err)}")
     check = subprocess.run([py, "-c", "import torch, qwen_asr, spacy, silero_vad; spacy.load('zh_core_web_md'); "
                             "print(torch.__version__, torch.cuda.is_available())"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
     if check.returncode != 0:
         if log:
             log("Cài xong nhưng chạy thử lỗi: " + check.stderr[-500:])
-        return False
+        raise RuntimeError("Cài xong nhưng chạy thử Qwen3-ASR lỗi: " + _pip_reason(check.stderr))
     READY.write_text(json.dumps({"torch": check.stdout.strip(), "gpu": gpu}), encoding="utf-8")
     if log:
         log(f"Đã cài Qwen3-ASR ({check.stdout.strip()}). Lần nhận diện đầu tiên sẽ tải model ~5,5 GB.")

@@ -34,7 +34,8 @@ class ColorModule(BaseModule):
 
         sec = Section(self, "Chống trùng bản quyền",
                       info="Biến thể rất nhẹ, người xem không nhận ra: dịch khung vài pixel, nhiễu hạt, lệch màu 1–3%, "
-                           "phóng 2% trượt chậm, lệch cao độ âm 2% (giữ nhịp), keyframe 47.")
+                           "phóng 2% trượt chậm, lệch cao độ âm 2% (giữ nhịp), keyframe 47. Chạy cả khi công tắc "
+                           "«Bật chỉnh màu / hiệu ứng» tắt.")
         sec.pack(fill="x", pady=4)
         grid = ctk.CTkFrame(sec.body, fg_color="transparent")
         grid.pack(fill="x")
@@ -125,6 +126,21 @@ class ColorModule(BaseModule):
             self.tex_opacity.set(cfg.texture_opacity)
         finally:
             self._loading = False
+
+    #: chỉnh các ô này khi công tắc tổng đang tắt thì không có tác dụng → tự bật công tắc (như preset / texture)
+    _NEEDS_ENABLE = {"rotate", "brightness", "contrast", "saturation", "gamma", "temperature", "deshake", "sharpen",
+                     "grain", "vignette", "kenburns", "texture_enable"}
+
+    def set_value(self, cfg, field: str, value, *, preview: bool = True) -> None:
+        super().set_value(cfg, field, value, preview=preview)
+        color = self.state.color
+        if (not self._loading and field in self._NEEDS_ENABLE and not color.enable
+                and getattr(color, field, None) == value and value != getattr(ColorConfig(), field, None)):
+            color.enable = True
+            self.enable.set(True)
+            self.state.config_changed("color")
+            self.window.preview.schedule_refresh()
+            self.window.log("Đã bật «Chỉnh màu / hiệu ứng» để áp phần vừa chỉnh.")
 
     def _dup_set(self, key: str, value: bool) -> None:
         if self._loading:

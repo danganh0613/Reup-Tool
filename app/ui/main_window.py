@@ -38,7 +38,7 @@ from app.ui.preview_panel import PreviewPanel
 from app.ui.progress_panel import ProgressPanel, friendly_error
 from app.ui.widgets.dialogs import LogWindow, NotificationCenter, ShortcutsWindow, now_str
 from app.ui.widgets.ui import button, button_width, relabel
-from app.core.platform import IS_MAC, IS_WIN, exe_name, open_path
+from app.core.platform import IS_MAC, IS_WIN, exe_name, keep_awake, open_path
 
 ctk_patches.apply()      # vá CTk: hết vạch hở 1 px mép phải/dưới ở DPI lẻ
 
@@ -953,6 +953,7 @@ class MainWindow(_Root):
 
     def set_running(self, running: bool) -> None:
         self._running = running
+        keep_awake(running)                          # lô dài 1–3 giờ: máy không tự ngủ giữa chừng
         self.render_btn.configure(state="disabled" if running else "normal")
         self.clean_btn.configure(state="disabled" if running else "normal")
         self.stop_btn.configure(state="normal" if running else "disabled")

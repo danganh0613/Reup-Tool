@@ -347,7 +347,9 @@ def scale_cues(cues: list[Cue], factor: float) -> list[Cue]:
 
 
 def remap_cues_for_trim(cues: list[Cue], trim: TrimSpec | None) -> list[Cue]:
-    """Bỏ cue nằm ngoài các đoạn giữ lại và dồn mốc thời gian về liên tục."""
+    """Bỏ cue nằm ngoài các đoạn giữ lại và dồn mốc thời gian về liên tục. Câu bị cắt gần hết (còn < 40 % hoặc
+    < 0,5 s — vd «Bỏ đầu 3 giây» cắt ngang câu 0–3,2 s) thì bỏ hẳn: chữ vẫn là cả câu, nhét vào mẩu còn lại chỉ làm
+    giọng tràn khung và phụ đề nháy. Câu bị cắt một phần còn giữ thì đánh dấu meta «cut»."""
     if trim is None or not trim.active:
         return cues
     out: list[Cue] = []
@@ -357,7 +359,13 @@ def remap_cues_for_trim(cues: list[Cue], trim: TrimSpec | None) -> list[Cue]:
             cs, ce = max(c.start, s), min(c.end, e)
             if ce - cs <= 0.05:
                 continue
-            out.append(Cue(len(out) + 1, cs - s + offset, ce - s + offset, c.text, dict(c.meta)))
+            meta = dict(c.meta)
+            full = max(0.001, c.end - c.start)
+            if ce - cs < full - 0.05:                     # bị cắt một phần
+                if (ce - cs) / full < 0.4 or ce - cs < 0.5:
+                    continue
+                meta["cut"] = True
+            out.append(Cue(len(out) + 1, cs - s + offset, ce - s + offset, c.text, meta))
         offset += max(0.0, e - s)
     return out
 

@@ -5,14 +5,30 @@ Mỗi hàm hỏi trước khi tải nặng, chạy nền (tiến độ ở log) 
 from __future__ import annotations
 
 import sys
+import threading
 from collections.abc import Callable
 from tkinter import messagebox
+
+from app.services.ffmpeg import RenderCancelled
 
 Done = Callable[[bool, Exception | None], None]
 
 
 def _finish(on_done: Done) -> Callable[[object | None, Exception | None], None]:
     return lambda ok, error: on_done(bool(ok) and error is None, error)
+
+
+def _must(task: Callable[[threading.Event], object], what: str) -> Callable[[threading.Event], object]:
+    """Hàm cài trả False (pip lỗi, mất mạng…) → thành lỗi thật: thanh trạng thái báo «… lỗi» + Thử lại, không báo
+    «xong» xanh trong khi Cài đặt vẫn ghi «Chưa cài». Bấm Dừng → «đã dừng»."""
+    def run(cancel: threading.Event) -> object:
+        result = task(cancel)
+        if cancel.is_set():
+            raise RenderCancelled(f"Đã huỷ {what[0].lower() + what[1:]}")
+        if result is False:
+            raise RuntimeError(f"{what} không thành công — xem dòng log ngay trên để biết lý do.")
+        return result
+    return run
 
 
 def install_qwen(window, on_done: Done) -> bool:
@@ -26,7 +42,8 @@ def install_qwen(window, on_done: Done) -> bool:
                                f"Tải khoảng {INSTALL_GB} GB (thư viện + model lần đầu nhận diện), mất vài chục phút. "
                                "Thư viện của Edit Studio không bị thay đổi."):
         return False
-    window.run_task("Cài Qwen3-ASR", lambda cancel: install(window.log_bg, cancel), _finish(on_done))
+    window.run_task("Cài Qwen3-ASR", _must(lambda cancel: install(window.log_bg, cancel), "Cài Qwen3-ASR"),
+                    _finish(on_done))
     return True
 
 
@@ -40,7 +57,7 @@ def install_vieneu(window, on_done: Done) -> bool:
     if getattr(sys, "frozen", False):
         on_done(False, RuntimeError("Bản đóng gói (.exe / .app) không có VieNeu — chạy bản mã nguồn (run.bat / run.command)."))
         return False
-    window.run_task("Cài VieNeu", lambda _cancel: install(window.log_bg), _finish(on_done))
+    window.run_task("Cài VieNeu", _must(lambda _cancel: install(window.log_bg), "Cài VieNeu"), _finish(on_done))
     return True
 
 
@@ -52,7 +69,8 @@ def install_cuda(window, on_done: Done) -> bool:
     if not messagebox.askyesno("Edit Studio", f"Tải CUDA runtime (cuBLAS + cuDNN, {size}, một lần) để Whisper chạy "
                                               "trên GPU NVIDIA?"):
         return False
-    window.run_task("Tải CUDA runtime", lambda cancel: install_cuda_runtime(window.log_bg, cancel), _finish(on_done))
+    window.run_task("Tải CUDA runtime", _must(lambda cancel: install_cuda_runtime(window.log_bg, cancel),
+                                              "Tải CUDA runtime"), _finish(on_done))
     return True
 
 
@@ -67,7 +85,8 @@ def install_aligner(window, on_done: Done) -> bool:
                                f"Tải ~{DOWNLOAD_MB} MB, lưu ~{DISK_MB} MB, một lần. Model wav2vec2 tiếng Việt của "
                                "nguyenvulebinh — giấy phép CC-BY-NC 4.0 (chỉ dùng phi thương mại)."):
         return False
-    window.run_task("Cài bộ căn chữ nổi", lambda cancel: install(window.log_bg, cancel), _finish(on_done))
+    window.run_task("Cài bộ căn chữ nổi", _must(lambda cancel: install(window.log_bg, cancel), "Cài bộ căn chữ nổi"),
+                    _finish(on_done))
     return True
 
 

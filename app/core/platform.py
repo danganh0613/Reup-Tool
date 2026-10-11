@@ -126,3 +126,27 @@ def beep() -> None:
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+
+
+_caffeinate: subprocess.Popen | None = None
+
+
+def keep_awake(on: bool) -> None:
+    """Đang chạy (Chuẩn bị / Xuất / tác vụ dài) thì máy không tự ngủ — màn hình vẫn được tắt. Windows:
+    SetThreadExecutionState (gọi từ luồng giao diện, luồng sống suốt); macOS: caffeinate -i."""
+    global _caffeinate
+    try:
+        if IS_WIN:
+            import ctypes
+
+            es_continuous, es_system_required = 0x80000000, 0x00000001
+            ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | (es_system_required if on else 0))
+        elif IS_MAC:
+            if on and (_caffeinate is None or _caffeinate.poll() is not None):
+                _caffeinate = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())],
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif not on and _caffeinate is not None:
+                _caffeinate.terminate()
+                _caffeinate = None
+    except Exception:                                    # noqa: BLE001 — không giữ được thì thôi, không ảnh hưởng việc chạy
+        logger.debug("keep_awake lỗi", exc_info=True)

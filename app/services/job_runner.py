@@ -144,6 +144,15 @@ class Pipeline:
             if not item.srt_path:
                 raise RuntimeError("Chưa có phụ đề gốc để dịch.")
             cues = load_srt(item.srt_path)
+        from app.services.translate_vl import same_language
+
+        if same_language([c.plain for c in cues], cfg.translate_target, cfg.translate_source):
+            out = self.translated_path(item)
+            save_srt(cues, out)
+            item.srt_translated_path = str(out)
+            if log:
+                log(f"{item.name}: lời thoại đã là {cfg.translate_target} — bỏ qua dịch, dùng luôn lời gốc.")
+            return cues
         t = self.state.tts
         fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100, "min_gap": t.min_gap}
                if t.enable_tts else None)
@@ -179,11 +188,15 @@ class Pipeline:
         orig = load_srt(item.srt_path)
         tr_path = item.srt_translated_path if item.srt_translated_path and Path(item.srt_translated_path).exists() else None
         current = load_srt(tr_path) if tr_path else []
+        idxs = list(range(len(orig))) if idxs is None else idxs
         if len(current) != len(orig):
-            current = []                              # bản dịch lệch số câu (đã gộp/sửa tay) → dịch lại từ gốc
+            if save and current and set(idxs) != set(range(len(orig))):
+                # bản dịch đã gộp / xoá câu: chỉ số câu không khớp bản gốc — ghi từng câu sẽ đè mất chữ đã sửa tay
+                raise RuntimeError("Bản dịch đã gộp / xoá câu nên số câu khác bản gốc — không dịch lại từng câu được. "
+                                   "Dịch lại cả video, hoặc sửa tay ở tab Lời thoại.")
+            current = []                              # bản dịch lệch số câu → dịch lại cả video từ gốc
         if previous is None:
             previous = [c.plain for c in current]
-        idxs = list(range(len(orig))) if idxs is None else idxs
         style = "" if instruction.strip() == cfg.translate_style.strip() else cfg.translate_style   # khỏi lặp 2 lần
         new = retranslate(orig, previous, idxs, settings=self.state.settings, target=cfg.translate_target,
                           source_hint=cfg.translate_source, style=style, instruction=instruction,
@@ -609,6 +622,9 @@ class Pipeline:
                     log(f"Dùng SRT cạnh video: {guess.name}")
                 else:
                     raise RuntimeError("Chưa chọn file SRT cho video này.")
+            if not cues_orig:
+                raise RuntimeError(f"File phụ đề {Path(item.srt_path or '').name} không đọc được câu nào — mở bằng "
+                                   "Notepad, lưu lại dạng UTF-8 rồi Thử lại.")
             if want_translated:
                 if item.srt_translated_path and Path(item.srt_translated_path).exists():
                     cues_tr = load_srt(item.srt_translated_path)
@@ -624,6 +640,8 @@ class Pipeline:
         if tts_on:
             use_tr = tcfg.tts_source == TTS_SOURCES[0] and bool(cues_tr)
 
+            cut_idx: set[int] = set()      # câu bị Cắt / Bỏ đầu cắt mất một phần (chữ vẫn cả câu) → không nhờ AI rút gọn
+
             def build_voice(cues_src: list[Cue]) -> Path:
                 src_path = item.srt_translated_path if use_tr else item.srt_path
                 # nhớ chỉ số cue trong SRT (qua cắt / dồn đoạn vẫn còn) → câu tràn khung báo đúng câu để dịch lại
@@ -632,6 +650,7 @@ class Pipeline:
                     self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
                     self.annotate_speakers(item, src_cues)
                 src_cues = rp.remap_cues_for_trim(src_cues, trim)
+                cut_idx.update(c.meta["src_idx"] for c in src_cues if c.meta.get("cut"))
                 fit = trim.kept_duration if trim.active else info.duration      # thời lượng nguồn (÷ tốc độ khi dựng)
                 return self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,
                                            progress=stage("Tạo giọng đọc", 0.45, 0.2), log=log, cancel=cancel,
@@ -641,14 +660,18 @@ class Pipeline:
             voice_path = build_voice(cues_tr if use_tr else cues_orig)
             # câu ≤ 3 tiếng («Không bắt», «Trắng tinh») không rút gọn được nữa — nhờ AI chỉ tốn lượt dịch + lượt đọc lại
             over = [o for o in self.voice_overflow(voice_path, untried=True) if o[1] > 0.15
-                    and cues_tr and 0 <= o[0] < len(cues_tr) and len(cues_tr[o[0]].plain.split()) > 3]
-            if (over and use_tr and preview_out is None and scfg.translate_enable
+                    and cues_tr and 0 <= o[0] < len(cues_tr) and len(cues_tr[o[0]].plain.split()) > 3
+                    and o[0] not in cut_idx]
+            # ngân sách < 6 ký tự = khung quá ngắn so với câu (thường do cắt): rút gọn kiểu gì cũng mất nghĩa → bỏ
+            budgets = {i: b for i, d, slot in over
+                       if (b := int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9)) >= 6}
+            # bản dịch đã gộp / xoá câu (số câu khác bản gốc) → chỉ số câu không khớp, không rút gọn từng câu
+            same_count = bool(cues_tr) and len(cues_tr) == len(cues_orig)
+            if (budgets and same_count and use_tr and preview_out is None and scfg.translate_enable
                     and item.srt_path and Path(item.srt_path).exists()):
                 # đã nén tới trần mà vẫn tràn → câu dịch quá dài: AI rút gọn đúng các câu đó (một lượt) rồi đọc lại
                 from app.services.translate_router import SHORTEN_REQUEST
 
-                budgets = {i: max(6, int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9))
-                           for i, d, slot in over if 0 <= i < len(cues_tr)}
                 log(f"{len(budgets)} câu đọc tràn khung dù đã nén tối đa → AI rút gọn bản dịch rồi đọc lại…")
                 try:
                     new = self.retranslate(item, sorted(budgets), instruction=SHORTEN_REQUEST, budgets=budgets,

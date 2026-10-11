@@ -44,7 +44,7 @@ class BGMModule(BaseModule):
         self.clip_menu.pack(fill="x", pady=(2, 4))
         ButtonRow(sec.body, [("🎵 Thư viện nhạc", self._open_library, T.primary_button()), ("+ Thêm từ máy…", self._add_files, None)]).pack(fill="x", pady=2)
         ButtonRow(sec.body, [("− Xóa đoạn", self._remove_clip, None), ("Xóa hết", self._clear, T.danger_button())]).pack(fill="x", pady=2)
-        self.status = hint(sec.body, "Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm + Thêm nhạc.")
+        self.status = hint(sec.body, "Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…».")
         self.status.pack(fill="x")
 
         sec = Section(self, "Vị trí đoạn nhạc")
@@ -98,7 +98,7 @@ class BGMModule(BaseModule):
                 self.loop.set(bool(c.get("loop", True)))
                 self.status.configure(text=f"{Path(c.get('path', '')).name}")
             else:
-                self.status.configure(text="Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm + Thêm nhạc.")
+                self.status.configure(text="Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…».")
         finally:
             self._loading = False
         self._draw_timeline()

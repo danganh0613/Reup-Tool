@@ -8,6 +8,8 @@ Mỗi chủ đề: ``key`` (trùng key module để mở đúng trang), ``title`
 
 from __future__ import annotations
 
+from app.services.qwen_asr import INSTALL_GB
+
 TOPICS: list[dict] = [
     # ══ BẮT ĐẦU ══════════════════════════════════════════════════════════
     {"key": "start", "title": "Bắt đầu: làm video đầu tiên", "group": "Bắt đầu", "blocks": [
@@ -71,7 +73,7 @@ TOPICS: list[dict] = [
         ("steps", [
             "Mục Video: đưa video vào.",
             "Mục STT: bấm «Tạo phụ đề cho video đang chọn». Máy nghe video rồi ghi ra chữ (tiếng gốc), chạy ngay trên máy. "
-            "Lần đầu cần cài bộ nghe lời thoại (Cài đặt › AI trên máy › «Cài», ~11 GB, một lần).",
+            f"Lần đầu cần cài bộ nghe lời thoại (Cài đặt › AI trên máy › «Cài», ~{INSTALL_GB} GB, một lần).",
             "Mục Lời thoại: chọn «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Cần có API key Gemini (miễn phí, lấy tại "
             "aistudio.google.com, dán vào Cài đặt › AI dùng API key). Muốn sửa câu nào thì sửa ngay ở đầu tab.",
             "Phụ đề tự hiện chữ Việt kiểu TikTok. Muốn dời / đổi cỡ: dùng 2 nút phụ đề trên khung video.",
@@ -91,7 +93,7 @@ TOPICS: list[dict] = [
             "Muốn cắt thành nhiều clip ngắn: mục Cắt → «＋ Thêm đoạn», gõ giây bắt đầu và kết thúc, chọn «Xuất mỗi đoạn thành 1 file».",
             "Bấm «Render MP4».",
         ]),
-        ("tip", "Mục Logo → bật «Watermark» và «Vùng an toàn TikTok» để chữ không bị nút like/comment của TikTok che mất."),
+        ("tip", "Mục Logo → thẻ «Watermark» bật «Bật watermark»; thẻ «Chuyển động» chọn «Vùng chạy» = TikTok/Reels để chữ không bị nút like/comment của TikTok che mất."),
     ]},
 
     # ══ TỪNG MỤC ═════════════════════════════════════════════════════════
@@ -150,7 +152,7 @@ TOPICS: list[dict] = [
         ("h", "Làm thế nào?"),
         ("steps", [
             "«Lấy lời từ» = «Giọng nói trong video»: AI nghe lời thoại ngay trên máy (có card NVIDIA thì nhanh hơn nhiều), "
-            "không cần mạng, không tốn lượt AI. Lần đầu bấm «Cài bộ nghe lời thoại» (~11 GB, một lần).",
+            f"không cần mạng, không tốn lượt AI. Lần đầu bấm «Cài bộ nghe lời thoại» (~{INSTALL_GB} GB, một lần).",
             "Video Douyin có phụ đề in sẵn: chọn «Chữ in sẵn trên video» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
             "mốc thời gian lấy theo tiếng nói.",
             "Ngôn ngữ để «Tự nhận diện» — máy tự nhận.",
@@ -164,7 +166,7 @@ TOPICS: list[dict] = [
         ("p", "Dịch file chữ (.srt) sang tiếng Việt hoặc tiếng khác bằng AI. Sửa lại câu nào chưa hay."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Cần API key một lần: mở Cài đặt (nút trên cùng), cột «AI dùng API key», dán key Gemini vào, bấm «Lưu tất cả». "
+            "Cần API key một lần: mở Cài đặt (nút trên cùng), trang «AI dùng API key», dán key Gemini vào, bấm «Lưu tất cả». "
             "Key lấy miễn phí ở aistudio.google.com → «Get API key».",
             "Chọn «Dịch sang» (Tiếng Việt).",
             "Ô «Phong cách» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
@@ -234,7 +236,7 @@ TOPICS: list[dict] = [
         ("kv", [
             ("Bắt đầu / Kết thúc (giây)", "Chỉ che trong khoảng này. Để 0 = che suốt video."),
             ("Mềm mép", "Viền ô mờ dần, nhìn tự nhiên hơn."),
-            ("Nút «Dải dưới»", "Tự đặt ô che sẵn ở dải phụ đề phía dưới."),
+            ("Nút «Vùng đáy»", "Tự đặt ô che sẵn ở dải phụ đề phía dưới."),
         ]),
         ("tip", "Ô che bám theo video gốc. Sau đó bạn đổi sang video dọc 9:16 hay phóng to thì ô vẫn che đúng chỗ, không phải vẽ lại."),
     ]},
@@ -243,7 +245,7 @@ TOPICS: list[dict] = [
         ("p", "Thêm nhạc chạy nền dưới video. Máy tự vặn nhỏ nhạc khi có người nói."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Bấm «＋ Thêm nhạc» chọn file mp3/wav. Hoặc kéo thả file nhạc vào cửa sổ.",
+            "Bấm «Thư viện nhạc» chọn bài có sẵn, hoặc «+ Thêm từ máy…» chọn file mp3/wav. Hoặc kéo thả file nhạc vào cửa sổ.",
             "Chỉnh «Âm lượng» khoảng 15–25 để nhạc không át tiếng nói.",
             "Muốn nhạc chỉ chạy một đoạn: gõ giây «Bắt đầu» và «Kết thúc». Để «Lặp» bật nếu nhạc ngắn hơn video.",
             "Để «Tự hạ nhạc khi có giọng» bật.",
@@ -255,13 +257,13 @@ TOPICS: list[dict] = [
         ("p", "Đóng dấu kênh của bạn lên video: hình logo, dòng chữ tên kênh, chữ mờ chống người khác lấy video, viền màu."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Thẻ «Logo»: bật, bấm «…» chọn file ảnh PNG (nền trong suốt là đẹp nhất). Chọn Vị trí (góc nào), Kích thước, Độ mờ.",
+            "Thẻ «Logo»: bật, bấm «Chọn ảnh logo…» (PNG nền trong suốt là đẹp nhất). Chọn Vị trí (góc nào), «Cỡ logo», «Opacity».",
             "Thẻ «Chữ»: bật, gõ tên kênh, chọn font, màu, vị trí.",
             "Thẻ «Watermark»: bật, gõ @tên kênh. Chữ này mờ mờ, hiện suốt video.",
-            "«Chuyển động»: muốn logo trôi, nảy, nhấp nháy thì chọn ở đây. Không thì để «Đứng yên».",
+            "Muốn logo / chữ trôi, nảy, nhấp nháy: chọn ô «Chuyển động» ngay trong thẻ đó. Không thì để «Đứng yên».",
         ]),
         ("kv", [
-            ("Vùng an toàn TikTok", "Bật khi làm video dọc: logo/chữ né chỗ nút like và dòng mô tả của TikTok."),
+            ("Thẻ «Chuyển động» › «Vùng chạy»", "Chọn TikTok/Reels khi làm video dọc: logo / chữ chạy né chỗ nút like và dòng mô tả."),
             ("Khung viền", "Vẽ viền màu quanh video."),
         ]),
     ]},
@@ -271,7 +273,7 @@ TOPICS: list[dict] = [
         ("h", "Làm thế nào?"),
         ("steps", [
             "Cách nhanh: xem video trên màn hình giữa tới chỗ muốn bắt đầu, bấm phím I. Xem tới chỗ muốn kết thúc, bấm phím O.",
-            "Cách gõ số: bật «Cắt», gõ «Bỏ đầu» và «Bỏ đuôi» (giây, hoặc kiểu 1:30 = 1 phút 30 giây).",
+            "Cách gõ số: bật «Bật cắt đầu / cuối», gõ «Bỏ đầu» và «Bỏ cuối» (giây, hoặc kiểu 1:30 = 1 phút 30 giây).",
             "Cắt nhiều đoạn: bấm «＋ Thêm đoạn», gõ bắt đầu – kết thúc cho từng đoạn.",
             "Chọn «Ghép các đoạn thành 1 video» hoặc «Xuất mỗi đoạn thành 1 file» (ra nhiều file _p1, _p2…).",
         ]),
@@ -279,13 +281,13 @@ TOPICS: list[dict] = [
     ]},
     {"key": "color", "title": "Hiệu ứng: màu sắc, chuyển động, chống trùng", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
-        ("p", "Làm video đẹp hơn (màu ấm, điện ảnh…), xoay video, thêm chuyển động cho ảnh tĩnh. Và làm video của bạn khác đi một chút khi đăng lên nhiều kênh."),
+        ("p", "Làm video đẹp hơn (màu ấm, điện ảnh…), xoay video, thêm chuyển động cho cảnh tĩnh. Và làm video của bạn khác đi một chút khi đăng lên nhiều kênh."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Bật «Bật chỉnh màu / hiệu ứng».",
+            "Bấm một nút màu sẵn hoặc chỉnh ô bất kỳ — công tắc «Bật chỉnh màu / hiệu ứng» tự bật.",
             "Bấm một nút màu sẵn: Ấm áp, Điện ảnh, Tươi sáng… Nhìn màn hình giữa thấy đổi ngay. Kéo Sáng / Tương phản nếu muốn chỉnh thêm.",
             "Video bị nằm ngang / ngược? Chọn «Xoay» 90° hoặc 180°.",
-            "Video là ảnh đứng yên? Chọn «Ken Burns» = Zoom vào để hình từ từ phóng to cho đỡ chán.",
+            "Cảnh tĩnh, ít chuyển động? Chọn «Chuyển động Ken Burns» = Zoom vào để hình từ từ phóng to cho đỡ chán.",
             "Đăng lại video của chính bạn lên kênh khác: bấm «Bật nhanh chống trùng» ở trên cùng.",
         ]),
         ("kv", [
@@ -301,7 +303,7 @@ TOPICS: list[dict] = [
         ("steps", [
             "Cần API key Gemini trong Cài đặt (như mục SRT). Viết truyện thì miễn phí; vẽ ảnh AI cần tài khoản có bật thanh toán — chưa có thì máy dùng ảnh tạm (chữ trên nền màu).",
             "Gõ ý tưởng vào ô «Chủ đề», chọn độ dài, giọng văn, khung video (ngang/dọc). Bấm «Viết kịch bản». Chờ 1–2 phút.",
-            "Bấm «Trình soạn cảnh» để đọc lại từng cảnh. Sửa lời kể, thêm bớt cảnh, chọn giọng cho nhân vật.",
+            "Bấm «Trình soạn kịch bản» để đọc lại từng cảnh. Sửa lời kể, thêm bớt cảnh, chọn giọng cho nhân vật.",
             "Bấm «Tạo giọng» → «Tạo ảnh» (nếu có quota) → «Ghép video».",
             "Xong sẽ có: video MP4, file phụ đề, tiêu đề + mô tả + tag để đăng YouTube, ảnh bìa.",
         ]),
@@ -317,10 +319,11 @@ TOPICS: list[dict] = [
             ("☁ AI dùng API key", "Key Gemini (mỗi dòng một key) + model, và từ điển tên riêng. Gemini dùng để dịch, «Nhờ AI "
                                   "sửa», rút gọn câu đọc không kịp, dựng truyện. Model hết lượt thì máy dừng và báo — bấm "
                                   "«Chọn model…» để đổi."),
-            ("⚙ Chung", "Thư mục xuất, độ to file xuất, từ điển phát âm, Giao diện (bấm một thẻ màu là đổi ngay), dọn file tạm."),
+            ("Các trang khác", "«Xuất video»: thư mục xuất, độ to âm thanh · «Giao diện»: bấm một bộ màu là đổi ngay · "
+                               "«Bộ nhớ & nâng cao»: dọn dẹp file đang làm, đường dẫn ffmpeg. Từ điển phát âm ở «AI trên máy»."),
         ]),
         ("steps", ["Lấy key Gemini: vào aistudio.google.com → đăng nhập Google → «Get API key» → «Create API key» → copy.",
-                   "Dán vào ô «API key» ở cột «AI dùng API key» → bấm «Lưu tất cả»."]),
+                   "Dán vào ô «API key» ở trang «AI dùng API key» → bấm «Lưu tất cả»."]),
         ("warn", "Key nằm trong file settings.json cùng thư mục app. Đừng gửi file này cho người khác."),
     ]},
     {"key": "shortcuts", "title": "Phím tắt", "group": "Khác", "blocks": [("shortcuts", None)]},
@@ -331,7 +334,7 @@ TOPICS: list[dict] = [
              "việc trước xong (dòng trên cùng ghi «chờ: …»). Trong lúc chờ cứ chuyển tab, chọn video khác, chỉnh tiếp thoải "
              "mái — việc đang chạy giữ nguyên cấu hình lúc bấm. Bấm «Dừng» = huỷ cả hàng chờ."),
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
-            ("Báo «Chưa cài bộ nghe lời thoại»", "Bấm «Cài…» trên thanh trạng thái (hoặc Cài đặt › AI trên máy) — cài một lần ~11 GB."),
+            ("Báo «Chưa cài bộ nghe lời thoại»", f"Bấm «Cài…» trên thanh trạng thái (hoặc Cài đặt › AI trên máy) — cài một lần ~{INSTALL_GB} GB."),
             ("Video bị giữ khung cuối thêm vài giây", "Giọng dài hơn video nên máy giữ khung cuối cho đọc hết (không cắt giọng). Máy đã tự nhờ AI rút gọn câu tràn; muốn gọn hơn nữa: tab Lời thoại, ô «Nhờ AI sửa» gõ «ngắn gọn hơn»; hoặc mục Video bật «Lặp video cho đủ thời lượng giọng đọc»."),
             ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm Render lại là được."),
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),

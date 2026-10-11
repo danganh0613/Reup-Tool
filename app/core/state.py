@@ -424,6 +424,8 @@ class VideoItem:
             d["config"], d["template"] = self.config, self.template
         if self.review:
             d["review"] = self.review
+        if self.status in ("Xong", "Cần xuất lại") and self.output_path:
+            d["done"], d["output_path"] = self.status, self.output_path     # mở lại app vẫn biết video đã xuất
         return d
 
 
@@ -794,8 +796,14 @@ class AppState:
                     template=str(row.get("template") or ""),
                     review=str(row.get("review") or ""),
                 ))
-            for it in self.videos:                      # trạng thái hiển thị theo bước duyệt đã lưu
-                it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review, it.status)
+                it = self.videos[-1]
+                # trạng thái hiển thị: đã xuất (file xuất còn) → «Xong» / «Cần xuất lại»; không thì theo bước duyệt
+                out = row.get("output_path")
+                if row.get("done") in ("Xong", "Cần xuất lại") and isinstance(out, str) and Path(out).exists():
+                    it.status, it.output_path = row["done"], out
+                else:
+                    it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review,
+                                                                                                         it.status)
             idx = data.get("active_index", 0)
             idx = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
             self.active_index = -1

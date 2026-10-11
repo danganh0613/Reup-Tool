@@ -101,6 +101,11 @@
     dịch / lồng tiếng từng video (Qwen không giữ GPU lúc lồng tiếng). Bỏ qua video đang nghe → dừng, chạy lại phần còn
     lại (kết quả nghe lưu `<out>.pieces.json`); video chưa tới lượt → file `<out>.skip`. Lỗi → video đó nghe riêng như
     cũ. Test: `audit_out/qa/test_batch_listen.py` (worker giả `fake_qwen_worker.py`).
+24. **Các mục còn lại của báo cáo QA** (test `audit_out/qa/test_qa_round2.py`): lưu «Xong» + file xuất qua lần mở app ·
+    `remap_cues_for_trim` bỏ câu bị cắt gần hết, meta «cut» không rút gọn, retranslate chặn ghi khi bản dịch lệch số câu ·
+    `srt_utils.decode_subtitle` (GBK / Big5 / Shift-JIS / EUC-KR, UTF-16 chỉ khi có BOM) + báo SRT 0 câu ·
+    `platform.keep_awake` trong `set_running` · `qwen_asr.install` dừng pip ngay + lỗi có lý do, `local_ai._must` ·
+    Hiệu ứng / Che chữ tự bật công tắc · `translate_vl.same_language` bỏ dịch Việt → Việt, báo câu sót chữ Hán.
 
 ## Còn tồn / để ý khi làm tiếp
 
