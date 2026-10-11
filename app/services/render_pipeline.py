@@ -27,7 +27,7 @@ from pathlib import Path
 from app.core.platform import NO_WINDOW
 from app.core.state import (ENCODE_PRESETS, FIT_MODES, RATIO_VALUES, RESOLUTIONS, VIDEO_CODECS, VideoConfig,
                             VideoItem)
-from app.services.ffmpeg import FFmpeg, MediaInfo, atempo_chain
+from app.services.ffmpeg import FFmpeg, MediaInfo, RenderCancelled, atempo_chain, cpu_may_help
 from app.services.srt_utils import Cue
 
 logger = logging.getLogger(__name__)
@@ -596,6 +596,31 @@ def available_encoders(ffmpeg: FFmpeg, codec: str = "h264") -> dict[str, bool]:
     return {b: ffmpeg.encoder_works(f"{codec}_{b}") for b in HW_BACKENDS}
 
 
+def _option(opts: set[str], *names: str) -> str | None:
+    """Tên tuỳ chọn encoder mà bản ffmpeg đang dùng có (ffmpeg 9 đổi ``spatial_aq`` → ``spatial-aq``)."""
+    return next((n for n in names if n in opts), None)
+
+
+def hw_encoder_of(args: list[str]) -> str | None:
+    """Bộ mã hoá phần cứng trong tham số ``pick_encoder`` (None = mã hoá bằng CPU)."""
+    enc = args[args.index("-c:v") + 1] if "-c:v" in args[:-1] else ""
+    return enc if enc.rsplit("_", 1)[-1] in (*HW_BACKENDS, "videotoolbox") else None
+
+
+def cpu_fallback(ffmpeg: FFmpeg, enc_args: list[str], exc: BaseException,
+                 log: Callable[[str], None] | None = None) -> bool:
+    """Xuất bằng GPU lỗi (không phải Dừng, không phải ổ đầy / file nguồn hỏng) → đánh dấu bộ mã hoá hỏng cho phiên này,
+    trả True để nơi gọi xuất lại bằng CPU thay vì báo lỗi cả video."""
+    hw = hw_encoder_of(enc_args)
+    if hw is None or isinstance(exc, RenderCancelled) or not isinstance(exc, RuntimeError)             or not cpu_may_help(str(exc)):
+        return False
+    ffmpeg.mark_encoder_broken(hw)
+    if log:
+        why = str(exc).splitlines()[0].removeprefix("ffmpeg lỗi: ")[:160]
+        log(f"⚠ Bộ mã hoá GPU {hw} lỗi ({why}) → xuất lại bằng CPU, chậm hơn. Phiên này các video sau dùng CPU.")
+    return True
+
+
 def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | None = None) -> list[str]:
     hevc = cfg.video_codec == VIDEO_CODECS[1]
     av1 = cfg.video_codec == "AV1"
@@ -617,10 +642,14 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
             continue
         if log:
             log(f"Encoder GPU: {enc}")
+        opts = ffmpeg.encoder_options(enc)
         if backend == "nvenc":
             p = ["p3", "p5", "p7"][preset_idx]
-            args = ["-c:v", enc, "-preset", p, "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0",
-                    "-spatial_aq", "1", "-temporal_aq", "1"]
+            args = ["-c:v", enc, "-preset", p, "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0"]
+            for names in (("spatial-aq", "spatial_aq"), ("temporal-aq", "temporal_aq")):
+                name = _option(opts, *names)
+                if name:                                 # bản ffmpeg không có (hay không dò được) → bỏ, không lỗi
+                    args += [f"-{name}", "1"]
         elif backend == "qsv":
             p = ["veryfast", "medium", "slower"][preset_idx]
             args = ["-c:v", enc, "-preset", p, "-global_quality", str(q)]
@@ -631,7 +660,8 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
                 args += ["-profile:v", "high"]
         else:
             p = ["speed", "balanced", "quality"][preset_idx]
-            args = ["-c:v", enc, "-quality", p, "-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q)]
+            args = ["-c:v", enc, "-quality", p, "-rc", "cqp", f"-{_option(opts, 'qp_i', 'qp-i') or 'qp_i'}", str(q),
+                    f"-{_option(opts, 'qp_p', 'qp-p') or 'qp_p'}", str(q)]
         if hevc:
             args += ["-tag:v", "hvc1"]
         return args
@@ -659,6 +689,8 @@ class RenderPlan:
     master_path: Path | None = None
     loudness: float | None = None              # LUFS đích; None = giữ độ to (vẫn giới hạn đỉnh)
     master_info: dict = field(default_factory=dict)
+    enc_args: list[str] = field(default_factory=list)
+    cpu_cmd: list[str] | None = None           # cùng lệnh nhưng mã hoá CPU — GPU lỗi thì xuất lại bằng lệnh này
 
 
 def _audio_source(g: Graph, info: MediaInfo, trim: TrimSpec | None) -> str | None:
@@ -768,16 +800,19 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
         cmd += ["-map", f"{m_idx}:a", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
     else:
         cmd += ["-an"]
-    cmd += pick_encoder(ffmpeg, vcfg, log)
-    if vcfg.gop_size and vcfg.gop_size > 0:
-        cmd += ["-g", str(int(vcfg.gop_size)), "-keyint_min", str(max(1, int(vcfg.gop_size) // 2))]
-    cmd += ["-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_path)]
-    return RenderPlan(cmd=cmd, cwd=job_dir, duration=dur, out_path=out_path, audio_cmd=audio_cmd,
-                      mix_path=mix_path, master_path=master_path, loudness=target)
+    tail = ["-g", str(int(vcfg.gop_size)), "-keyint_min", str(max(1, int(vcfg.gop_size) // 2))]         if vcfg.gop_size and vcfg.gop_size > 0 else []
+    tail += ["-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_path)]
+    enc = pick_encoder(ffmpeg, vcfg, log)
+    cpu_cmd = None
+    if hw_encoder_of(enc):
+        from dataclasses import replace as _replace
+        cpu_cmd = cmd + pick_encoder(ffmpeg, _replace(vcfg, use_gpu=False)) + tail
+    return RenderPlan(cmd=cmd + enc + tail, cwd=job_dir, duration=dur, out_path=out_path, audio_cmd=audio_cmd,
+                      mix_path=mix_path, master_path=master_path, loudness=target, enc_args=enc, cpu_cmd=cpu_cmd)
 
 
 def run_plan(plan: RenderPlan, ffmpeg: FFmpeg, *, on_progress: Callable[[float], None] | None = None,
-             cancel: threading.Event | None = None) -> Path:
+             cancel: threading.Event | None = None, log: Callable[[str], None] | None = None) -> Path:
     v_prog = on_progress
     if plan.audio_cmd:
         ffmpeg.run(plan.audio_cmd, duration=plan.duration, on_progress=(lambda p: on_progress(0.15 * p))
@@ -788,14 +823,22 @@ def run_plan(plan: RenderPlan, ffmpeg: FFmpeg, *, on_progress: Callable[[float],
             v_prog = lambda p: on_progress(0.2 + 0.8 * p)      # noqa: E731
     # ghi ra file tạm rồi mới đổi tên: Dừng / lỗi giữa chừng không để lại video dở (hay đè mất bản xuất cũ)
     out = plan.out_path
-    cmd = list(plan.cmd)
     tmp = out.with_name(f"{out.stem}.dang-xuat{out.suffix}")
-    if cmd and cmd[-1] == str(out):
-        cmd[-1] = str(tmp)
-    else:
+    if not (plan.cmd and plan.cmd[-1] == str(out)):
         tmp = out
+
+    def _to_tmp(c: list[str]) -> list[str]:
+        return c[:-1] + [str(tmp)] if tmp != out else list(c)
+
     try:
-        ffmpeg.run(cmd, duration=plan.duration, on_progress=v_prog, cancel=cancel, cwd=plan.cwd, log_tag="render")
+        try:
+            ffmpeg.run(_to_tmp(plan.cmd), duration=plan.duration, on_progress=v_prog, cancel=cancel, cwd=plan.cwd,
+                       log_tag="render")
+        except Exception as exc:
+            if plan.cpu_cmd is None or not cpu_fallback(ffmpeg, plan.enc_args, exc, log):
+                raise
+            ffmpeg.run(_to_tmp(plan.cpu_cmd), duration=plan.duration, on_progress=v_prog, cancel=cancel,
+                       cwd=plan.cwd, log_tag="render-cpu")
     except BaseException:
         if tmp != out:
             tmp.unlink(missing_ok=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import threading
@@ -13,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.config.paths import ASSETS_DIR
 from app.core.state import VideoConfig
 from app.services.ffmpeg import FFmpeg, RenderCancelled
-from app.services.render_pipeline import pick_encoder
+from app.services.render_pipeline import cpu_fallback, pick_encoder
 from app.services.srt_utils import Cue, save_srt, wrap_lines
 from app.services.story.project import Scene, StoryProject
 from app.services.system_fonts import font_file
@@ -95,7 +96,9 @@ def assemble(proj: StoryProject, ffmpeg: FFmpeg, *, width: int, height: int, fps
             old.unlink()
         except OSError:
             pass
-    enc = pick_encoder(ffmpeg, vcfg or VideoConfig(quality=18, encode_preset="Nhanh"), log)
+    enc_cfg = vcfg or VideoConfig(quality=18, encode_preset="Nhanh")
+    enc = pick_encoder(ffmpeg, enc_cfg, log)
+    done: list[tuple[list[str], list[str], float]] = []   # cảnh đã ghép: GPU lỗi giữa chừng thì ghép lại bằng CPU
     starts: list[float] = []
     t_cursor = 0.0
     total = len(scenes)
@@ -143,10 +146,21 @@ def assemble(proj: StoryProject, ffmpeg: FFmpeg, *, width: int, height: int, fps
                     f"crop={width * 2}:{height * 2},{zp},format=yuv420p[v];"
                     f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,apad=pad_dur={gap:.3f}[a]",
                     "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}"]
-        args += [*enc, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out_clip)]
+        tail = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out_clip)]
         if log:
             log(f"Ghép cảnh {i + 1}/{total} ({dur:.1f}s)")
-        ffmpeg.run(args, duration=dur, cancel=cancel, log_tag=f"scene{i}")
+        try:
+            ffmpeg.run([*args, *enc, *tail], duration=dur, cancel=cancel, log_tag=f"scene{i}")
+        except Exception as exc:
+            if not cpu_fallback(ffmpeg, enc, exc, log):
+                raise
+            enc = pick_encoder(ffmpeg, dataclasses.replace(enc_cfg, use_gpu=False))
+            # nối bằng -c copy cần mọi cảnh cùng một bộ mã hoá → cảnh đã ghép bằng GPU cũng ghép lại
+            for j, (a, t, d) in enumerate(done):
+                _check()
+                ffmpeg.run([*a, *enc, *t], duration=d, cancel=cancel, log_tag=f"scene{j}")
+            ffmpeg.run([*args, *enc, *tail], duration=dur, cancel=cancel, log_tag=f"scene{i}")
+        done.append((args, tail, dur))
         if on_progress:
             on_progress(0.9 * (i + 1) / total)
 

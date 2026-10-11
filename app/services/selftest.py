@@ -74,13 +74,23 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     gpu = gpu_name()
     nvidia = "NVIDIA" in gpu.upper()
     if ff.available:
-        from app.services.render_pipeline import available_encoders
+        from app.core.state import VideoConfig
+        from app.services.render_pipeline import BACKEND_LABEL, available_encoders, hw_encoder_of, pick_encoder
 
         enc = available_encoders(ff)
         ok = [k for k, v in enc.items() if v]
-        names = {"h264_nvenc": "NVIDIA NVENC", "h264_qsv": "Intel QSV", "h264_amf": "AMD AMF"}
         if ok:
-            out.append(Check("Render GPU", "ok", f"{gpu} · dùng {', '.join(names.get(k, k) for k in ok)}"))
+            # xuất thử đúng bộ tham số khi xuất thật (encoder_works chỉ thử tên encoder — ffmpeg mới đổi tên tuỳ chọn
+            # thì chỉ lộ ra ở đây)
+            args = pick_encoder(ff, VideoConfig(use_gpu=True, gpu_backend="auto"))
+            res = ff.run_simple(["-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=0.3", *args, "-f", "null", "-"],
+                                timeout=30)
+            hw = hw_encoder_of(args) or ""
+            if res.returncode == 0:
+                out.append(Check("Render GPU", "ok", f"{gpu} · dùng {', '.join(BACKEND_LABEL.get(k, k) for k in ok)}"))
+            else:
+                out.append(Check("Render GPU", "warn", f"{gpu} · xuất thử bằng {hw} lỗi → app tự xuất bằng CPU (chậm hơn)",
+                                 "Cập nhật driver card màn hình, hoặc tắt «Tăng tốc GPU» (tab Video › Nâng cao xuất file)."))
         else:
             out.append(Check("Render GPU", "warn", f"{gpu} · không encoder GPU nào dùng được → render bằng CPU (chậm hơn, vẫn đúng)",
                              "Cập nhật driver card màn hình (NVIDIA cần driver ≥ 610)." if nvidia else "Máy không có card hỗ trợ — bình thường."))

@@ -1205,7 +1205,7 @@ class Pipeline:
                               audio_orig_filters=mods.audio_orig_filters, log=log, voice_tempo=speed / tspeed,
                               loudness=st.settings.loudness_target)
         log(f"Xuất thử → {out_path.name}" if preview_out else f"Xuất → {out_path.name}")
-        rp.run_plan(plan, self.ffmpeg, on_progress=stage("Render", 0.65, 0.35), cancel=cancel)
+        rp.run_plan(plan, self.ffmpeg, on_progress=stage("Render", 0.65, 0.35), cancel=cancel, log=log)
         for tmp in (plan.mix_path, plan.master_path):    # WAV tạm lớn, chỉ dùng cho lần xuất này
             if tmp is not None:
                 Path(tmp).unlink(missing_ok=True)

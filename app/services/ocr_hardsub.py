@@ -58,11 +58,15 @@ def _load(log: Callable[[str], None] | None = None):
 
             if log:
                 log("Nạp PaddleOCR (PP-OCRv5 mobile)… lần đầu tải model ~22 MB")
-            # enable_mkldnn=False: Paddle 3.x trên Windows CPU bật oneDNN thì lỗi «ConvertPirAttribute2RuntimeAttribute»
-            _ocr = PaddleOCR(lang="ch", text_detection_model_name="PP-OCRv5_mobile_det",
-                             text_recognition_model_name="PP-OCRv5_mobile_rec", use_doc_orientation_classify=False,
-                             use_doc_unwarping=False, use_textline_orientation=False, device="cpu",
-                             enable_mkldnn=False)
+            try:
+                # enable_mkldnn=False: Paddle 3.x trên Windows CPU bật oneDNN thì lỗi «ConvertPirAttribute2RuntimeAttribute»
+                _ocr = PaddleOCR(lang="ch", text_detection_model_name="PP-OCRv5_mobile_det",
+                                 text_recognition_model_name="PP-OCRv5_mobile_rec", use_doc_orientation_classify=False,
+                                 use_doc_unwarping=False, use_textline_orientation=False, device="cpu",
+                                 enable_mkldnn=False)
+            except Exception as exc:                   # noqa: BLE001 — thiếu cấu hình / DLL, chưa tải được model…
+                logger.warning("Không khởi tạo được PaddleOCR", exc_info=True)
+                raise NoHardsub(f"Không mở được bộ đọc chữ PaddleOCR ({str(exc).strip()[:120] or type(exc).__name__})") from exc
         return _ocr
 
 
@@ -71,9 +75,14 @@ def available() -> bool:
     from importlib.util import find_spec
 
     try:
-        return find_spec("paddleocr") is not None and find_spec("paddle") is not None
+        if find_spec("paddleocr") is None or find_spec("paddle") is None:
+            return False
+        pdx = find_spec("paddlex")
     except (ImportError, ValueError):
         return False
+    # bản đóng gói thiếu cấu hình pipeline của PaddleX → nạp sẽ lỗi «The pipeline (OCR) does not exist»
+    roots = list(pdx.submodule_search_locations or []) if pdx is not None else []
+    return any(os.path.isfile(os.path.join(r, "configs", "pipelines", "OCR.yaml")) for r in roots)
 
 
 def to_simplified(text: str) -> str:

@@ -4,7 +4,9 @@
     python main.py --render a.mp4 b.mp4  render không mở cửa sổ, dùng cấu hình đã lưu (output/last_config.json)
         --mp3        xuất MP3 thay vì MP4
         --stt        nhận diện phụ đề (Whisper/Gemini theo cấu hình) trước khi render
+        --ocr        lấy lời từ chữ in sẵn trên video (OCR) thay cho nghe giọng nói — thử bộ đọc chữ của bản .exe
         --out DIR    thư mục xuất
+        --config F   đọc cấu hình làm việc từ file F (vd của bản cài) thay cho output/last_config.json — chỉ đọc
     python main.py --selftest            kiểm tra máy (GPU, CUDA, model, giọng, key) → logs/selftest.txt
     Kết quả + nhật ký ghi vào logs/edit_studio.log (bản .exe không có console).
 """
@@ -26,7 +28,9 @@ def render_cli(argv: list[str]) -> int:
     ap.add_argument("--render", nargs="+", metavar="VIDEO", required=True)
     ap.add_argument("--mp3", action="store_true")
     ap.add_argument("--stt", action="store_true")
+    ap.add_argument("--ocr", action="store_true")
     ap.add_argument("--out", default="")
+    ap.add_argument("--config", default="")
 
     from app.config.paths import VIDEOS_DIR, ensure_dirs
     ensure_dirs()
@@ -45,8 +49,11 @@ def render_cli(argv: list[str]) -> int:
 
     state = AppState()
     state.load_settings()
-    state.load_config()
+    state.load_config(Path(ns.config) if ns.config else None)
+    state.set_save_scheduler(lambda _save: None)   # chỉ đọc: --out / --ocr không ghi đè cấu hình làm việc của app
     state.output_dir = ns.out or state.output_dir or str(VIDEOS_DIR)
+    if ns.ocr:
+        state.subtitle.stt_engine = "ocr"
     ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
     ffmpeg.require()
     pipe = Pipeline(state, ffmpeg)
@@ -112,7 +119,20 @@ def _single_instance() -> bool:
         return True
 
 
+def _no_dll_dialogs() -> None:
+    """Windows: thư viện thiếu / sai bản DLL thì báo lỗi cho code xử lý (bỏ qua bước phụ), không bật hộp «Entry Point
+    Not Found» đứng chờ bấm OK — hộp đó treo cả lượt xuất (lần chạy không giao diện thì không ai bấm)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x8000)   # SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _no_dll_dialogs()
     if "--selftest" in sys.argv[1:]:
         return selftest_cli()
     if "--render" in sys.argv[1:]:

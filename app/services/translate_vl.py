@@ -453,18 +453,40 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         if "theme" not in ckpt.extra:
             if log:
                 log("Dịch: tóm tắt nội dung + lấy thuật ngữ…")
-            summ = _ask(router, summary_prompt(src_lang, tgt_lang, " ".join(lines)[:SUMMARY_CHARS], custom),
-                        lambda d: isinstance(d.get("terms"), list) and all(
-                            isinstance(t, dict) and {"src", "tgt", "note"} <= set(t) for t in d["terms"]))
-            ckpt.extra = {"theme": str(summ.get("theme", "")), "terms": summ["terms"] + custom}
-            ckpt.save(total)
-            if log:
-                log(f"Dịch: {len(summ['terms'])} thuật ngữ — "
-                    + ", ".join(f"{t['src']}={t['tgt']}" for t in summ["terms"][:8]))
+            try:
+                summ = _ask(router, summary_prompt(src_lang, tgt_lang, " ".join(lines)[:SUMMARY_CHARS], custom),
+                            lambda d: isinstance(d.get("terms"), list) and all(
+                                isinstance(t, dict) and {"src", "tgt", "note"} <= set(t) for t in d["terms"]))
+                ckpt.extra = {"theme": str(summ.get("theme", "")), "terms": summ["terms"] + custom}
+                ckpt.save(total)
+                if log:
+                    log(f"Dịch: {len(summ['terms'])} thuật ngữ — "
+                        + ", ".join(f"{t['src']}={t['tgt']}" for t in summ["terms"][:8]))
+            except ValueError as exc:                   # phụ: không lấy được thì dịch tiếp với từ điển của bạn
+                logger.warning("VideoLingo: không lấy được tóm tắt / thuật ngữ (%s)", exc)
+                if log:
+                    log("⚠ Không lấy được thuật ngữ của video — vẫn dịch, chỉ dùng từ điển khi dịch.")
     theme, terms = ckpt.extra.get("theme", ""), ckpt.extra.get("terms", custom)
 
     # 2) dịch từng lô: dịch sát → tự phê bình + dịch thoát
     chunks = _chunks(lines)
+    unsure: set[int] = set()                            # câu AI không trả nổi → giữ lời gốc, không ghi bộ nhớ dịch
+
+    def direct(idx: list[int], sp: str) -> dict[int, str]:
+        """Dịch sát ``idx``; AI bỏ sót / gộp dòng 3 lần → chia đôi lô dịch lại, còn một câu vẫn lỗi thì giữ lời gốc."""
+        keys = [str(n) for n in range(1, len(idx) + 1)]
+        try:
+            d = _ask(router, faith_prompt("\n".join(lines[i] for i in idx), sp, src_lang, tgt_lang),
+                     lambda d: all(isinstance(d.get(k), dict) and str(d[k].get("direct", "")).strip() for k in keys))
+            return {i: str(d[k]["direct"]).replace("\n", " ").strip() for i, k in zip(idx, keys)}
+        except ValueError as exc:
+            if len(idx) > 1:
+                logger.warning("VideoLingo: lô %d câu dịch sát lỗi (%s) → chia đôi dịch lại", len(idx), exc)
+                half = len(idx) // 2
+                return {**direct(idx[:half], sp), **direct(idx[half:], sp)}
+            logger.warning("VideoLingo: câu %d không dịch được (%s) → giữ lời gốc", idx[0] + 1, exc)
+            unsure.add(idx[0])
+            return {idx[0]: lines[idx[0]]}
     for ci, idx in enumerate(chunks):
         if all(i in results for i in idx):
             continue
@@ -482,14 +504,15 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             return lambda d: all(isinstance(d.get(k), dict) and str(d[k].get(field, "")).strip() for k in keys)
 
         try:
-            faith = _ask(router, faith_prompt(chunk, sp, src_lang, tgt_lang), has("direct"))
+            sat = direct(idx, sp)
         except (ModelUnavailable, RenderCancelled):
             ckpt.save(total)
             memory.save()
             raise
-        faith = {k: {"origin": lines[idx[n]], "direct": str(faith[k]["direct"]).replace("\n", " ").strip()}
-                 for n, k in enumerate(keys)}
+        faith = {k: {"origin": lines[i], "direct": sat[i]} for i, k in zip(idx, keys)}
         try:
+            if any(i in unsure for i in idx):
+                raise ValueError("lô có câu chưa dịch được")
             expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style), has("free"))
             out = [str(expr[k]["free"]).replace("\n", " ").strip() for k in keys]
         except (ModelUnavailable, RenderCancelled):
@@ -501,8 +524,9 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             out = [faith[k]["direct"] for k in keys]
         for i, t in zip(idx, out):
             results[i] = t
-            ckpt.done[str(i)] = t
-            memory.put(target, lines[i], t, key_style)
+            if i not in unsure:                         # câu giữ lời gốc: lần sau dịch lại, không nhớ
+                ckpt.done[str(i)] = t
+                memory.put(target, lines[i], t, key_style)
         ckpt.save(total)
         if on_progress:
             on_progress(len(results) / max(1, total))
@@ -527,6 +551,11 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         if left and log:                                # vẫn sót → báo đúng câu để sửa tay (giọng đọc sẽ bỏ qua chữ đó)
             log(f"⚠ {len(left)} câu dịch còn sót chữ Hán / Nhật / Hàn: câu {', '.join(map(str, left[:12]))}"
                 + ("…" if len(left) > 12 else "") + " — sửa tay ở tab Lời thoại.")
+    # câu AI không trả nổi mà bước trên chưa cứu được (câu sót chữ Hán đã báo ở trên)
+    kept = [i + 1 for i in sorted(unsure) if texts[i] == lines[i] and not _leaks(texts[i], target)]
+    if kept and log:
+        log(f"⚠ {len(kept)} câu AI dịch không ra, đang giữ lời gốc: câu {', '.join(map(str, kept[:12]))}"
+            + ("…" if len(kept) > 12 else "") + " — sửa tay ở tab Lời thoại.")
     # 4) khớp thời lượng lồng tiếng
     if fit and not stopped():
         texts = fit_texts(cues, texts, router, fit, log)
@@ -563,8 +592,14 @@ def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log:
                                 lambda d: bool(str(d.get("result", "")).strip()))["result"]).strip()
                 if syllable_count(new2) < syllable_count(new):
                     new = new2
-        except (ModelUnavailable, RenderCancelled):
+        except RenderCancelled:
             raise
+        except ModelUnavailable as exc:
+            # đã dịch xong mà AI hết lượt ở bước phụ này → giữ bản dịch, câu dài để giọng đọc nhanh hơn (không bỏ cả video)
+            logger.warning("Hết lượt AI khi rút gọn câu %d: %s", i + 1, exc)
+            if log:
+                log("⚠ AI hết lượt — bỏ bước rút gọn câu dài; câu đọc không kịp sẽ được đọc nhanh hơn.")
+            break
         except ValueError as exc:
             logger.warning("Không rút gọn được câu %d: %s", i + 1, exc)
             continue
@@ -636,6 +671,9 @@ def split_long_sentences(sentences: list[str], token_counts: list[int], *, setti
     use_ai = time.time() >= _SPLIT_AI_DOWN
     if cancel is not None and cancel.is_set():
         raise RenderCancelled("Đã huỷ")
+    long_n = sum(1 for n in token_counts if n > MAX_SPLIT_TOKENS)
+    if long_n and use_ai and log:                       # model có suy luận mất cả phút mỗi câu → báo kẻo tưởng treo
+        log(f"Tách {long_n} câu dài bằng AI…")
     for s, n in zip(sentences, token_counts):
         if n <= MAX_SPLIT_TOKENS:
             out.append(s)

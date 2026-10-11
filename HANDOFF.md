@@ -134,6 +134,31 @@
       `_offline` · OCR thiếu → nghe giọng · Qwen hết VRAM → CPU, báo tải model lần đầu, căn mốc theo ngôn ngữ từng đoạn ·
       dòng video ở ổ chưa cắm giữ trong cấu hình (`_missing_rows`) · `last_config.json.bak` mỗi phiên · `_free_output` ·
       `attach_srt` · nhạc nền bỏ hệ số ẩn 20 % (`_fold_bgm_master`) · `BUILTIN_PRON` (tên hãng) · `_tk_error`.
+29. **Chạy thử video thật bằng bản .exe** (`EditStudio.exe --render VIDEO --ocr --out DIR`; test `audit_out/qa/test_encoder.py`):
+    - **Xuất bằng NVIDIA hỏng hết** với ffmpeg 9.0.1 kèm theo: ffmpeg 9 đổi `-spatial_aq` → `-spatial-aq` («Unrecognized
+      option»). Nay `FFmpeg.encoder_options` đọc `-h encoder=…` để chọn đúng tên (`_option`), không có thì bỏ.
+    - GPU vẫn lỗi (không phải Dừng / ổ đầy / nguồn hỏng — `cpu_may_help`) → `run_plan` xuất lại bằng `RenderPlan.cpu_cmd`,
+      `mark_encoder_broken` để cả phiên dùng CPU; tab Truyện ghép lại các cảnh bằng CPU (`cpu_fallback`).
+    - **OCR trong bản .exe chưa từng chạy được:** thiếu cấu hình pipeline PaddleX, metadata gói (PaddleX dò thư viện kèm
+      theo bằng metadata) và DLL trong `paddle/libs` → `EditStudio.spec` đóng gói thêm. `ocr_hardsub.available()` kiểm cả
+      `paddlex/configs/pipelines/OCR.yaml`; lỗi lúc khởi tạo PaddleOCR → `NoHardsub` (tự chuyển sang nghe giọng nói).
+    - **Dịch lỗi cả video** khi Gemini Flash Lite bỏ sót dòng 3 lần ở một lô («kết quả thiếu dòng / sai dạng»): nay
+      `translate_vl.translate_cues_vl` chia đôi lô dịch lại (`direct`), câu đơn vẫn lỗi thì giữ lời gốc + báo số câu (không
+      ghi bộ nhớ dịch / tiến độ); tóm tắt + thuật ngữ lỗi thì dịch tiếp không có thuật ngữ (test
+      `audit_out/qa/test_translate_split.py`).
+    - AI hay viết dấu `"` trong câu dịch mà không thoát → JSON hỏng cả lô: `translate_router._load_json` thử thoát lại
+      dấu `"` giữa giá trị từng dòng (`_escape_inner_quotes`) trước khi báo hỏng.
+    - **OCR rồi Whisper trong cùng tiến trình .exe** → hộp «__kmpc_end_masked could not be located … ctranslate2.dll»:
+      Paddle mang `libiomp5md.dll` bản 2019, ctranslate2 cần bản 2025, Windows chỉ nạp một bản theo tên (bản mã nguồn
+      không lộ vì torch nạp sẵn bản mới). Spec thay `paddle/libs/libiomp5md.dll` bằng bản của ctranslate2; `main.py`
+      `SetErrorMode` để thiếu DLL thì báo lỗi cho code (bỏ bước phụ) chứ không bật hộp chờ bấm OK (treo cả lượt xuất).
+      Giả lập: `audit_out/qa/dll_frozen_sim.py A|B` (ẩn torch như bản .exe).
+    - Dịch xong mà hết lượt AI ở bước rút gọn (`fit_texts`) → giữ bản dịch, bỏ rút gọn (trước: lỗi cả video).
+      `split_long_sentences` báo «Tách N câu dài bằng AI…» (model có suy luận mất cả phút, không báo thì tưởng treo).
+    - `main.py --render` thêm `--ocr` và `--config FILE` (vd cấu hình của bản cài), không ghi lại cấu hình làm việc.
+      Thử bản mã nguồn bằng cấu hình của bản cài:
+      `python main.py --render VIDEO --config F:\Tool\EditStudio\output\last_config.json --out audit_out\src_test`. Bản .exe không có torch → không có SenseVoice, mốc
+      câu OCR giữ theo chữ trên hình.
 
 ## Còn tồn / để ý khi làm tiếp
 

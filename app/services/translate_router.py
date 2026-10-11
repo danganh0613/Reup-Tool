@@ -345,6 +345,22 @@ def _glossary_lines(glossary: str) -> str:
     return "\n".join(lines[:200])
 
 
+#: một dòng «"khoá": "giá trị",» của JSON thụt dòng (cách lời nhắc VideoLingo mẫu cho AI)
+_KV_LINE = re.compile(r'^(\s*"[^"\n]+"\s*:\s*")(.*)("\s*,?\s*)$')
+
+
+def _escape_inner_quotes(text: str) -> str:
+    """AI viết dấu " trong câu dịch mà không thoát («"direct": "Bắt là phải "vào" đấy",») → JSON hỏng cả lô.
+    Thoát lại các dấu " nằm giữa giá trị của từng dòng khoá: giá trị."""
+    out = []
+    for ln in text.split("\n"):
+        m = _KV_LINE.match(ln)
+        if m:
+            ln = m.group(1) + re.sub(r'(?<!\\)"', r'\\"', m.group(2)) + m.group(3)
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _load_json(text: str):
     # bỏ phần «<think>…</think>» model suy luận đôi khi trả kèm trước JSON
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
@@ -356,7 +372,16 @@ def _load_json(text: str):
         return json.loads(text)
     except json.JSONDecodeError:
         s, e = text.find("{"), text.rfind("}")
-        return json.loads(text[s:e + 1]) if s >= 0 and e > s else None
+        if not (s >= 0 and e > s):
+            return None
+    body = text[s:e + 1]
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        try:
+            return json.loads(_escape_inner_quotes(body))
+        except json.JSONDecodeError:
+            raise exc from None
 
 
 def _solve(call: Callable[[list[int]], list[str]], idxs: list[int], tries: int = 2) -> dict[int, str]:

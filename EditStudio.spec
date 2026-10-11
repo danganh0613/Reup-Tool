@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
 block_cipher = None
 ROOT = Path(SPECPATH)
@@ -53,6 +53,19 @@ for _pkg in ("vieneu", "vieneu_utils", "sea_g2p", "kaldi_native_fbank"):
     datas += _d
     binaries += _b
     hiddenimports += _h
+# PaddleOCR (đọc chữ in sẵn): PaddleX đọc cấu hình pipeline (configs/*.yaml) từ đĩa, dò thư viện kèm theo qua metadata
+# (thiếu → «The pipeline (OCR) does not exist!»), còn Paddle nạp mklml.dll… trong paddle/libs lúc chạy — PyInstaller không
+# tự thấy mấy thứ này
+from importlib.util import find_spec
+
+_paddle = find_spec("paddle")
+if _paddle is not None and find_spec("paddleocr") is not None:
+    datas += collect_data_files("paddlex")
+    for _dist in ("paddleocr", "paddlex", "imagesize", "opencv-contrib-python", "pyclipper", "pypdfium2",
+                  "python-bidi", "shapely"):
+        datas += copy_metadata(_dist)
+    for _root in _paddle.submodule_search_locations or []:
+        binaries += [(str(_p), "paddle/libs") for _p in (Path(_root) / "libs").glob("*.dll")]
 
 a = Analysis(
     ["main.py"],
@@ -66,6 +79,14 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+# Paddle mang libiomp5md.dll (OpenMP) bản 2019, ctranslate2 (Whisper) bản mới hơn. Windows chỉ nạp một bản theo tên:
+# OCR chạy trước thì Whisper vấp «__kmpc_end_masked could not be located» → Paddle dùng luôn bản mới (đủ hàm cũ)
+_ct2 = find_spec("ctranslate2")
+_ct2_dirs = list(_ct2.submodule_search_locations or []) if _ct2 is not None else []
+_iomp = next((Path(r) / "libiomp5md.dll" for r in _ct2_dirs if (Path(r) / "libiomp5md.dll").is_file()), None)
+if _iomp is not None:
+    a.binaries = [(d, str(_iomp) if d.replace("\\", "/").lower() == "paddle/libs/libiomp5md.dll" else s, t)
+                  for d, s, t in a.binaries]
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,

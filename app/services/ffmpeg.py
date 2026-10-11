@@ -79,6 +79,16 @@ _REASONS = [
 ]
 
 
+# lỗi mà đổi sang mã hoá CPU cũng không khỏi → không xuất lại bằng CPU
+_NOT_ENCODER = re.compile(r"no space left|disk full|errno 28|permission denied|access is denied|no such file|"
+                          r"invalid data found|error while decoding|moov atom", re.I)
+
+
+def cpu_may_help(error_text: str) -> bool:
+    """Lỗi xuất bằng GPU có thể khỏi khi mã hoá bằng CPU không (sai tuỳ chọn, driver, hết phiên NVENC…)."""
+    return not _NOT_ENCODER.search(error_text)
+
+
 def ffmpeg_reason(lines: list[str]) -> str:
     """Lý do dễ hiểu từ stderr của ffmpeg: lỗi hay gặp → câu tiếng Việt; còn lại → dòng lỗi cuối có nghĩa."""
     text = "\n".join(lines[-40:])
@@ -99,6 +109,7 @@ class FFmpeg:
         self.ffmpeg = find_binary("ffmpeg", ffmpeg_path)
         self.ffprobe = find_binary("ffprobe", ffprobe_path)
         self._encoder_cache: dict[str, bool] = {}
+        self._options_cache: dict[str, set[str]] = {}
         self._lock = threading.Lock()
 
     @property
@@ -346,6 +357,31 @@ class FFmpeg:
             self._encoder_cache[encoder] = ok
         logger.info("Encoder %s: %s", encoder, "OK" if ok else "không dùng được")
         return ok
+
+    def mark_encoder_broken(self, encoder: str) -> None:
+        """Xuất thật bằng encoder này lỗi → cả phiên không chọn nó nữa (mở lại app thì thử lại)."""
+        with self._lock:
+            self._encoder_cache[encoder] = False
+        logger.warning("Encoder %s lỗi khi xuất — phiên này dùng bộ mã hoá khác", encoder)
+
+    def encoder_options(self, encoder: str) -> set[str]:
+        """Tên các tuỳ chọn riêng của encoder (``-h encoder=…``) — mỗi bản ffmpeg viết một kiểu
+        (ffmpeg 9: ``spatial-aq``, bản cũ: ``spatial_aq``). Không đọc được → tập rỗng."""
+        with self._lock:
+            if encoder in self._options_cache:
+                return self._options_cache[encoder]
+        opts: set[str] = set()
+        if self.ffmpeg:
+            try:
+                res = subprocess.run([self.ffmpeg, "-hide_banner", "-h", f"encoder={encoder}"], capture_output=True,
+                                     text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW,
+                                     timeout=20)
+                opts = set(re.findall(r"^  -(\S+)\s+<", res.stdout, re.M))
+            except Exception:
+                opts = set()
+        with self._lock:
+            self._options_cache[encoder] = opts
+        return opts
 
 
 # ── Hàm phụ ──────────────────────────────────────────────────────────────
