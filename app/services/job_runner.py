@@ -100,16 +100,23 @@ class Pipeline:
             # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
             from app.services.qwen_asr import transcribe as qwen_transcribe
 
-            try:
-                silent = not self.ffmpeg.probe(src).has_audio
-            except Exception:                           # noqa: BLE001 — không đọc được thông tin thì cứ thử nhận diện
-                silent = False
-            if silent:
+            if self.silent(src):
                 raise RuntimeError("Video không có tiếng — không nghe được lời thoại. Video có phụ đề in sẵn thì chọn "
                                    "«Chữ in sẵn trên video»; không thì tắt Phụ đề / Lồng tiếng cho video này.")
 
             res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
                                   work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
+        return self.save_transcript(item, res, log)
+
+    def silent(self, src: str) -> bool:
+        """Video không có luồng âm thanh (không đọc được thông tin thì coi như có — cứ thử nhận diện)."""
+        try:
+            return not self.ffmpeg.probe(src).has_audio
+        except Exception:                               # noqa: BLE001
+            return False
+
+    def save_transcript(self, item: VideoItem, res, log: LogCb | None = None) -> list[Cue]:
+        """Lưu kết quả nhận diện thành phụ đề gốc của ``item`` (bản dịch / người nói cũ bỏ vì không còn khớp)."""
         if not res.cues:
             raise RuntimeError("Không nghe thấy lời nói nào (video chỉ có nhạc?). Thử chọn đúng ngôn ngữ thay vì "
                                "«Tự nhận diện», hoặc tắt Phụ đề / Lồng tiếng cho video này.")
@@ -839,6 +846,7 @@ class JobRunner:
         def run() -> None:
             ok = fail = 0
             try:
+                self._listen_first(jobs, base, mode, _ui_update, _ui_log)
                 for it, st in jobs:
                     if self.cancel.is_set() or id(it) in self._skipped:
                         it.status, it.message = ("Đã huỷ", "") if self.cancel.is_set() else ("Đã bỏ qua", "")
@@ -879,6 +887,57 @@ class JobRunner:
         self._thread = threading.Thread(target=run, name="JobRunner", daemon=True)
         self._thread.start()
         return True
+
+    def _listen_first(self, jobs: list, base: Pipeline, mode: str, ui_update: Callable[[VideoItem], None],
+                      ui_log: LogCb) -> None:
+        """≥ 2 video cần nghe lời thoại (Qwen3-ASR) → nghe hết trước bằng MỘT tiến trình (nạp model một lần cho cả
+        lượt), xong mới dịch / lồng tiếng từng video — model đã tắt nên không tranh GPU với bước lồng tiếng. Video nào
+        lỗi / chưa nghe xong thì vòng chính nghe riêng như cũ (báo lỗi đúng video)."""
+        from app.services import qwen_asr
+
+        todo = []
+        for it, st in jobs:
+            pipe = Pipeline(st, base.ffmpeg)
+            if id(it) not in self._skipped and "qwen" in pipe.needs(it) and not pipe.silent(it.path):
+                todo.append((it, pipe))
+        if len(todo) < 2 or self.cancel.is_set() or not qwen_asr.is_installed():
+            return
+        running = "Đang chuẩn bị" if mode == "prepare" else "Đang xử lý"
+        batch = [qwen_asr.BatchJob(it.path, pipe.job_dir(it), pipe.state.subtitle.stt_language, it.name,
+                                   Pipeline._stager(it, ui_update)("Nhận diện giọng nói", 0.0, 0.3))
+                 for it, pipe in todo]
+
+        def on_current(k: int) -> None:
+            prev, it = self.current, todo[k][0]
+            if prev is not None and prev is not it and prev.status == running:
+                prev.status = "Chờ"                     # đã nghe xong, chờ lượt dịch / lồng tiếng
+                ui_update(prev)
+            self.current = it
+            it.status, it.message = running, "Nhận diện giọng nói"
+            ui_update(it)
+
+        results: list = [None] * len(todo)
+        try:
+            results = qwen_asr.transcribe_batch(batch, base.ffmpeg, settings=base.state.settings, log=ui_log,
+                                                cancel=self.cancel, skipped=lambda k: id(todo[k][0]) in self._skipped,
+                                                on_current=on_current)
+        except RenderCancelled:
+            pass
+        except Exception as exc:                        # noqa: BLE001 — vòng chính nghe riêng từng video
+            logger.warning("Nghe lời thoại nhiều video lỗi", exc_info=True)
+            ui_log(f"⚠ Nghe lời thoại chung lỗi ({error_line(exc)}) — nghe riêng từng video.")
+        finally:
+            self.current = None
+            for it, _pipe in todo:
+                if it.status == running:
+                    it.status = "Chờ"
+                    ui_update(it)
+        for (it, pipe), res in zip(todo, results):
+            if res is not None and res.cues and id(it) not in self._skipped:
+                try:
+                    pipe.save_transcript(it, res, ui_log)
+                except Exception:                       # noqa: BLE001 — chưa lưu được → vòng chính nghe lại
+                    logger.warning("Lưu phụ đề %s lỗi", it.name, exc_info=True)
 
     def stop(self) -> None:
         self.cancel.set()

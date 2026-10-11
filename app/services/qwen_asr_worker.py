@@ -2,18 +2,25 @@
 3.8): KHÔNG import gì của app (môi trường đó không có thư viện của app). app/services/qwen_asr.py gọi:
 
     <env>/python -I qwen_asr_worker.py --audio a.wav --out r.json --language zh
+    <env>/python -I qwen_asr_worker.py --jobs jobs.json     (nhiều video: [{"audio", "out", "language"}, …])
+
+Nhiều video: nạp Qwen3-ASR MỘT lần, nghe hết các video, giải phóng rồi nạp bộ căn mốc MỘT lần, căn mốc hết — không
+nạp lại model cho từng video. Kết quả nghe của từng video lưu <out>.pieces.json (bị dừng giữa chừng thì lần chạy lại
+không phải nghe lại); có file <out>.skip thì bỏ qua video đó (người dùng bấm Bỏ qua lúc chưa tới lượt).
 
 Làm theo VideoLingo bản 01f8434 (core/asr_backend/qwen_asr_local.py, speech_edges.py, spacy_utils/*; Apache-2.0):
 Silero VAD chỉ cắt biên ngoài (đệm 1 s) · cửa sổ ≤ 180 s cắt ở 100 ms lặng nhất trong 30 s cuối · Qwen3-ASR-1.7B, ngân
 sách token 13/giây + 32 · Qwen3-ForcedAligner-0.6B → mốc từng chữ, gắn dấu câu · spaCy tách câu theo dấu → dấu phẩy →
 liên từ → câu > 60 token. Edit Studio thêm: căn mốc «sụp» (một chữ bị kéo > 1 s rồi ≥ 3 chữ dồn < 0,03 s/chữ — gặp ở
 video thử: «保» 3 s rồi 15 chữ trong 0,08 s) → chia đều lại vùng đó; cửa sổ đọc lặp → chia đôi đọc lại một lần.
-In «PROGRESS x» (0..1) và dòng log ra stdout; kết quả JSON: language, text, words[{word,start,end}], sentences[{text,tokens}]."""
+In ra stdout: «PROGRESS k x» (video thứ k, 0..1) · «JOB k» (bắt đầu làm video k) · «DONE k» · «FAIL k lý do» ·
+«SKIP k» · dòng log «[ 12s] …». Kết quả JSON mỗi video: language, text, words[{word,start,end}], sentences[{text,tokens}]."""
 
 import argparse
 import itertools
 import json
 import math
+import os
 import re
 import string
 import sys
@@ -36,7 +43,7 @@ _REPEATED = re.compile(r"(.{1,40}?)\1{3,}", re.S)
 T0 = time.perf_counter()
 NEED_VRAM_GB = 5.0                  # Qwen3-ASR-1.7B bf16 + bộ nhớ chạy (đo trên RTX 3060 Ti: ~4,7 GB)
 _OUT = threading.Lock()
-_STEP = {"name": "khởi động", "since": T0, "last": T0, "p0": 0.0, "p1": 0.03, "expect": 15.0}
+_STEP = {"name": "khởi động", "since": T0, "last": T0, "p0": 0.0, "p1": 0.03, "expect": 15.0, "job": 0, "done": {}}
 
 
 def _emit(line: str) -> None:
@@ -50,14 +57,17 @@ def say(msg: str) -> None:
 
 
 def progress(x: float) -> None:
-    _STEP["done"] = max(_STEP.get("done", 0.0), x)     # mốc thật — nhịp tim không kéo thanh lùi xuống dưới
-    _emit(f"PROGRESS {max(0.0, min(1.0, x)):.3f}")
+    k, done = _STEP["job"], _STEP["done"]
+    done[k] = max(done.get(k, 0.0), x)                  # mốc thật — nhịp tim không kéo thanh lùi xuống dưới
+    _emit(f"PROGRESS {k} {max(0.0, min(1.0, x)):.3f}")
 
 
-def phase(name: str, p0: float, p1: float, expect: float) -> None:
-    """Bước dài (nạp model, nghe một đoạn…): thanh tiến độ tự nhích dần trong [p0, p1] theo thời gian ước lượng
-    ``expect`` giây (không vượt 90 % khoảng), 30 s không có dòng mới thì báo «… vẫn đang …» — biết máy còn chạy."""
-    _STEP.update(name=name, since=time.perf_counter(), p0=p0, p1=p1, expect=max(1.0, expect))
+def phase(name: str, p0: float, p1: float, expect: float, job: int | None = None) -> None:
+    """Bước dài (nạp model, nghe một đoạn…) của video ``job``: thanh tiến độ tự nhích dần trong [p0, p1] theo thời gian
+    ước lượng ``expect`` giây (không vượt 90 % khoảng), 30 s không có dòng mới thì báo «… vẫn đang …» — biết máy còn
+    chạy."""
+    _STEP.update(name=name, since=time.perf_counter(), p0=p0, p1=p1, expect=max(1.0, expect),
+                 job=_STEP["job"] if job is None else job)
     progress(p0)
     _STEP["last"] = time.perf_counter()
 
@@ -68,21 +78,32 @@ def _heartbeat() -> None:
         st, now = dict(_STEP), time.perf_counter()
         t = now - st["since"]
         guess = st["p0"] + (st["p1"] - st["p0"]) * 0.9 * (1 - math.exp(-t / st["expect"]))
-        _emit(f"PROGRESS {min(1.0, max(guess, st.get('done', 0.0))):.3f}")
+        _emit(f"PROGRESS {st['job']} {min(1.0, max(guess, st['done'].get(st['job'], 0.0))):.3f}")
         if now - st["last"] >= 30:
-            say(f"… vẫn đang {st['name']} (đã {t:.0f}s)")
+            say(f"… vẫn đang {st['name']} (đã {t:.0f}s){_vram_note()}")
+
+
+def _vram_note() -> str:
+    """Card đã đầy giữa chừng (vd game vừa mở lại) → ghi rõ vì sao chậm."""
+    probe = _STEP.get("vram")
+    try:
+        if probe and probe()[0] < 0.4 * 2 ** 30:
+            return " — GPU đã đầy (game / ứng dụng khác đang dùng card) nên rất chậm; đóng bớt để nhanh hơn"
+    except Exception:                                    # noqa: BLE001
+        pass
+    return ""
 
 
 threading.Thread(target=_heartbeat, daemon=True).start()
 
 
-def split_windows(n: int) -> list[tuple[int, int]]:
+def split_windows(audio) -> list[tuple[int, int]]:
     """Cửa sổ ≤ 180 s; mỗi lần cắt ở khung 100 ms lặng nhất trong 30 s cuối cửa sổ."""
-    out, a = [], 0
+    out, a, n = [], 0, len(audio)
     while n - a > WINDOW_SECONDS * SR:
         lo, hi = a + (WINDOW_SECONDS - CUT_SEARCH_SECONDS) * SR, a + WINDOW_SECONDS * SR
         frame = SR // 10
-        seg = AUDIO[lo:hi]
+        seg = audio[lo:hi]
         k = len(seg) // frame
         energy = np.sqrt(np.mean(seg[:k * frame].reshape(k, frame) ** 2, axis=1))
         cut = lo + int(np.argmin(energy)) * frame + frame // 2
@@ -312,44 +333,151 @@ def segment(words: list[dict], lang: str) -> list[dict]:
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--audio", required=True)
-ap.add_argument("--out", required=True)
+ap.add_argument("--audio")
+ap.add_argument("--out")
 ap.add_argument("--language", default="auto")
+ap.add_argument("--jobs", help="file JSON: nhiều video [{audio, out, language}]")
 args = ap.parse_args()
+if not args.jobs and not (args.audio and args.out):
+    ap.error("cần --jobs hoặc --audio + --out")
+JOBS = (json.load(open(args.jobs, encoding="utf-8-sig")) if args.jobs
+        else [{"audio": args.audio, "out": args.out, "language": args.language}])
 import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 
-AUDIO, sr = sf.read(args.audio, dtype="float32")
-if AUDIO.ndim > 1:
-    AUDIO = AUDIO.mean(axis=1)
-assert sr == SR, f"cần WAV {SR} Hz"
-say(f"Âm thanh {len(AUDIO) / SR:.1f}s")
 cuda = torch.cuda.is_available()
 device, dtype = ("cuda:0", torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if cuda else ("cpu", torch.float32)
+_STEP["vram"] = torch.cuda.mem_get_info if cuda else None
 if cuda:
     # card bị game / ứng dụng khác chiếm → model tràn sang RAM thường, chậm gấp nhiều lần: báo ngay từ đầu
     free, total = torch.cuda.mem_get_info()
     if free < NEED_VRAM_GB * 2 ** 30:
         say(f"⚠ GPU chỉ còn trống {free / 2 ** 30:.1f}/{total / 2 ** 30:.0f} GB (cần ~{NEED_VRAM_GB:.0f} GB) — game / "
             "ứng dụng khác đang dùng card nên nhận diện sẽ chậm hơn nhiều. Đóng bớt rồi chạy lại để nhanh hơn.")
-phase("dò đoạn có tiếng", 0.03, 0.05, 10)
-windows = split_windows(len(AUDIO))
-# Silero VAD chỉ cắt biên ngoài mỗi cửa sổ, đệm 1 s (cửa sổ không thấy tiếng thì giữ nguyên)
-threads = torch.get_num_threads()
-try:
-    torch.set_num_threads(1)
-    from silero_vad import get_speech_timestamps, load_silero_vad
+VAD = None
 
-    regions = get_speech_timestamps(torch.from_numpy(AUDIO), load_silero_vad(), sampling_rate=SR, threshold=0.35,
-                                    min_speech_duration_ms=100, speech_pad_ms=0)
-finally:
-    torch.set_num_threads(threads)
-trimmed = []
-for a, b in windows:
-    sp = [r for r in regions if r["end"] > a and r["start"] < b]
-    trimmed.append((max(a, sp[0]["start"] - SR), min(b, sp[-1]["end"] + SR)) if sp else (a, b))
-windows = trimmed
-phase("nạp Qwen3-ASR-1.7B", 0.05, 0.12, 25)
+
+def load_audio(path: str):
+    audio, sr = sf.read(path, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    assert sr == SR, f"cần WAV {SR} Hz"
+    return audio
+
+
+def speech_windows(audio) -> list[tuple[int, int]]:
+    """Cửa sổ ≤ 180 s; Silero VAD chỉ cắt biên ngoài mỗi cửa sổ, đệm 1 s (cửa sổ không thấy tiếng thì giữ nguyên)."""
+    global VAD
+    windows = split_windows(audio)
+    threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(1)
+        from silero_vad import get_speech_timestamps, load_silero_vad
+
+        VAD = VAD or load_silero_vad()
+        regions = get_speech_timestamps(torch.from_numpy(audio), VAD, sampling_rate=SR, threshold=0.35,
+                                        min_speech_duration_ms=100, speech_pad_ms=0)
+    finally:
+        torch.set_num_threads(threads)
+    trimmed = []
+    for a, b in windows:
+        sp = [r for r in regions if r["end"] > a and r["start"] < b]
+        trimmed.append((max(a, sp[0]["start"] - SR), min(b, sp[-1]["end"] + SR)) if sp else (a, b))
+    return trimmed
+
+
+def skipped(k: int) -> bool:
+    """Người dùng bấm Bỏ qua video k lúc chưa tới lượt (app tạo file <out>.skip)."""
+    if os.path.exists(JOBS[k]["out"] + ".skip"):
+        _emit(f"SKIP {k}")
+        return True
+    return False
+
+
+def fail_text(exc: BaseException) -> str:
+    lines = str(exc).strip().splitlines()
+    return (lines[0] if lines else type(exc).__name__)[:300]
+
+
+def listen_job(k: int, asr) -> list:
+    """Nghe video k → [(a, b, ngôn ngữ, chữ)] theo từng cửa sổ (đọc lặp → chia đôi đọc lại một lần)."""
+    job = JOBS[k]
+    audio = load_audio(job["audio"])
+    cache = job["out"] + ".pieces.json"
+    try:                                                 # lần chạy trước đã nghe xong video này (bị dừng ở bước sau)
+        old = json.load(open(cache, encoding="utf-8"))
+        if old.get("samples") == len(audio):
+            say(f"Dùng lại kết quả nghe lần trước ({len(audio) / SR:.1f}s)")
+            return [tuple(x) for x in old["pieces"]]
+    except (OSError, ValueError):
+        pass
+    say(f"Âm thanh {len(audio) / SR:.1f}s")
+    phase("dò đoạn có tiếng", 0.03, 0.05, 10, job=k)
+    windows = speech_windows(audio)
+    lang_arg = job.get("language") or "auto"
+    forced = ISO_TO_QWEN.get(lang_arg) if lang_arg != "auto" else None
+
+    def listen(a: int, b: int):
+        clip = audio[a:b]
+        asr.max_new_tokens = min(MAX_NEW_TOKENS, TOKEN_MARGIN + math.ceil(len(clip) / SR * TOKENS_PER_SECOND))
+        r = asr.transcribe(audio=(clip, SR), language=forced)[0]
+        return (forced or r.language or ""), r.text.strip()
+
+    pieces = []
+    for w, (a, b) in enumerate(windows):
+        p0, p1 = 0.12 + 0.48 * w / len(windows), 0.12 + 0.48 * (w + 1) / len(windows)
+        part = f"đoạn {w + 1}/{len(windows)} " if len(windows) > 1 else ""
+        phase(f"nghe {part or 'lời thoại '}({a / SR:.0f}–{b / SR:.0f}s)", p0, p1, max(8.0, (b - a) / SR * 0.15), job=k)
+        say(f"Nghe {part}{a / SR:.0f}–{b / SR:.0f}s…")
+        lang, text = listen(a, b)
+        if degenerate(text) and b - a > 20 * SR:          # đọc lặp → chia đôi đọc lại một lần
+            say(f"Cửa sổ {a / SR:.0f}–{b / SR:.0f}s đọc lặp → chia đôi đọc lại")
+            mid = (a + b) // 2
+            for x, y in ((a, mid), (mid, b)):
+                pieces.append((x, y, *listen(x, y)))
+        else:
+            pieces.append((a, b, lang, text))
+        progress(p1)
+    json.dump({"samples": len(audio), "pieces": pieces}, open(cache, "w", encoding="utf-8"), ensure_ascii=False)
+    return pieces
+
+
+def align_job(k: int, aligner, pieces: list) -> None:
+    """Căn mốc từng chữ + tách câu cho video k, ghi JSON kết quả."""
+    job = JOBS[k]
+    audio = load_audio(job["audio"])
+    votes: dict[str, float] = {}
+    for a, b, lang, text in pieces:
+        if text:
+            iso = QWEN_TO_ISO.get(str(lang).split(",")[0].strip(), "")
+            votes[iso] = votes.get(iso, 0) + (b - a)
+    lang_arg = job.get("language") or "auto"
+    lang_iso = lang_arg if lang_arg != "auto" else (max(votes, key=votes.get) if votes else "zh")
+    say(f"Nhận diện xong ({lang_iso}) — căn mốc từng chữ…")
+    words: list[dict] = []
+    todo = [p for p in pieces if p[3]]
+    for w, (a, b, lang, text) in enumerate(todo):
+        phase("căn mốc từng chữ", 0.63 + 0.29 * w / len(todo), 0.63 + 0.29 * (w + 1) / len(todo),
+              max(5.0, (b - a) / SR * 0.05), job=k)
+        qlang = ISO_TO_QWEN.get(lang_iso) or str(lang).split(",")[0].strip() or "Chinese"
+        items = [(it.text, it.start_time, it.end_time)
+                 for it in aligner.align(audio=(audio[a:b], SR), text=text, language=qlang)[0]]
+        words += attach_words(text, items, a / SR, limit=(b - a) / SR)
+        progress(0.63 + 0.29 * (w + 1) / len(todo))
+    words = [w for w in words if len(w["word"]) <= 30]
+    fixed = repair_collapsed(words)
+    if fixed:
+        say(f"Sửa {fixed} vùng căn mốc sụp")
+    phase("tách câu", 0.92, 1.0, 10, job=k)
+    sentences = segment(words, lang_iso)
+    progress(1.0)
+    json.dump({"language": lang_iso, "text": "".join(p[3] for p in pieces), "words": words, "sentences": sentences,
+               "repaired": fixed}, open(job["out"], "w", encoding="utf-8"), ensure_ascii=False)
+    say(f"Xong: {len(sentences)} câu")
+
+
+# 1) nghe hết các video với MỘT lần nạp Qwen3-ASR
+phase("nạp Qwen3-ASR-1.7B", 0.05, 0.12, 25, job=0)
 from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner  # noqa: E402
 
 say(f"Nạp Qwen3-ASR-1.7B ({device})…")
@@ -357,59 +485,30 @@ t_load = time.perf_counter()
 ASR = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=dtype, device_map=device,
                                       max_inference_batch_size=1, max_new_tokens=MAX_NEW_TOKENS)
 say(f"Đã nạp model ({time.perf_counter() - t_load:.0f}s)")
-forced = ISO_TO_QWEN.get(args.language) if args.language not in ("", "auto") else None
-
-
-def listen(a: int, b: int):
-    clip = AUDIO[a:b]
-    ASR.max_new_tokens = min(MAX_NEW_TOKENS, TOKEN_MARGIN + math.ceil(len(clip) / SR * TOKENS_PER_SECOND))
-    r = ASR.transcribe(audio=(clip, SR), language=forced)[0]
-    return (forced or r.language or ""), r.text.strip()
-
-
-pieces = []
-for k, (a, b) in enumerate(windows):
-    p0, p1 = 0.12 + 0.48 * k / len(windows), 0.12 + 0.48 * (k + 1) / len(windows)
-    part = f"đoạn {k + 1}/{len(windows)} " if len(windows) > 1 else ""
-    phase(f"nghe {part or 'lời thoại '}({a / SR:.0f}–{b / SR:.0f}s)", p0, p1, max(8.0, (b - a) / SR * 0.15))
-    say(f"Nghe {part}{a / SR:.0f}–{b / SR:.0f}s…")
-    lang, text = listen(a, b)
-    if degenerate(text) and b - a > 20 * SR:          # đọc lặp → chia đôi đọc lại một lần
-        say(f"Cửa sổ {a / SR:.0f}–{b / SR:.0f}s đọc lặp → chia đôi đọc lại")
-        mid = (a + b) // 2
-        for x, y in ((a, mid), (mid, b)):
-            pieces.append((x, y, *listen(x, y)))
-    else:
-        pieces.append((a, b, lang, text))
-    progress(p1)
-ASR = None                                           # giải phóng VRAM trước khi nạp bộ căn mốc
+heard: dict[int, list] = {}
+for k in range(len(JOBS)):
+    if skipped(k):
+        continue
+    _STEP["job"] = k
+    _emit(f"JOB {k}")
+    try:
+        heard[k] = listen_job(k, ASR)
+    except Exception as exc:                             # noqa: BLE001 — một video hỏng không dừng cả lượt
+        _emit(f"FAIL {k} {fail_text(exc)}")
+ASR = None                                               # giải phóng VRAM trước khi nạp bộ căn mốc
 if cuda:
     torch.cuda.empty_cache()
-votes: dict[str, float] = {}
-for a, b, lang, text in pieces:
-    if text:
-        iso = QWEN_TO_ISO.get(str(lang).split(",")[0].strip(), "")
-        votes[iso] = votes.get(iso, 0) + (b - a)
-lang_iso = args.language if args.language not in ("", "auto") else (max(votes, key=votes.get) if votes else "zh")
-say(f"Nhận diện xong ({lang_iso}) — căn mốc từng chữ…")
-phase("nạp bộ căn mốc", 0.6, 0.63, 10)
-aligner = Qwen3ForcedAligner.from_pretrained("Qwen/Qwen3-ForcedAligner-0.6B", dtype=dtype, device_map=device)
-words: list[dict] = []
-todo = [p for p in pieces if p[3]]
-for k, (a, b, lang, text) in enumerate(todo):
-    phase("căn mốc từng chữ", 0.63 + 0.29 * k / len(todo), 0.63 + 0.29 * (k + 1) / len(todo), max(5.0, (b - a) / SR * 0.05))
-    qlang = ISO_TO_QWEN.get(lang_iso) or str(lang).split(",")[0].strip() or "Chinese"
-    items = [(it.text, it.start_time, it.end_time) for it in aligner.align(audio=(AUDIO[a:b], SR), text=text, language=qlang)[0]]
-    words += attach_words(text, items, a / SR, limit=(b - a) / SR)
-    progress(0.63 + 0.29 * (k + 1) / len(todo))
-del aligner
-words = [w for w in words if len(w["word"]) <= 30]
-fixed = repair_collapsed(words)
-if fixed:
-    say(f"Sửa {fixed} vùng căn mốc sụp")
-phase("tách câu", 0.92, 1.0, 10)
-sentences = segment(words, lang_iso)
-progress(1.0)
-json.dump({"language": lang_iso, "text": "".join(p[3] for p in pieces), "words": words, "sentences": sentences,
-           "repaired": fixed}, open(args.out, "w", encoding="utf-8"), ensure_ascii=False)
-say(f"Xong: {len(sentences)} câu")
+# 2) căn mốc + tách câu từng video với MỘT lần nạp bộ căn mốc
+if heard:
+    phase("nạp bộ căn mốc", 0.6, 0.63, 10, job=min(heard))
+    aligner = Qwen3ForcedAligner.from_pretrained("Qwen/Qwen3-ForcedAligner-0.6B", dtype=dtype, device_map=device)
+    for k, pieces in heard.items():
+        if skipped(k):
+            continue
+        _STEP["job"] = k
+        _emit(f"JOB {k}")
+        try:
+            align_job(k, aligner, pieces)
+            _emit(f"DONE {k}")
+        except Exception as exc:                         # noqa: BLE001
+            _emit(f"FAIL {k} {fail_text(exc)}")

@@ -96,6 +96,11 @@
     còn …»; `phase()` + luồng nhịp tim: thanh tiến độ nhích trong từng bước, 30 s im lặng thì log «… vẫn đang …»; log thời
     gian nạp model. Dò chữ cứng có khoá theo video (`hardsub.ensure_region`) — xem trước + Chuẩn bị không dò hai lần.
     Test: `audit_out/qa/test_worker_heartbeat.py`.
+23. **Nghe lời thoại cả lượt bằng một tiến trình** (`qwen_asr.transcribe_batch`, `JobRunner._listen_first`, worker
+    `--jobs`): ≥ 2 video cần Qwen3-ASR → nạp Qwen một lần nghe hết, giải phóng, nạp bộ căn mốc một lần căn hết, rồi mới
+    dịch / lồng tiếng từng video (Qwen không giữ GPU lúc lồng tiếng). Bỏ qua video đang nghe → dừng, chạy lại phần còn
+    lại (kết quả nghe lưu `<out>.pieces.json`); video chưa tới lượt → file `<out>.skip`. Lỗi → video đó nghe riêng như
+    cũ. Test: `audit_out/qa/test_batch_listen.py` (worker giả `fake_qwen_worker.py`).
 
 ## Còn tồn / để ý khi làm tiếp
 

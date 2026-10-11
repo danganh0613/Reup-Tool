@@ -1082,16 +1082,17 @@ class MainWindow(_Root):
             self.queue_update(it)
         self._render_started = time.time()
         total = len(items)
-        done_count = [0]
+        finished = ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua")
         self.pipeline.audio_only = audio_only
         prep = mode == "prepare"
 
         def on_update(it: VideoItem) -> None:
             self.queue_update(it)
             if it.status in ("Đang xử lý", "Đang chuẩn bị"):
-                self.progress.update_item(it, done_count[0] + 1, total, (done_count[0] + it.progress) / total)
-            elif it.status in ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua"):
-                done_count[0] = min(total, done_count[0] + 1)
+                # số thứ tự theo hàng đợi + tiến độ cộng dồn mọi video (bước nghe lời thoại chạy trước cho cả lượt)
+                pos = next((i for i, x in enumerate(items) if x is it), 0) + 1
+                overall = sum(1.0 if x.status in finished else x.progress for x in items) / total
+                self.progress.update_item(it, pos, total, overall)
 
         def on_done(ok: int, fail: int) -> None:
             stopped = self.runner.cancel.is_set()
