@@ -363,7 +363,7 @@ if not cuda:
         ram = None
     if ram is not None and ram < 8:
         say(f"⚠ Máy không có card NVIDIA và chỉ còn {ram:.1f} GB RAM trống — nhận diện trên CPU cần ~8 GB, có thể rất "
-            "chậm hoặc lỗi. Đóng bớt ứng dụng, hoặc video có phụ đề in sẵn thì chọn «Chữ in sẵn trên video».")
+            "chậm hoặc lỗi. Đóng bớt ứng dụng rồi thử lại.")
     else:
         say("Máy không có card NVIDIA — nhận diện chạy bằng CPU (chậm hơn nhiều, video 2 phút có thể mất 10–20 phút).")
 VAD = None

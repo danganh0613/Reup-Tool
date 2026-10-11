@@ -4,7 +4,6 @@
     python main.py --render a.mp4 b.mp4  render không mở cửa sổ, dùng cấu hình đã lưu (output/last_config.json)
         --mp3        xuất MP3 thay vì MP4
         --stt        nhận diện phụ đề (Whisper/Gemini theo cấu hình) trước khi render
-        --ocr        lấy lời từ chữ in sẵn trên video (OCR) thay cho nghe giọng nói — thử bộ đọc chữ của bản .exe
         --out DIR    thư mục xuất
         --config F   đọc cấu hình làm việc từ file F (vd của bản cài) thay cho output/last_config.json — chỉ đọc
     python main.py --selftest            kiểm tra máy (GPU, CUDA, model, giọng, key) → logs/selftest.txt
@@ -28,7 +27,6 @@ def render_cli(argv: list[str]) -> int:
     ap.add_argument("--render", nargs="+", metavar="VIDEO", required=True)
     ap.add_argument("--mp3", action="store_true")
     ap.add_argument("--stt", action="store_true")
-    ap.add_argument("--ocr", action="store_true")
     ap.add_argument("--out", default="")
     ap.add_argument("--config", default="")
 
@@ -50,10 +48,8 @@ def render_cli(argv: list[str]) -> int:
     state = AppState()
     state.load_settings()
     state.load_config(Path(ns.config) if ns.config else None)
-    state.set_save_scheduler(lambda _save: None)   # chỉ đọc: --out / --ocr không ghi đè cấu hình làm việc của app
+    state.set_save_scheduler(lambda _save: None)   # chỉ đọc: --out không ghi đè cấu hình làm việc của app
     state.output_dir = ns.out or state.output_dir or str(VIDEOS_DIR)
-    if ns.ocr:
-        state.subtitle.stt_engine = "ocr"
     ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
     ffmpeg.require()
     pipe = Pipeline(state, ffmpeg)

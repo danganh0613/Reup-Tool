@@ -193,12 +193,12 @@ def sentence_cues(words: list[dict], sentences: list[str]) -> list[Cue]:
     return [Cue(i + 1, a, max(b, a + 0.2), wrap_lines(s.strip())) for i, (s, (a, b)) in enumerate(zip(sentences, stamps))]
 
 
-def _require() -> None:
+def require() -> None:
     if not is_installed():
         where = ("bản .exe: chép models\\qwen_asr_env + models\\hf từ máy đã cài" if getattr(sys, "frozen", False)
                  else f"Cài đặt › AI trên máy › «Cài» (một lần, ~{INSTALL_GB} GB)")
-        raise RuntimeError(f"{MISSING_MARK} Chưa cài bộ nghe lời thoại (Qwen3-ASR) — {where}, hoặc chọn «Chữ in sẵn "
-                           "trên video» nếu video có phụ đề in sẵn.")
+        raise RuntimeError(f"{MISSING_MARK} Chưa cài bộ nghe lời thoại (Qwen3-ASR) — {where}. Video có phụ đề in sẵn "
+                           "thì vẫn lấy được lời từ chữ trên hình.")
 
 
 def _run(args: list[str], *, on_line: Callable[[str], None],
@@ -278,10 +278,11 @@ def _clean(out: Path) -> None:
         p.unlink(missing_ok=True)
 
 
-def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, language: str = "auto", settings: Settings,
-               work_dir: Path, on_progress: Callable[[float], None] | None = None,
-               log: Callable[[str], None] | None = None, cancel: threading.Event | None = None):
-    _require()
+def _listen(video_path: str | Path, ffmpeg: FFmpeg, *, language: str, work_dir: Path,
+            on_progress: Callable[[float], None] | None, log: Callable[[str], None] | None,
+            cancel: threading.Event | None) -> dict:
+    """Chạy worker cho một video → kết quả thô {language, words, sentences…}."""
+    require()
     work_dir.mkdir(parents=True, exist_ok=True)
     wav, out = work_dir / "qwen_audio.wav", work_dir / "qwen_asr.json"
     if log:
@@ -306,9 +307,18 @@ def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, language: str = "auto"
         raise RenderCancelled("Đã huỷ nhận diện")
     if code != 0 or not out.exists():
         raise RuntimeError("Qwen3-ASR lỗi: " + (fail[0] if fail else " | ".join(tail[-4:])[-400:]))
-    res = _finish(json.loads(out.read_text(encoding="utf-8")), settings=settings, log=log, cancel=cancel)
+    data = json.loads(out.read_text(encoding="utf-8"))
     wav.unlink(missing_ok=True)
     _clean(out)
+    return data
+
+
+def transcribe(video_path: str | Path, ffmpeg: FFmpeg, *, language: str = "auto", settings: Settings,
+               work_dir: Path, on_progress: Callable[[float], None] | None = None,
+               log: Callable[[str], None] | None = None, cancel: threading.Event | None = None):
+    data = _listen(video_path, ffmpeg, language=language, work_dir=work_dir, on_progress=on_progress, log=log,
+                   cancel=cancel)
+    res = _finish(data, settings=settings, log=log, cancel=cancel)
     if on_progress:
         on_progress(1.0)
     return res
@@ -332,7 +342,7 @@ def transcribe_batch(jobs: list[BatchJob], ffmpeg: FFmpeg, *, settings: Settings
     báo lỗi đúng chỗ). ``skipped(k)``: người dùng bấm Bỏ qua video k — chưa tới lượt thì worker bỏ qua; đang nghe thì
     dừng tiến trình rồi chạy lại cho các video còn lại (video đã nghe xong không nghe lại). ``on_current(k)``: worker
     bắt đầu làm video k."""
-    _require()
+    require()
     paths: list[tuple[Path, Path]] = []
     for job in jobs:
         job.work_dir.mkdir(parents=True, exist_ok=True)

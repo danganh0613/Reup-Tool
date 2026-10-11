@@ -834,7 +834,10 @@ class MainWindow(_Root):
                 self.refresh_modules()
                 need = [self.pipeline_for(it).needs(it) for it in items]
         no_key = not self.app_state.settings.gemini_keys() and any("gemini" in n for n in need)
-        no_qwen = any("qwen" in n for n in need) and not is_installed()
+        from app.services.ocr_hardsub import available as ocr_ok
+
+        # chưa cài Qwen nhưng đọc được chữ in sẵn → video có phụ đề vẫn chạy được, video không có thì báo riêng từng video
+        no_qwen = any("qwen" in n for n in need) and not is_installed() and not ocr_ok()
         if not (no_key or no_qwen):
             return True
         lines = (["• API key Gemini — để dịch phụ đề"] if no_key else []) + \

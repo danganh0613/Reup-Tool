@@ -189,6 +189,7 @@ class Router:
             model_down = False
             while attempt < self.TRIES:
                 try:
+                    logger.info("Gọi %s/%s (%d ký tự)", c.provider, c.model, len(prompt))   # đếm lượt gọi trong log
                     return _call_gemini(c, prompt)
                 except QuotaError as exc:
                     last = str(exc)
@@ -345,6 +346,18 @@ def _glossary_lines(glossary: str) -> str:
     return "\n".join(lines[:200])
 
 
+#: AI quên thoát dấu " trong câu → Gemini (chế độ JSON) đóng chuỗi ngay đó, JSON vẫn hợp lệ nên không ai biết:
+#: «Biệt danh "tăng áp turbo"» về thành «Biệt danh ». Dặn AI đừng dùng ", câu về còn dấu cách ở cuối thì coi là bị cụt.
+QUOTE_RULE = ("Never use the double-quote character (\") inside any text value; if quotation marks are needed, use "
+              "single quotes ('...') or «...» instead.")
+
+
+def cut_at_quote(raw) -> bool:
+    """Câu AI trả bị cắt ở dấu " quên thoát: rỗng, hoặc còn khoảng trắng ở cuối (cắt ngay trước dấu ngoặc mở)."""
+    text = "" if raw is None else str(raw)
+    return not text.strip() or text != text.rstrip()
+
+
 #: một dòng «"khoá": "giá trị",» của JSON thụt dòng (cách lời nhắc VideoLingo mẫu cho AI)
 _KV_LINE = re.compile(r'^(\s*"[^"\n]+"\s*:\s*")(.*)("\s*,?\s*)$')
 
@@ -422,7 +435,8 @@ def _parse_items(text: str, ids: list[int]) -> list[str]:
     got: dict[int, str] = {}
     for it in items:
         try:
-            got[int(it["id"])] = str(it.get("text", "")).strip()
+            raw = it.get("text", "")
+            got[int(it["id"])] = "" if cut_at_quote(raw) else str(raw).strip()     # cụt → bỏ, giữ câu cũ
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ValueError("JSON không đúng dạng (item thiếu id / text)") from None
     missing = [n for n in ids if n not in got]
@@ -458,7 +472,8 @@ def _retranslate_prompt(items: list[tuple[str, str, int, str, str]], target: str
         "- Translate from SOURCE again; use CURRENT only to see what the user disliked — do not just copy it.\n"
         "- Keep the SAME number of items and the same order; one output per item, never merge or split.\n"
         "- Spoken as voice-over in the same time slot: stay within [max N chars]; never output the bracket.\n"
-        "- Keep names and numbers unless the glossary says otherwise. No explanations, no quotes."
+        "- Keep names and numbers unless the glossary says otherwise. No explanations, no quotes.\n"
+        f"- {QUOTE_RULE}"
         + (f"\nGlossary — always use these exact translations:\n{gl}" if gl else "")
         + "\n- CONTEXT lines are neighbouring source lines, only to understand the scene — never output them."
         + "\n- Return ONLY a JSON object: {\"items\": [{\"id\": <item number>, \"text\": \"...\"}, ...]} with one item "
@@ -553,6 +568,7 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
         "with that meaning), not just exact wording.\n"
         "- Return each changed line in full (the whole new subtitle text), keep it short enough to be spoken in the "
         "same time, never merge or split lines, no quotes or explanations inside the text.\n"
+        f"- {QUOTE_RULE}\n"
         + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
         + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
         + "- Return ONLY JSON: {\"edits\": [{\"n\": <line number>, \"text\": \"<new line>\"}], "

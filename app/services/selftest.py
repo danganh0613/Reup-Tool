@@ -115,8 +115,8 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
         from app.services.ocr_hardsub import available as ocr_ok
 
         out.append(Check("Đọc chữ in sẵn (OCR)", "ok" if ocr_ok() else "warn",
-                         "Sẵn sàng (PaddleOCR)" if ocr_ok() else "Thiếu PaddleOCR → video «Chữ in sẵn» sẽ được nghe giọng "
-                         "nói thay thế", "" if ocr_ok() else "Không bắt buộc.", optional=True))
+                         "Sẵn sàng (PaddleOCR)" if ocr_ok() else "Thiếu PaddleOCR → không đối chiếu được chữ in trên video "
+                         "(tên riêng có thể nghe sai)", "" if ocr_ok() else "Không bắt buộc.", optional=True))
     except Exception:
         pass
     try:

@@ -40,7 +40,7 @@ ENCODE_PRESETS = ["Nhanh", "Cân bằng", "Chất lượng"]
 #: trên Windows (đã là nét đậm, không bật «Đậm» kẻo libass tô đậm thêm); máy khác dùng Arial đậm
 SUB_FONT_DEFAULT, SUB_BOLD_DEFAULT = ("Segoe UI Black", False) if sys.platform == "win32" else ("Arial", True)
 SRT_SOURCES = ["Tự nhận diện (Whisper)", "Chọn file SRT"]
-#: lấy lời thoại từ: "asr" = AI nghe giọng nói (Qwen3-ASR, chạy trên máy) · "ocr" = đọc phụ đề in sẵn trên video
+#: (cũ) cách lấy lời thoại — giờ máy tự chọn (nghe giọng nói + đối chiếu chữ in sẵn), giữ trường để đọc cấu hình cũ
 #: (Douyin…) — đúng từng chữ, kể cả tên riêng
 STT_ENGINES = ["asr", "ocr"]
 STT_LABELS = {"asr": "Giọng nói trong video", "ocr": "Chữ in sẵn trên video"}

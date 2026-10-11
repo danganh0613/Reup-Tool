@@ -54,6 +54,18 @@ class Template:
 _COLOR_OFF = {"enable": False, "dup_shift": False, "dup_noise": False, "dup_color": False, "dup_zoompan": False,
               "dup_audio": False, "dup_gop": False, "texture_enable": False, "kenburns": "Không", "deshake": False}
 
+#: lời dặn AI dịch của mẫu «Review phim dọc» — hiện ở ô «Lời dặn cho AI dịch» (tab Lời thoại), sửa được
+REVIEW_STYLE = (
+    "Dịch phóng tác cho video review dọc (TikTok · Shorts · Reels) — người xem Việt nghe là hiểu, thấy cuốn:\n"
+    "- Nói như người Việt ngoài đời, bắt trend giới trẻ, giật gân / hài hước đúng nhịp video.\n"
+    "- Biệt danh, chơi chữ, meme: đổi sang hình ảnh người Việt hiểu ngay và thấy vui (vd 外号涡轮增压 → biệt danh "
+    "«đít gắn động cơ», đừng dịch «turbo tăng áp»).\n"
+    "- Xưng hô theo quan hệ và tình huống (mày – tao, anh – em, ông tướng này, con này…), không dùng «tôi – bạn» "
+    "kiểu dịch máy.\n"
+    "- Tiếng lóng Douyin → tiếng lóng mạng Việt (bị bắt đi tù → «bóc lịch», 银手镯 → «còng số 8»).\n"
+    "- Cô đọng: số âm tiết xấp xỉ câu gốc, bỏ từ thừa (thì, là, mà, ở, những, cái…)."
+)
+
 BUILTIN: list[Template] = [
     Template(
         name="🔥 Review phim dọc 9:16 (TikTok · Shorts · Reels)",
@@ -68,7 +80,7 @@ BUILTIN: list[Template] = [
                       "output_suffix": "_review", "loop_to_voice": False},
             # phụ đề kiểu TikTok vàng (services/subtitle_presets.py), đè lên chỗ chữ gốc đã che
             "subtitle": {"enable_subtitle": True, "srt_source": SRT_SOURCES[0], "translate_enable": True,
-                         "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1],
+                         "translate_target": "Tiếng Việt", "srt_mode": SRT_MODES[1], "translate_style": REVIEW_STYLE,
                          **STYLES["TikTok vàng"], "use_box": True, "box_x": 0.08, "box_y": 0.68, "box_w": 0.84,
                          "box_h": 0.08, "follow_hardsub": True},
             "tts": {"enable_tts": True, "tts_source": TTS_SOURCES[0], "tts_speed": 1.1, "max_tempo": 1.4,

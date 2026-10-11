@@ -43,8 +43,8 @@ def install_qwen(window, on_done: Done) -> bool:
         return False
     if getattr(sys, "frozen", False):            # báo ngay, không hỏi «tải 11 GB» rồi mới lỗi
         messagebox.showinfo("Edit Studio", "Bản .exe chưa tự cài được bộ nghe lời thoại.\n\nChép thư mục "
-                                           "models\\qwen_asr_env và models\\hf từ máy đã cài sang thư mục app này, hoặc "
-                                           "chọn «Chữ in sẵn trên video» ở tab Nhận diện nếu video có phụ đề in sẵn.")
+                                           "models\\qwen_asr_env và models\\hf từ máy đã cài sang thư mục app này. Video có "
+                                           "phụ đề in sẵn thì vẫn lấy được lời từ chữ trên hình.")
         on_done(False, RuntimeError("Bản .exe chưa tự cài được Qwen3-ASR"))
         return False
     MODELS_DIR.mkdir(parents=True, exist_ok=True)

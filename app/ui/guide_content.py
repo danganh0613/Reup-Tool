@@ -26,7 +26,7 @@ TOPICS: list[dict] = [
             "cùng cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
         ]),
         ("warn", f"Video tiếng nước ngoài cần 2 thứ (cài một lần): bộ nghe lời thoại Qwen3-ASR (Cài đặt › AI trên máy, "
-                 f"~{INSTALL_GB} GB — hoặc chọn «Chữ in sẵn trên video» nếu video có phụ đề in sẵn) và API key Gemini "
+                 f"~{INSTALL_GB} GB) và API key Gemini "
                  "để dịch (Cài đặt › AI dùng API key). Thiếu thì máy báo ngay khi bấm chạy."),
         ("h", "Mấy nút trên khung xem trước"),
         ("kv", [
@@ -173,10 +173,9 @@ TOPICS: list[dict] = [
               "đề, để dịch, để lồng tiếng."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "«Lấy lời từ» = «Giọng nói trong video»: AI nghe lời thoại ngay trên máy (có card NVIDIA thì nhanh hơn nhiều), "
-            f"không cần mạng, không tốn lượt AI. Lần đầu bấm «Cài bộ nghe lời thoại» (~{INSTALL_GB} GB, một lần).",
-            "Video Douyin có phụ đề in sẵn: chọn «Chữ in sẵn trên video» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
-            "mốc thời gian lấy theo tiếng nói.",
+            "AI nghe lời thoại ngay trên máy (có card NVIDIA thì nhanh hơn nhiều), không cần mạng, không tốn lượt AI. "
+            f"Lần đầu bấm «Cài bộ nghe lời thoại» (~{INSTALL_GB} GB, một lần).",
+            "Video có phụ đề in sẵn (Douyin…): máy tự đọc chữ trên hình để sửa chỗ nghe sai (tên riêng) — không cần chọn.",
             "«Ngôn ngữ video» để «Tự nhận diện» — máy tự nhận. Ô này dùng chung cho bước dịch (ngôn ngữ gốc).",
             "Bấm «Tạo phụ đề cho video đang chọn». Xong sẽ thấy dòng «Phụ đề: … câu». Xem / sửa chữ ở tab «Lời thoại».",
             "Tên riêng hiếm có thể sai: mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó) hoặc gõ vào ô "

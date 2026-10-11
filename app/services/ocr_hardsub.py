@@ -25,7 +25,7 @@ import numpy as np
 
 from app.config.paths import MODELS_DIR
 from app.core.platform import NO_WINDOW
-from app.core.state import VideoItem
+from app.core.state import Settings, VideoItem
 from app.services.ffmpeg import FFmpeg, RenderCancelled
 from app.services.srt_utils import Cue, wrap_lines
 from app.services.whisper_stt import STTResult
@@ -167,16 +167,30 @@ class NoHardsub(RuntimeError):
     """Video không thấy phụ đề in sẵn — bước nhận diện tự chuyển sang nghe giọng nói nếu đã cài Qwen3-ASR."""
 
 
-def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timing: bool = True,
-               on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
-               cancel: threading.Event | None = None) -> STTResult:
+def _speech_tokens(item: VideoItem, ffmpeg: FFmpeg, *, log: Callable[[str], None] | None,
+                   cancel: threading.Event | None) -> list[tuple[str, float, float]]:
+    """Mốc từng chữ của lời nói bằng SenseVoice (cần torch — bản .exe không có thì [])."""
+    try:
+        from app.services.asr_funasr import recognize_tokens
+
+        tokens, _lang, _total = recognize_tokens(item.path, ffmpeg, language="zh", log=log, cancel=cancel)
+        return tokens
+    except RenderCancelled:
+        raise
+    except Exception as exc:                            # noqa: BLE001 — thiếu FunASR / torch → giữ mốc chữ trên hình
+        logger.warning("Không lấy được mốc tiếng nói cho OCR: %s", exc)
+        return []
+
+
+def read(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, on_progress: Callable[[float], None] | None = None,
+         log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> list[Cue]:
+    """Đọc phụ đề in sẵn → từng dòng chữ với mốc lúc chữ hiện trên hình. Không có phụ đề in sẵn → ``NoHardsub``."""
     from app.services import hardsub
 
     info = ffmpeg.probe(item.path)
-    reg = hardsub.ensure_region(item, ffmpeg, duration, log=log)
+    reg = hardsub.ensure_region(item, ffmpeg, duration, log=log, cancel=cancel)
     if not reg:
-        raise NoHardsub("Không thấy phụ đề in sẵn trên video — tab Nhận diện chọn «Giọng nói trong video», hoặc bấm «Dò lại» "
-                        "ở tab Che mờ nếu video có chữ.")
+        raise NoHardsub("Không thấy phụ đề in sẵn trên video.")
     W, H = info.width, info.height
     pad = 0.01                                          # nới dải chữ một chút trên / dưới
     y0 = max(0, int((reg["y"] - pad) * H))
@@ -218,26 +232,140 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
             frames.append((i / FPS, text))
             i += 1
             if on_progress and duration > 0 and i % FPS == 0:
-                on_progress(min(0.85, 0.85 * i / FPS / duration))
+                on_progress(min(0.95, 0.95 * i / FPS / duration))
     finally:
         proc.stdout.close()
         proc.wait()
     cues = segments_to_cues(merge(frames, 1.0 / FPS))
     if log:
-        log(f"OCR phụ đề in sẵn: {len(cues)} câu · {calls} lượt OCR / {i} khung")
-    han = any(re.search(r"[一-鿿]", c.text) for c in cues)
-    if speech_timing and cues and han:
-        try:
-            from app.services.asr_funasr import recognize_tokens
+        log(f"Đọc chữ in sẵn: {len(cues)} dòng · {calls} lượt OCR / {i} khung")
+    return cues
 
-            tokens, _lang, _total = recognize_tokens(item.path, ffmpeg, language="zh", log=log, cancel=cancel)
+
+def finish(item: VideoItem, ffmpeg: FFmpeg, cues: list[Cue], *, speech_timing: bool = True,
+           settings: Settings | None = None, log: Callable[[str], None] | None = None,
+           cancel: threading.Event | None = None) -> STTResult:
+    """Chỉ có chữ in sẵn (máy chưa cài Qwen3-ASR / video không có tiếng): dời mốc theo tiếng nói (SenseVoice), AI gộp
+    các dòng chữ cùng một câu (``settings`` — ``translate_vl.group_fragments``)."""
+    han = any(_HAN.search(c.text) for c in cues)
+    if speech_timing and cues and han:
+        tokens = _speech_tokens(item, ffmpeg, log=log, cancel=cancel)
+        if tokens:
             cues, moved = retime(cues, tokens)
             if log:
                 log(f"Mốc theo tiếng nói (SenseVoice): dời {moved}/{len(cues)} câu")
-        except RenderCancelled:
-            raise
-        except Exception as exc:                    # noqa: BLE001 — thiếu FunASR / lỗi → giữ mốc OCR
-            logger.warning("Không lấy được mốc tiếng nói cho OCR: %s", exc)
+    if settings is not None and len(cues) > 1:
+        from app.services.translate_vl import group_fragments
+
+        cues = group_fragments(cues, settings=settings, language="zh" if han else "", log=log, cancel=cancel)
+    return STTResult(cues=cues, language="zh" if han else "", language_probability=1.0)
+
+
+def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timing: bool = True,
+               settings: Settings | None = None, on_progress: Callable[[float], None] | None = None,
+               log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> STTResult:
+    cues = read(item, ffmpeg, duration=duration, on_progress=on_progress, log=log, cancel=cancel)
+    res = finish(item, ffmpeg, cues, speech_timing=speech_timing, settings=settings, log=log, cancel=cancel)
     if on_progress:
         on_progress(1.0)
-    return STTResult(cues=cues, language="zh" if han else "", language_probability=1.0)
+    return res
+
+
+# ── Sửa lời nghe được theo chữ in trên video ─────────────────────────────
+
+_CJK_CHAR = "぀-ヿ㐀-鿿가-힯"
+_TOKEN = re.compile(f"[{_CJK_CHAR}]|[^\\W_{_CJK_CHAR}]+")
+FIX_MAX = 6               # một chỗ sửa tối đa ngần này chữ / từ (dài hơn = hai bên nói khác hẳn → giữ lời nghe được)
+FIX_NEAR = 2.0            # chữ trên hình phải hiện trong khoảng ± ngần này giây quanh câu nghe được
+
+
+def _tokens(text: str) -> list[tuple[str, int, int]]:
+    return [(m.group(0), m.start(), m.end()) for m in _TOKEN.finditer(text)]
+
+
+def token_count(text: str) -> int:
+    """Số chữ (Hán / Kana / Hangul) hoặc số từ (chữ Latin…) — để so lời nghe được với chữ trên hình."""
+    return len(_TOKEN.findall(text))
+
+
+def _readings(ch: str) -> set[str]:
+    """Các cách đọc (pinyin bỏ thanh) của một chữ Hán — thiếu pypinyin thì rỗng (không kiểm âm)."""
+    try:
+        from pypinyin import Style, pinyin
+    except ImportError:
+        return set()
+    return set(pinyin(ch, style=Style.NORMAL, heteronym=True)[0])
+
+
+def _sounds_alike(heard: list[str], shown: list[str]) -> bool:
+    """Chỗ khác nhau là do Qwen NGHE sai (nên sửa) chứ không phải OCR đọc nhầm chữ trông giống: nghe sai thì ra chữ ĐỌC
+    giống (钱/钳 qián, 鹿/鹭 lù, 沃伦/涡轮); OCR đọc nhầm thì ra chữ TRÔNG giống mà đọc khác (白 bái / 自 zì → giữ chữ
+    nghe được). Qwen ra chữ Latin cho tên hiếm (PT → 䴙䴘) → sửa. Chữ Latin… → viết gần giống nhau."""
+    def han(t: str) -> bool:
+        return bool(_HAN.match(t))
+
+    if all(han(t) for t in shown) and any(not han(t) for t in heard):
+        return True
+    if all(han(t) for t in heard + shown):
+        reads = [(_readings(a), _readings(b)) for a, b in zip(heard, shown)]
+        if any(not ra or not rb for ra, rb in reads):
+            return True                                 # không kiểm được âm → tin chữ trên hình như trước
+        if len(heard) == len(shown):                    # cả cụm có ≥ nửa số chữ đọc giống («钱嘴冠» → «钳嘴鹤»: 2/3)
+            return sum(1 for ra, rb in reads if ra & rb) * 2 >= len(heard)
+
+        def say(ts: list[str]) -> str:
+            return " ".join(min(_readings(t) or {t}) for t in ts)
+
+        return difflib.SequenceMatcher(None, say(heard), say(shown)).ratio() >= 0.6
+    return difflib.SequenceMatcher(None, " ".join(heard).lower(), " ".join(shown).lower()).ratio() >= 0.5
+
+
+def correct_with_ocr(cues: list[Cue], ocr_cues: list[Cue]) -> tuple[list[Cue], list[tuple[str, str]]]:
+    """Câu + mốc của Qwen3-ASR (chia câu đúng nhịp nói) nhưng chữ nghe sai thay bằng chữ in trên video (đúng như creator
+    gõ — tên riêng: «钱嘴冠» → «钳嘴鹤», «PT» → «䴙䴘»). Dò toàn bộ lời nghe được với toàn bộ chữ trên hình theo thứ tự;
+    chỉ thay đoạn ngắn nằm giữa hai đoạn khớp, dài tương đương, và chữ đó hiện trên hình gần lúc câu được nói. Lời nói
+    không có trên phụ đề → giữ; chữ trên hình không ai nói (tiêu đề, logo) → bỏ qua. → (câu mới, [(cũ, mới)])."""
+    cjk = sum(1 for c in cues if re.search(f"[{_CJK_CHAR}]", c.plain)) * 2 >= max(1, len(cues))
+    texts = [c.plain.replace("\n", "" if cjk else " ") for c in cues]
+    a = [(tok.lower(), k, s, e) for k, t in enumerate(texts) for tok, s, e in _tokens(t)]
+    b = [(tok, c.start, c.end) for c in ocr_cues for tok, _s, _e in _tokens(c.plain)]
+    if not a or not b:
+        return cues, []
+    sm = difflib.SequenceMatcher(None, [x[0] for x in a], [x[0].lower() for x in b], autojunk=False)
+    ops = sm.get_opcodes()
+    edits: dict[int, list[tuple[int, int, str]]] = {}
+    fixes: list[tuple[str, str]] = []
+    n = 0
+    while n < len(ops):
+        if ops[n][0] != "replace":
+            n += 1
+            continue
+        m = n                                           # chỗ khác cách nhau đúng một chữ giống → xét cả cụm («钱嘴冠»)
+        while m + 2 < len(ops) and ops[m + 1][0] == "equal" and ops[m + 1][2] - ops[m + 1][1] == 1 \
+                and ops[m + 2][0] == "replace":
+            m += 2
+        _op, i1, _i2, j1, _j2 = ops[n]
+        i2, j2 = ops[m][2], ops[m][4]
+        anchored = n > 0 and ops[n - 1][0] == "equal" and m + 1 < len(ops) and ops[m + 1][0] == "equal"
+        n = m + 1
+        na, nb = i2 - i1, j2 - j1
+        k = a[i1][1]
+        if not anchored or na > FIX_MAX or nb > FIX_MAX or not 0.5 <= nb / na <= 2 or any(x[1] != k for x in a[i1:i2]):
+            continue
+        cs, ce = cues[k].start - FIX_NEAR, cues[k].end + FIX_NEAR
+        if not all(cs <= s and e <= ce for _t, s, e in b[j1:j2]):
+            continue
+        if not _sounds_alike([texts[k][x[2]:x[3]] for x in a[i1:i2]], [t for t, _s, _e in b[j1:j2]]):
+            continue
+        new = ("" if cjk else " ").join(t for t, _s, _e in b[j1:j2])
+        edits.setdefault(k, []).append((a[i1][2], a[i2 - 1][3], new))
+    out: list[Cue] = []
+    for k, c in enumerate(cues):
+        t = texts[k]
+        if k in edits:
+            lo, hi = min(x[0] for x in edits[k]), max(x[1] for x in edits[k])
+            for s, e, new in sorted(edits[k], reverse=True):
+                t = t[:s] + new + t[e:]
+            fixes.append((texts[k][lo:hi], t[lo:hi + len(t) - len(texts[k])]))     # cả cụm: «钱嘴冠» → «钳嘴鹤»
+        out.append(Cue(c.index, c.start, c.end, wrap_lines(t) if k in edits else c.text, dict(c.meta)))
+    return out, fixes

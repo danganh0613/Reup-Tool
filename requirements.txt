@@ -15,3 +15,4 @@ torchaudio>=2.6
 paddlepaddle>=3.3          # PaddleOCR — Windows CPU phải tắt oneDNN (code đã đặt enable_mkldnn=False)
 paddleocr>=3.7
 opencc-python-reimplemented>=0.1.7   # chữ phồn thể → giản thể cho OCR
+pypinyin>=0.55             # đối chiếu chữ in trên video: chỉ sửa chữ nghe sai đọc giống chữ trên hình (không tin OCR đọc nhầm)

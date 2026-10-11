@@ -134,7 +134,7 @@
       `_offline` · OCR thiếu → nghe giọng · Qwen hết VRAM → CPU, báo tải model lần đầu, căn mốc theo ngôn ngữ từng đoạn ·
       dòng video ở ổ chưa cắm giữ trong cấu hình (`_missing_rows`) · `last_config.json.bak` mỗi phiên · `_free_output` ·
       `attach_srt` · nhạc nền bỏ hệ số ẩn 20 % (`_fold_bgm_master`) · `BUILTIN_PRON` (tên hãng) · `_tk_error`.
-29. **Chạy thử video thật bằng bản .exe** (`EditStudio.exe --render VIDEO --ocr --out DIR`; test `audit_out/qa/test_encoder.py`):
+29. **Chạy thử video thật bằng bản .exe** (`EditStudio.exe --render VIDEO --out DIR`; test `audit_out/qa/test_encoder.py`):
     - **Xuất bằng NVIDIA hỏng hết** với ffmpeg 9.0.1 kèm theo: ffmpeg 9 đổi `-spatial_aq` → `-spatial-aq` («Unrecognized
       option»). Nay `FFmpeg.encoder_options` đọc `-h encoder=…` để chọn đúng tên (`_option`), không có thì bỏ.
     - GPU vẫn lỗi (không phải Dừng / ổ đầy / nguồn hỏng — `cpu_may_help`) → `run_plan` xuất lại bằng `RenderPlan.cpu_cmd`,
@@ -155,10 +155,44 @@
       Giả lập: `audit_out/qa/dll_frozen_sim.py A|B` (ẩn torch như bản .exe).
     - Dịch xong mà hết lượt AI ở bước rút gọn (`fit_texts`) → giữ bản dịch, bỏ rút gọn (trước: lỗi cả video).
       `split_long_sentences` báo «Tách N câu dài bằng AI…» (model có suy luận mất cả phút, không báo thì tưởng treo).
-    - `main.py --render` thêm `--ocr` và `--config FILE` (vd cấu hình của bản cài), không ghi lại cấu hình làm việc.
-      Thử bản mã nguồn bằng cấu hình của bản cài:
-      `python main.py --render VIDEO --config F:\Tool\EditStudio\output\last_config.json --out audit_out\src_test`. Bản .exe không có torch → không có SenseVoice, mốc
-      câu OCR giữ theo chữ trên hình.
+    - `main.py --render` thêm `--config FILE` (vd cấu hình của bản cài), không ghi lại cấu hình làm việc. Thử bản mã nguồn
+      bằng cấu hình của bản cài:
+      `python main.py --render VIDEO --config F:\Tool\EditStudio\output\last_config.json --out audit_out\src_test`.
+30. **Nhận diện tự động: Qwen3-ASR + chữ in sẵn** (người dùng không chọn — bỏ ô «Lấy lời từ»; test
+    `audit_out/qa/test_ocr_group.py`, 35 kiểm tra). Người dùng chấm: bản Qwen (câu trọn, đúng nhịp nói) > OCR > OCR .exe;
+    Qwen nghe sai tên riêng (钳嘴鹤 → «钱嘴冠», 䴙䴘 → «PT»), OCR đúng chữ nhưng câu vụn (creator cắt câu thành 2–3 dòng).
+    - `Pipeline.transcribe`: có Qwen → nghe giọng nói, video có phụ đề in sẵn thì `hardsub_cues` (OCR, CPU) chạy song song
+      lúc Qwen chạy (GPU) → `ocr_hardsub.correct_with_ocr`: giữ câu + mốc của Qwen, thay chỗ nghe sai bằng chữ trên hình —
+      dò toàn bộ lời với toàn bộ chữ (SequenceMatcher theo chữ Hán / từ Latin), chỉ thay đoạn ≤ 6 chữ nằm giữa hai đoạn
+      khớp, dài tương đương, chữ hiện trên hình trong ± 2 s quanh câu, và **đọc giống** (pypinyin: nghe sai ra chữ đồng âm
+      钱/钳; OCR đọc nhầm ra chữ trông giống mà đọc khác 白/自 → giữ chữ nghe được). Cụm cách một chữ xét chung («钱嘴冠»).
+    - Qwen nghe được < ¼ số chữ trên hình (`SPEECH_MIN_SHARE` — video chỉ nhạc + phụ đề) → lấy lời từ chữ in sẵn
+      (`ocr_hardsub.finish`: mốc SenseVoice + `translate_vl.group_fragments` AI gộp mẩu chữ thành câu). Phụ đề khác thứ
+      tiếng thì số chữ tương đương → vẫn theo lời nghe được. Chưa cài Qwen / video không tiếng → chỉ chữ in sẵn; đã nhớ
+      «không có lời» vẫn thử chữ in sẵn. Nghe nhiều video một lượt (`_listen_first`) đọc chữ song song rồi `with_hardsub`.
+    - Dịch: AI hay viết `"` không thoát → Gemini (chế độ JSON) cắt chuỗi ngay đó, JSON vẫn hợp lệ («Biệt danh "tăng áp"»
+      → «Biệt danh »). `QUOTE_RULE` trong mọi lời nhắc + `cut_at_quote` (còn dấu cách cuối = cụt): dịch sát cụt → hỏi lại;
+      dịch thoát cụt / thiếu / ngắn chưa tới nửa bản dịch sát → dùng bản dịch sát cho câu đó (`_free_broken`, không bỏ cả
+      lô); dịch lại / rút gọn cụt → giữ câu cũ.
+    - Chạy trước (`_preflight`): chưa cài Qwen mà máy đọc được chữ → không chặn. `pypinyin` thêm vào requirements + spec.
+
+31. **Dịch: cả video một lượt + phóng tác cho người xem Việt** (test `audit_out/qa/test_whole.py` 14,
+    `test_transcreate.py` 16; thử câu tiếng lóng `audit_out/qa/try_transcreate.py`):
+    - `translate_cues_vl`: mỗi phần ≤ 60 câu / 3000 ký tự (`WHOLE_LINES`, `_windows`) gửi MỘT lượt (`whole_prompt`):
+      AI đọc hết câu chuyện rồi trả `terms` + mỗi câu `direct` (dịch sát, đã đoán lại lời nghe / đọc sai) và `free`
+      (phóng tác, ≤ `[max N syllables]`). Video 2 phút = 1 lượt gọi (trước ~10: tóm tắt + 2 lượt / lô 10 câu). Phần trả
+      thiếu câu / JSON hỏng 3 lần → phần đó dịch từng lô như cũ (tóm tắt lười, `faith_prompt` → `express_prompt`).
+    - `source_note`: lời gốc lấy tự động có thể sai (đồng âm, đọc nhầm nét, ngắt dòng) → đoán theo ngữ cảnh rồi mới dịch.
+      `transcreation_section`: video ngắn lồng tiếng, không dịch từng chữ biệt danh / meme, cô đọng. Giọng văn riêng (xưng
+      hô mày–tao, tiếng lóng Việt, ví dụ «đít gắn động cơ») nằm trong lời dặn của mẫu (`templates.REVIEW_STYLE`, mẫu
+      «Review phim dọc») — tab Lời thoại ô «Lời dặn cho AI dịch» nhiều dòng (CTkTextbox) + nút «Gợi ý» chèn câu dặn.
+    - `syllable_budget` (khung câu + mượn khoảng lặng, `_slot`): số âm tiết tối đa từng câu → câu dịch vừa khung ngay:
+      video mẫu 0 câu tăng tốc / 0 tràn / 0 câu phải rút gọn (trước 14).
+    - Câu dịch thoát cụt (`_free_broken`: còn dấu cách cuối = cắt ở `"`, hoặc kết thúc lửng bằng là / của / và / để…;
+      KHÔNG so độ dài — câu cô đọng đủ ý vẫn dùng) → dịch sát, không ghi bộ nhớ (`weak`). `STYLE_TAG` đổi khi đổi lời
+      nhắc (bộ nhớ dịch kiểu cũ không bị dùng lại). Mỗi lượt gọi Gemini ghi log «Gọi Gemini/model (N ký tự)».
+    - Flash Lite vẫn hay: dùng sai tiếng lóng («gỡ lịch»), tên loài tiếng Việt sai (钳嘴鹤 «cò mỏ nhện»), không theo hết
+      ví dụ trong lời dặn — giới hạn của model nhỏ.
 
 ## Còn tồn / để ý khi làm tiếp
 

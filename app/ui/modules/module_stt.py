@@ -1,5 +1,6 @@
-"""Module Nhận diện lời thoại: lấy lời thoại thành phụ đề — AI nghe giọng nói (Qwen3-ASR, chạy trên máy) hoặc đọc chữ
-in sẵn trên video (OCR); nhận diện cả file media bất kỳ. «Ngôn ngữ video» ở đây dùng chung cho bước dịch."""
+"""Module Nhận diện lời thoại: lấy lời thoại thành phụ đề — AI nghe giọng nói (Qwen3-ASR, chạy trên máy); video có
+phụ đề in sẵn thì máy tự đối chiếu chữ trên hình (không cần chọn). Nhận diện cả file media bất kỳ. «Ngôn ngữ video» ở
+đây dùng chung cho bước dịch."""
 
 from __future__ import annotations
 
@@ -9,18 +10,12 @@ from tkinter import filedialog, messagebox
 
 from app.config import theme as T
 from app.core.languages import language_label
-from app.core.state import SOURCE_BY_CODE, STT_ENGINES, STT_LABELS, STT_LANGUAGES, SRT_SOURCES
+from app.core.state import SOURCE_BY_CODE, STT_LANGUAGES, SRT_SOURCES
 from app.services.qwen_asr import INSTALL_GB
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows
 from app.ui.progress_panel import friendly_error
-
-ENGINE_INFO = ("Giọng nói trong video: AI Qwen3-ASR nghe lời thoại, chạy trên máy (có GPU NVIDIA thì nhanh hơn nhiều), "
-               "không tốn lượt AI. Tên riêng hiếm có thể sai — sửa ở tab «Lời thoại» › «Nhờ AI sửa».\n\n"
-               "Chữ in sẵn trên video: đọc phụ đề có sẵn trên hình (video Douyin…) — đúng từng chữ, kể cả tên riêng. "
-               "Video không có chữ in sẵn thì báo lỗi.")
-
 
 class STTModule(BaseModule):
     key = "stt"
@@ -33,8 +28,6 @@ class STTModule(BaseModule):
 
         sec = Section(self, "Nhận diện lời thoại")
         sec.pack(fill="x", pady=4)
-        self.engine = OptionRow(sec.body, "Lấy lời từ", STT_ENGINES, labels=STT_LABELS, on_change=self._engine_changed,
-                                info=ENGINE_INFO)
         self.lang = OptionRow(sec.body, "Ngôn ngữ video", STT_LANGUAGES, on_change=self._lang_changed,
                               labels={c: language_label(c) for c in STT_LANGUAGES},
                               info="Ngôn ngữ người nói trong video — dùng cho cả nhận diện lẫn bước dịch. Lẫn hai thứ "
@@ -43,7 +36,7 @@ class STTModule(BaseModule):
         self.auto = SwitchRow(sec.body, "Tự nhận diện khi chuẩn bị video", on_change=self._auto_changed,
                               info="Video chưa có phụ đề thì bước «Chuẩn bị» tự nhận diện. Tắt khi bạn luôn dùng file SRT "
                                    "có sẵn.")
-        pack_rows(sec.body, [self.engine, self.lang, self.auto])
+        pack_rows(sec.body, [self.lang, self.auto])
         self.engine_status = StatusLabel(sec.body, "")
         self.engine_status.pack(fill="x", pady=(4, 0))
         self.qwen_btn = ButtonRow(sec.body, [(f"⬇ Cài bộ nghe lời thoại (một lần, ~{INSTALL_GB} GB)", self._install_qwen,
@@ -60,7 +53,6 @@ class STTModule(BaseModule):
         cfg = self.state.subtitle
         self._loading = True
         try:
-            self.engine.set(cfg.stt_engine if cfg.stt_engine in STT_ENGINES else STT_ENGINES[0])
             self.lang.set(cfg.stt_language)
             self.auto.set(cfg.srt_source == SRT_SOURCES[0])
         finally:
@@ -81,16 +73,6 @@ class STTModule(BaseModule):
             self.status.info("Chưa có phụ đề — tạo xong xem / sửa ở tab «Lời thoại».")
 
     def _layout_engine(self) -> None:
-        if self.state.subtitle.stt_engine == "ocr":
-            from app.services.ocr_hardsub import available
-
-            if available():
-                self.engine_status.info("Đọc chữ in sẵn trên hình — chạy trên máy, không cần mạng.")
-            else:
-                self.engine_status.warn("Máy này chưa có bộ đọc chữ (PaddleOCR) — video sẽ được nghe giọng nói "
-                                        "(Qwen3-ASR) thay thế.")
-            self.qwen_btn.pack_forget()
-            return
         from app.services.qwen_asr import is_installed
 
         if is_installed():
@@ -99,7 +81,7 @@ class STTModule(BaseModule):
         elif getattr(sys, "frozen", False):
             # bản .exe không tự cài được Qwen (cần Python) → không mời bấm nút vô tác dụng
             self.engine_status.warn("Chưa có bộ nghe lời thoại (Qwen3-ASR). Bản .exe chưa tự cài được — chép thư mục "
-                                    "models\\qwen_asr_env + models\\hf từ máy đã cài, hoặc chọn «Chữ in sẵn trên video».")
+                                    "models\\qwen_asr_env + models\\hf từ máy đã cài.")
             self.qwen_btn.pack_forget()
         else:
             self.engine_status.warn("Chưa cài bộ nghe lời thoại (Qwen3-ASR) — cài một lần rồi dùng mãi, không cần mạng.")
@@ -115,8 +97,6 @@ class STTModule(BaseModule):
             if not ok:
                 self.engine_status.error(f"Cài Qwen3-ASR thất bại: {error or 'xem log'}")
                 return
-            self.set_value(self.state.subtitle, "stt_engine", STT_ENGINES[0], preview=False)
-            self.engine.set(STT_ENGINES[0])
             self._layout_engine()
 
         if install_qwen(self.window, done):
@@ -126,10 +106,6 @@ class STTModule(BaseModule):
         """Một ô ngôn ngữ cho cả nhận diện lẫn dịch (trước: tab Lời thoại có ô «Ngôn ngữ gốc» riêng, dễ lệch nhau)."""
         self.set_value(self.state.subtitle, "stt_language", code, preview=False)
         self.set_value(self.state.subtitle, "translate_source", SOURCE_BY_CODE.get(code, "Tự nhận diện"), preview=False)
-
-    def _engine_changed(self, v: str) -> None:
-        self.set_value(self.state.subtitle, "stt_engine", v, preview=False)
-        self._layout_engine()
 
     def _auto_changed(self, v: bool) -> None:
         self.set_value(self.state.subtitle, "srt_source", SRT_SOURCES[0] if v else SRT_SOURCES[1], preview=False)

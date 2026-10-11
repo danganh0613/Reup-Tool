@@ -182,8 +182,7 @@ class SaveTemplateDialog(ctk.CTkToplevel):
             ctk.CTkCheckBox(grid, text=label, variable=var, font=T.font(12)).grid(row=i // 2, column=i % 2, sticky="w",
                                                                                 padx=(0, 12), pady=3)
             self.parts[k] = var
-        hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối (không lưu nhiều đoạn), và không "
-                   "lưu cách lấy lời (Giọng nói / Chữ in sẵn — chọn ở tab Nhận diện).").pack(fill="x", padx=14, pady=(4, 0))
+        hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối (không lưu nhiều đoạn).").pack(fill="x", padx=14, pady=(4, 0))
         self._order_voices()
         tts = self.app_state.sections_dict().get("tts", {})
         if "tts" in self.parts and tts.get("enable_tts"):

@@ -100,6 +100,10 @@ def _safe_stem(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_ ." else "_" for c in name).strip() or "video"
 
 
+#: Qwen nghe được ít hơn ngần này phần số chữ hiện trên hình → coi như video không có giọng đọc, lấy lời từ phụ đề in sẵn
+SPEECH_MIN_SHARE = 0.25
+
+
 class Pipeline:
     def __init__(self, state: AppState, ffmpeg: FFmpeg) -> None:
         self.state = state
@@ -156,36 +160,127 @@ class Pipeline:
     def transcribe(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
                    cancel: threading.Event | None = None, source_path: str | None = None,
                    force: bool = False) -> list[Cue]:
-        """``force``: nhận diện lại kể cả khi lần trước đã nghe là «không có lời» (nút ở tab Nhận diện)."""
-        cfg = self.state.subtitle
+        """Lấy lời thoại thành phụ đề gốc — máy tự chọn cách, người dùng không phải chọn:
+        - có Qwen3-ASR: nghe giọng nói; video có phụ đề in sẵn thì đọc chữ song song (CPU, lúc Qwen chạy GPU) rồi sửa
+          chữ nghe sai theo chữ trên hình — câu + mốc của Qwen (đúng nhịp nói), chữ đúng như creator gõ (tên riêng);
+        - chưa cài Qwen / video không có tiếng: chỉ đọc chữ in sẵn (mốc theo SenseVoice nếu có, AI gộp mẩu chữ thành câu).
+        ``force``: nhận diện lại kể cả khi lần trước đã nghe là «không có lời» (nút ở tab Nhận diện)."""
+        from app.services import ocr_hardsub, qwen_asr
+
         src = source_path or item.path
-        res = None
-        if cfg.stt_engine == "ocr":
-            from app.services.ocr_hardsub import NoHardsub
-            from app.services.ocr_hardsub import transcribe as ocr_transcribe
-            from app.services.qwen_asr import is_installed
-
-            try:
-                res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
-                                     log=log, cancel=cancel)
-            except NoHardsub as exc:
-                if not is_installed() or self.silent(src):
-                    raise
-                if log:
-                    log(f"{item.name}: {exc} → nghe giọng nói (Qwen3-ASR).")
-        if res is None:
-            # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
-            from app.services.qwen_asr import transcribe as qwen_transcribe
-
-            if self.silent(src):
-                raise NoSpeech("Video không có tiếng — không nghe được lời thoại. Video có phụ đề in sẵn thì chọn "
-                               "«Chữ in sẵn trên video».")
-            if not force and source_path is None and self._nospeech_known(item):
+        own = source_path is None                      # «Nhận diện từ file khác»: chỉ nghe, không đọc chữ trên hình
+        silent = self.silent(src)
+        if silent or not qwen_asr.is_installed():
+            cues = self.hardsub_cues(item, progress=progress, log=log, cancel=cancel) if own else None
+            if not cues:
+                if silent:
+                    raise NoSpeech("Video không có tiếng và không có phụ đề in sẵn — không có lời thoại để lấy.")
+                qwen_asr.require()                     # báo «chưa cài bộ nghe lời thoại» kèm nút Cài
+            res = ocr_hardsub.finish(item, self.ffmpeg, cues, settings=self.state.settings, log=log, cancel=cancel)
+            return self.save_transcript(item, res, log)
+        if not force and own and self._nospeech_known(item):
+            cues = self.hardsub_cues(item, progress=progress, log=log, cancel=cancel)
+            if not cues:
                 raise NoSpeech("Lần trước đã nghe: video không có lời nói.")
+            res = ocr_hardsub.finish(item, self.ffmpeg, cues, settings=self.state.settings, log=log, cancel=cancel)
+            return self.save_transcript(item, res, log)
 
-            res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
-                                  work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
+        got: dict = {}
+        parts = {"asr": 0.0, "ocr": 0.0}
+
+        def part(key: str, x: float) -> None:
+            parts[key] = x
+            if progress:
+                progress(0.7 * parts["asr"] + 0.3 * parts["ocr"] if own else parts["asr"])
+
+        def read() -> None:
+            try:
+                got["cues"] = self.hardsub_cues(item, progress=lambda x: part("ocr", x), log=log, cancel=cancel)
+            except BaseException as exc:               # noqa: BLE001 — Dừng: báo sau khi Qwen cũng dừng
+                got["error"] = exc
+
+        reader = threading.Thread(target=read, name="OCR", daemon=True) if own else None
+        if reader:
+            reader.start()
+        try:
+            res = qwen_asr.transcribe(src, self.ffmpeg, language=self.state.subtitle.stt_language,
+                                      settings=self.state.settings, work_dir=self.job_dir(item),
+                                      on_progress=lambda x: part("asr", x), log=log, cancel=cancel)
+        except RenderCancelled:
+            if reader:
+                reader.join()
+            raise
+        except Exception as exc:
+            if reader:
+                reader.join()
+            if not got.get("cues"):
+                raise
+            if log:                                    # nghe lỗi mà có chữ in sẵn → vẫn có phụ đề
+                log(f"⚠ Qwen3-ASR lỗi ({error_line(exc)}) → dùng chữ in sẵn trên video.")
+            res = ocr_hardsub.finish(item, self.ffmpeg, got["cues"], settings=self.state.settings, log=log,
+                                     cancel=cancel)
+            return self.save_transcript(item, res, log)
+        if reader:
+            reader.join()
+        if isinstance(got.get("error"), RenderCancelled):
+            raise got["error"]
+        if got.get("cues"):
+            res = self.with_hardsub(item, res, got["cues"], log=log, cancel=cancel)
         return self.save_transcript(item, res, log)
+
+    def hardsub_cues(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
+                     cancel: threading.Event | None = None) -> list[Cue] | None:
+        """Từng dòng phụ đề in sẵn trên video (đọc trên máy) — None: máy không đọc được chữ / video không có phụ đề in
+        sẵn / đọc lỗi (lỗi chỉ mất phần sửa chữ, không hỏng bước nhận diện)."""
+        from app.services import ocr_hardsub
+
+        if not ocr_hardsub.available():
+            return None
+        try:
+            cues = ocr_hardsub.read(item, self.ffmpeg, duration=self.ffmpeg.duration_of(item.path), on_progress=progress,
+                                    log=log, cancel=cancel)
+        except RenderCancelled:
+            raise
+        except ocr_hardsub.NoHardsub:
+            return None
+        except Exception as exc:                       # noqa: BLE001
+            logger.warning("Đọc chữ in sẵn lỗi: %s", item.path, exc_info=True)
+            if log:
+                log(f"⚠ {item.name}: đọc chữ in sẵn lỗi ({error_line(exc)}) — chỉ dùng lời nghe được.")
+            return None
+        return cues or None
+
+    def with_hardsub(self, item: VideoItem, res, ocr_cues: list[Cue], *, log: LogCb | None = None,
+                     cancel: threading.Event | None = None):
+        """Lời Qwen nghe được + phụ đề in sẵn của cùng video. Nghe được rất ít so với chữ trên hình (video không có giọng
+        đọc — chỉ nhạc + phụ đề, kể chuyện bằng chữ…) → lấy lời từ chữ in sẵn; còn lại → sửa chữ nghe sai theo chữ trên
+        hình. Phụ đề khác thứ tiếng với lời nói thì số chữ hai bên tương đương → vẫn theo lời nghe được (không sửa gì)."""
+        from app.services.ocr_hardsub import finish, token_count
+
+        heard = sum(token_count(c.plain) for c in res.cues)
+        shown = sum(token_count(c.plain) for c in ocr_cues)
+        if heard < SPEECH_MIN_SHARE * shown:
+            if log:
+                log("Video gần như không có lời nói — lấy lời từ chữ in sẵn trên video.")
+            # Qwen đã nghe là không có lời → khỏi dò mốc tiếng nói (SenseVoice cũng không thấy gì), giữ mốc chữ trên hình
+            return finish(item, self.ffmpeg, ocr_cues, speech_timing=False, settings=self.state.settings, log=log,
+                          cancel=cancel)
+        return self.fuse(res, ocr_cues, log)
+
+    @staticmethod
+    def fuse(res, ocr_cues: list[Cue], log: LogCb | None = None):
+        """Lời Qwen nghe được + chữ in trên video → sửa chữ nghe sai (``ocr_hardsub.correct_with_ocr``)."""
+        from app.services.ocr_hardsub import correct_with_ocr
+        from app.services.whisper_stt import STTResult
+
+        cues, fixes = correct_with_ocr(res.cues, ocr_cues)
+        if log:
+            if fixes:
+                log(f"Sửa {len(fixes)} chỗ nghe sai theo chữ in trên video: "
+                    + ", ".join(f"{a} → {b}" for a, b in fixes[:6]) + ("…" if len(fixes) > 6 else ""))
+            else:
+                log("Đối chiếu chữ in trên video: lời nghe được đã khớp.")
+        return STTResult(cues=cues, language=res.language, language_probability=res.language_probability)
 
     def silent(self, src: str) -> bool:
         """Video không có luồng âm thanh (không đọc được thông tin thì coi như có — cứ thử nhận diện)."""
@@ -928,8 +1023,7 @@ class Pipeline:
         if not (sub_on or tts_on):
             return set()
         out = set()
-        if (not (item.srt_path and Path(item.srt_path).exists()) and scfg.srt_source == SRT_SOURCES[0]
-                and scfg.stt_engine != "ocr"):
+        if not (item.srt_path and Path(item.srt_path).exists()) and scfg.srt_source == SRT_SOURCES[0]:
             out.add("qwen")
         want_tr = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
                   (tts_on and tcfg.tts_source == TTS_SOURCES[0])
@@ -1374,6 +1468,21 @@ class JobRunner:
             it.status, it.message = running, "Nhận diện giọng nói"
             ui_update(it)
 
+        # video có phụ đề in sẵn: đọc chữ (CPU) song song lúc Qwen nghe (GPU) → sửa chữ nghe sai theo chữ trên hình
+        hard: dict[int, list[Cue] | None] = {}
+
+        def read_all() -> None:
+            for k, (it, pipe) in enumerate(todo):
+                if self.cancel.is_set():
+                    return
+                if id(it) not in self._skipped:
+                    try:
+                        hard[k] = pipe.hardsub_cues(it, log=ui_log, cancel=self.cancel)
+                    except RenderCancelled:
+                        return
+
+        reader = threading.Thread(target=read_all, name="OCR", daemon=True)
+        reader.start()
         results: list = [None] * len(todo)
         try:
             results = qwen_asr.transcribe_batch(batch, base.ffmpeg, settings=base.state.settings, log=ui_log,
@@ -1390,8 +1499,14 @@ class JobRunner:
                 if it.status == running:
                     it.status = "Chờ"
                     ui_update(it)
-        for (it, pipe), res in zip(todo, results):
+        reader.join()
+        for k, ((it, pipe), res) in enumerate(zip(todo, results)):
             if res is not None and id(it) not in self._skipped:
+                if hard.get(k):
+                    try:
+                        res = pipe.with_hardsub(it, res, hard[k], log=ui_log, cancel=self.cancel)
+                    except RenderCancelled:
+                        break
                 try:
                     pipe.save_transcript(it, res, ui_log)
                 except NoSpeech:                        # đã ghi dấu «không có lời» → vòng chính bỏ phụ đề, vẫn xuất

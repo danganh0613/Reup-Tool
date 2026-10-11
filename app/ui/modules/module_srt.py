@@ -65,17 +65,17 @@ class SRTModule(BaseModule):
         # ngôn ngữ gốc: một ô duy nhất «Ngôn ngữ video» ở tab Nhận diện (trước: hai ô ở hai tab, dễ lệch)
         self.src_hint = hint(sec.body, "")
         self.src_hint.pack(fill="x")
-        # một ô duy nhất cho phong cách dịch (dùng chung với tab Duyệt / bảng dịch từng câu)
+        # một ô lời dặn cho AI dịch (dùng chung với tab Duyệt / bảng dịch từng câu) — nhiều dòng: mẫu có thể kèm cả
+        # đoạn prompt (vd mẫu «Review phim dọc» dặn dịch phóng tác cho người xem Việt)
         row = ctk.CTkFrame(sec.body, fg_color="transparent")
-        row.pack(fill="x", pady=3)
-        row.grid_columnconfigure(1, weight=1)
-        row_label(row, "Phong cách", "Ghi chú giọng văn cho AI, vd «xưng anh – em, văn nói». Đổi rồi bấm «Dịch phụ "
-                                     "đề» để dịch lại.").grid(row=0, column=0, sticky="w")
-        self.style = ctk.CTkComboBox(row, values=RETRANSLATE_PRESETS, height=34, font=T.font(12),
-                                     command=lambda _v: self._style_changed())
-        self.style.grid(row=0, column=1, sticky="ew")
+        row.pack(fill="x", pady=(3, 0))
+        row_label(row, "Lời dặn cho AI dịch", "Giọng văn, cách xưng hô AI phải theo khi dịch — vd «xưng anh – em, văn "
+                                              "nói». Mẫu có thể điền sẵn. Sửa rồi bấm «Dịch phụ đề» để dịch lại.").pack(side="left")
+        button(row, "Gợi ý", icon_name="sparkle", size="sm", command=self._style_menu,
+               tip="Chèn nhanh một câu dặn hay dùng").pack(side="right")
+        self.style = ctk.CTkTextbox(sec.body, height=96, font=T.font(12), wrap="word")
+        self.style.pack(fill="x", pady=(2, 3))
         self.style.bind("<FocusOut>", lambda _e: self._style_changed())
-        self.style.bind("<Return>", lambda _e: self._style_changed())
         self.tr_btn = button(sec.body, "Dịch phụ đề", icon_name="translate", command=self._translate_now,
                              min_width=button_width(sec.body, "Dịch phụ đề", icon=True, font=T.font(13, "medium")))
         self.tr_btn.pack(fill="x", pady=(6, 2))
@@ -118,7 +118,8 @@ class SRTModule(BaseModule):
         try:
             self.src_hint.configure(text=f"Ngôn ngữ gốc: {cfg.source_hint} (đổi ở tab Nhận diện › «Ngôn ngữ video»)")
             self.target.set(cfg.translate_target)
-            self.style.set(cfg.translate_style or "")
+            self.style.delete("1.0", "end")
+            self.style.insert("1.0", cfg.translate_style or "")
             self.tr_enable.set(cfg.translate_enable)
             self.refresh_subtitle()
         finally:
@@ -383,10 +384,24 @@ class SRTModule(BaseModule):
 
         self.window.run_task("Dịch phụ đề", work, done)
 
+    def _style_menu(self) -> None:
+        """Chèn một câu dặn hay dùng vào cuối ô lời dặn."""
+        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
+                    activeforeground=T.TEXT, bd=0)
+        for p in RETRANSLATE_PRESETS:
+            m.add_command(label=p, command=lambda p=p: self._style_add(p))
+        m.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def _style_add(self, text: str) -> None:
+        cur = self.style.get("1.0", "end-1c").rstrip()
+        self.style.delete("1.0", "end")
+        self.style.insert("1.0", (cur + "\n" if cur else "") + text)
+        self._style_changed()
+
     def _style_changed(self) -> None:
         if self._loading:
             return
-        v = self.style.get().strip()
+        v = self.style.get("1.0", "end-1c").strip()
         if v != self.state.subtitle.translate_style:
             self.set_value(self.state.subtitle, "translate_style", v, preview=False)
 

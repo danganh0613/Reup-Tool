@@ -61,6 +61,7 @@ from importlib.util import find_spec
 _paddle = find_spec("paddle")
 if _paddle is not None and find_spec("paddleocr") is not None:
     datas += collect_data_files("paddlex")
+    datas += collect_data_files("pypinyin")
     for _dist in ("paddleocr", "paddlex", "imagesize", "opencv-contrib-python", "pyclipper", "pypdfium2",
                   "python-bidi", "shapely"):
         datas += copy_metadata(_dist)

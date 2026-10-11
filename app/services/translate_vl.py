@@ -25,19 +25,43 @@ from pathlib import Path
 from app.core.state import Settings
 from app.services.ffmpeg import RenderCancelled
 from app.services.srt_utils import Cue, wrap_lines
-from app.services.translate_router import (_LANG_HINT, LEAK_REQUEST, Checkpoint, ModelUnavailable, Router,
-                                           TranslationMemory, _leaks, _load_json, retranslate)
+from app.services.translate_router import (_LANG_HINT, LEAK_REQUEST, QUOTE_RULE, Checkpoint, ModelUnavailable,
+                                           Router, TranslationMemory, _leaks, _load_json, cut_at_quote, retranslate)
 
 logger = logging.getLogger(__name__)
 
 CHUNK_CHARS, CHUNK_LINES = 600, 10       # _4_2: split_chunks_by_chars(chunk_size=600, max_i=10)
 SUMMARY_CHARS = 8000                     # config summary_length
+WHOLE_LINES, WHOLE_CHARS = 60, 3000      # dịch cả video một lượt: mỗi lượt ≤ 60 câu / 3000 ký tự (đầu ra ~70 token / câu)
 TOLERANCE = 1.5                          # config tolerance: câu được mượn tối đa 1,5 s khoảng lặng sau nó
 MAX_SPLIT_TOKENS = 20                    # config max_split_length
-STYLE_TAG = "|videolingo"                # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này
+STYLE_TAG = "|vl-motluot"              # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
 
 
 # ── Lời nhắc (nguyên văn VideoLingo core/prompts.py) ──────────────────────
+
+def source_note(src_lang: str) -> str:
+    """Lời gốc lấy tự động (nghe giọng nói + đọc chữ trên hình) → có thể sai; AI đoán đúng theo ngữ cảnh rồi mới dịch."""
+    return f'''### About the source text
+The {src_lang} lines were extracted automatically (speech recognition + on-screen text OCR), so they MAY contain errors:
+wrong characters that sound or look alike, missing words, a sentence split across lines, stray on-screen text.
+Use the whole context (summary, neighbouring lines, terms) to infer what was really said, then translate that — never
+translate an obvious recognition error literally.'''
+
+
+def transcreation_section(tgt_lang: str) -> str:
+    """Dịch thoát cho video ngắn lồng tiếng: người xem nghe hiểu ngay và thấy hấp dẫn (không dịch từng chữ). Giọng văn
+    riêng của kênh (xưng hô, tiếng lóng…) do lời dặn của mẫu / người dùng quyết định (``style_section``)."""
+    rules = [
+        f"This is a short-video voice-over (Douyin / TikTok / Reels). The free translation is a TRANSCREATION for "
+        f"{tgt_lang} viewers: it must sound like a native speaker talking naturally, keep the video's mood (funny, "
+        "dramatic, cute…) and keep the jokes funny.",
+        "Nicknames, puns, memes, slang and culture-specific references: never translate them word for word — use an "
+        f"image or expression {tgt_lang} viewers get instantly and find fun.",
+        "Concise and punchy: about as long as the original line; drop filler words.",
+    ]
+    return "### Transcreation for viewers\n" + "\n".join(f"{n}. {r}" for n, r in enumerate(rules, 1)) + "\n\n"
+
 
 def summary_prompt(src_lang: str, tgt_lang: str, source_content: str, custom_terms: list[dict]) -> str:
     terms_note = ""
@@ -62,9 +86,12 @@ Steps:
    - Write two sentences: first for main topic, second for key point
 2. Term Extraction:
    - Mark professional terms and names (excluding those listed in Existing Terms)
-   - Provide {tgt_lang} translation or keep original
+   - Provide the {tgt_lang} name viewers commonly use (e.g. the common name of an animal), not a literal
+     character-by-character rendering; keep the original only when there is no {tgt_lang} name
    - Add brief explanation
    - Extract less than 15 terms
+
+{source_note(src_lang)}
 
 ## INPUT
 <text>
@@ -102,6 +129,7 @@ Steps:
 }}
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
 """.strip()
 
 
@@ -153,6 +181,8 @@ We have a segment of original {src_lang} subtitles that need to be directly tran
 
 {sp}
 
+{source_note(src_lang)}
+
 <translation_principles>
 1. Faithful to the original: Accurately convey the content and meaning of the original text, without arbitrarily changing, adding, or omitting content.
 2. Accurate terminology: Use professional terms correctly and maintain consistency in terminology.
@@ -170,13 +200,20 @@ We have a segment of original {src_lang} subtitles that need to be directly tran
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
 '''.strip()
 
 
-def express_prompt(faith: dict, lines: str, sp: str, src_lang: str, tgt_lang: str, style: str) -> str:
+def express_prompt(faith: dict, lines: str, sp: str, src_lang: str, tgt_lang: str, style: str,
+                   budgets: dict[str, int] | None = None) -> str:
+    """``budgets``: số âm tiết tối đa từng câu (theo khung thời gian lồng tiếng) — có thì AI viết vừa khung luôn."""
+    budgets = budgets or {}
     json_format = json.dumps({k: {"origin": v["origin"], "direct": v["direct"],
+                                  **({"max_syllables": budgets[k]} if k in budgets else {}),
                                   "reflect": "your reflection on direct translation", "free": "your free translation"}
                               for k, v in faith.items()}, indent=2, ensure_ascii=False)
+    fit_rule = ("6. Each free translation must fit its max_syllables (one syllable = one spoken word / Vietnamese "
+                "syllable); keep the key meaning and the fun, drop details if needed\n" if budgets else "")
     return f'''
 ## Role
 You are a professional Netflix subtitle translator and language consultant.
@@ -191,10 +228,10 @@ Your task is to reflect on and improve these direct translations to create more 
 3. Perform free translation based on your analysis
 4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
 5. Do not leave empty lines in the free translation, as the subtitles are for the audience to read
-
+{fit_rule}
 {sp}
 
-{style_section(style)}<Translation Analysis Steps>
+{transcreation_section(tgt_lang)}{style_section(style)}<Translation Analysis Steps>
 Please use a two-step thinking process to handle the text line by line:
 
 1. Direct Translation Reflection:
@@ -219,6 +256,7 @@ Please use a two-step thinking process to handle the text line by line:
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
 '''.strip()
 
 
@@ -256,6 +294,7 @@ Please follow these steps and provide the results in the JSON output:
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
 '''.strip()
 
 
@@ -295,6 +334,7 @@ Split the given subtitle text into **{num_parts}** parts, each less than **{word
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
 """.strip()
 
 
@@ -396,6 +436,95 @@ def _custom_terms(glossary: str) -> list[dict]:
     return out[:200]
 
 
+#: câu tiếng Việt trọn vẹn không kết thúc bằng các hư từ này — gặp là câu bị cụt vế sau («Bắt xong là»); «được»,
+#: «mà», «với», «hay» đứng cuối vẫn là câu thường («Nuôi được», «Chờ tao với») nên không tính
+_DANGLING = re.compile(r"(?<!\w)(là|của|và|để|rằng|nhưng|hoặc|những|các)[\s,.…!?]*$", re.I)
+
+
+def _free_broken(free, direct: str) -> bool:
+    """Câu dịch thoát không dùng được: thiếu, bị cắt ở dấu " (``cut_at_quote``), hoặc kết thúc lửng bằng hư từ («Bắt
+    xong là»). Không so độ dài với bản dịch sát: lời dặn đòi cô đọng, câu ngắn mà đủ ý («Hồng hoàng đấy») vẫn dùng."""
+    return cut_at_quote(free) or bool(_DANGLING.search(str(free).strip()))
+
+
+def whole_prompt(rows: list[str], budgets: list[int] | None, src_lang: str, tgt_lang: str, style: str,
+                 custom_terms: list[dict], before: list[str]) -> str:
+    """Cả video (hoặc một phần dài) trong một lượt: AI đọc hết câu chuyện rồi mới dịch — xưng hô, tên gọi nhất quán,
+    hiểu câu đùa / biệt danh theo cả video. Mỗi câu trả cả dịch sát lẫn dịch thoát (vừa số âm tiết của câu)."""
+    numbered = "\n".join(f"{n}. " + (f"[max {budgets[n - 1]} syllables] " if budgets else "") + t
+                          for n, t in enumerate(rows, 1))
+    fit = ", within its [max N syllables] (one syllable = one spoken word / Vietnamese syllable)" if budgets else ""
+    terms = ("### Terms the user requires (always use these)\n"
+             + "\n".join(f"- {t['src']} → {t['tgt']}" for t in custom_terms) + "\n\n") if custom_terms else ""
+    ctx = ("### Context: what was said just before this part (do not translate)\n" + "\n".join(before) + "\n\n"
+           if before else "")
+    sample = json.dumps({"terms": [{"src": f"{src_lang} term", "tgt": f"{tgt_lang} rendering"}],
+                         "lines": {"1": {"direct": "faithful translation", "free": "final line"},
+                                   "2": {"direct": "...", "free": "..."}}}, indent=2, ensure_ascii=False)
+    return f'''
+## Role
+You are an expert subtitle translator and localizer of short videos, fluent in {src_lang} and {tgt_lang} and their
+internet culture.
+
+## Task
+Below is the whole numbered transcript ({len(rows)} lines). First read ALL of it to understand the story, who is
+talking, the jokes and the running gags. Then:
+1. "terms": the key names / terms (people, animals, places, nicknames, slang) with the {tgt_lang} rendering you will
+   use consistently in every line (at most 15; the common name viewers know, not a literal rendering).
+2. For EVERY line number give:
+   - "direct": a faithful {tgt_lang} translation of what is really meant (fix recognition errors first)
+   - "free": the final line viewers hear and read — the transcreation (rules below){fit}
+Exactly one output per line number, in the same order; never merge, split or skip lines; never leave "free" empty.
+
+{source_note(src_lang)}
+
+{transcreation_section(tgt_lang)}{style_section(style)}{terms}{ctx}## Lines
+{numbered}
+
+## Output in only JSON format and no other text
+```json
+{sample}
+```
+
+Note: Start you answer with ```json and end with ```, do not add any other text.
+{QUOTE_RULE}
+'''.strip()
+
+
+def _windows(idx: list[int], lines: list[str]) -> list[list[int]]:
+    """Chia các câu cần dịch thành phần ≤ ``WHOLE_LINES`` câu / ``WHOLE_CHARS`` ký tự (video 2 phút = một phần)."""
+    out, cur, size = [], [], 0
+    for i in idx:
+        if cur and (len(cur) >= WHOLE_LINES or size + len(lines[i]) > WHOLE_CHARS):
+            out.append(cur)
+            cur, size = [], 0
+        cur.append(i)
+        size += len(lines[i])
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: list[int] | None, *, src_lang: str,
+                     tgt_lang: str, style: str, custom_terms: list[dict]) -> tuple[list[dict], dict[int, tuple]]:
+    """Một lượt cho cả phần ``idx`` → (thuật ngữ, {câu: (dịch sát, dịch thoát)}). Thiếu câu / dịch sát cụt → ValueError
+    (``_ask`` hỏi lại 3 lần; nơi gọi chuyển phần đó sang dịch từng lô)."""
+    keys = [str(n) for n in range(1, len(idx) + 1)]
+    before = [lines[i] for i in range(max(0, idx[0] - 3), idx[0])]
+
+    def ok(d: dict) -> bool:
+        got = d.get("lines")
+        return isinstance(got, dict) and all(isinstance(got.get(k), dict) and not cut_at_quote(got[k].get("direct"))
+                                             for k in keys)
+
+    d = _ask(router, whole_prompt([lines[i] for i in idx], budgets, src_lang, tgt_lang, style, custom_terms, before),
+             ok)
+    terms = [t for t in d.get("terms") or [] if isinstance(t, dict) and str(t.get("src", "")).strip()
+             and str(t.get("tgt", "")).strip()]
+    return terms, {i: (str(d["lines"][k]["direct"]).replace("\n", " ").strip(), d["lines"][k].get("free"))
+                   for i, k in zip(idx, keys)}
+
+
 def _chunks(lines: list[str]) -> list[list[int]]:
     """split_chunks_by_chars: lô ≤ 600 ký tự (tính cả xuống dòng) và ≤ 10 câu."""
     out, cur, size = [], [], 0
@@ -447,9 +576,66 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     def stopped() -> bool:
         return cancel is not None and cancel.is_set()
 
-    # 1) tóm tắt + thuật ngữ (một lượt; lưu cùng tiến độ để dịch tiếp không phải gọi lại)
     custom = _custom_terms(settings.glossary)
-    if len(results) < total:
+    unsure: set[int] = set()                            # câu AI không trả nổi → giữ lời gốc, không ghi bộ nhớ dịch
+    weak: set[int] = set()                              # câu dùng tạm bản dịch sát → không nhớ, lần sau dịch thoát lại
+
+    def keep(i: int, text: str) -> None:
+        results[i] = text
+        if i not in unsure:                             # câu giữ lời gốc: lần sau dịch lại, không nhớ
+            ckpt.done[str(i)] = text
+            if i not in weak:
+                memory.put(target, lines[i], text, key_style)
+
+    def halt() -> None:
+        ckpt.save(total)
+        memory.save()
+
+    # 1) cả video một lượt (mỗi phần ≤ WHOLE_LINES câu): AI đọc hết câu chuyện rồi trả từng câu (dịch sát + dịch thoát)
+    #    + thuật ngữ — xưng hô, tên gọi nhất quán, hiểu câu đùa theo cả video; video 2 phút = 1 lượt gọi thay vì ~10
+    todo = [i for i in range(total) if i not in results]
+    parts = _windows(todo, lines)
+    fallback: list[int] = []
+    for pi, idx in enumerate(parts):
+        if stopped():
+            halt()
+            raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
+        if log:
+            log(f"Dịch cả video một lượt: {len(idx)} câu" + (f" (phần {pi + 1}/{len(parts)})" if len(parts) > 1 else "")
+                + "…")
+        budgets = [syllable_budget(cues, i, fit) for i in idx] if fit else None
+        try:
+            terms_got, got = _translate_whole(router, idx, lines, budgets, src_lang=src_lang, tgt_lang=tgt_lang,
+                                              style=style, custom_terms=custom)
+        except (ModelUnavailable, RenderCancelled):
+            halt()
+            raise
+        except ValueError as exc:                       # thiếu câu / JSON hỏng 3 lần → phần này dịch từng lô như cũ
+            logger.warning("Dịch cả lượt phần %d lỗi (%s) → dịch từng lô", pi + 1, exc)
+            if log:
+                log("⚠ Dịch cả lượt chưa được (AI trả thiếu câu) — phần này dịch theo từng lô.")
+            fallback += idx
+            continue
+        if terms_got and "terms" not in ckpt.extra:
+            ckpt.extra = {**ckpt.extra, "terms": terms_got + custom}
+            if log:
+                log(f"Dịch: {len(terms_got)} thuật ngữ — " + ", ".join(f"{t['src']}={t['tgt']}" for t in terms_got[:8]))
+        for i in idx:
+            sat, free = got[i]
+            if _free_broken(free, sat):
+                logger.warning("Dịch cả lượt câu %d: dịch thoát cụt / thiếu (%r) → dùng bản dịch sát", i + 1, free)
+                weak.add(i)
+                keep(i, sat)
+            else:
+                keep(i, str(free).replace("\n", " ").strip())
+        ckpt.save(total)
+        if on_progress:
+            on_progress(len(results) / max(1, total))
+        if log:
+            log(f"Dịch: xong {len(results)}/{total} câu — một lượt ({router.current.provider}/{router.current.model})")
+
+    # 2) phần dịch cả lượt không được → từng lô 10 câu như VideoLingo: tóm tắt + thuật ngữ, dịch sát → dịch thoát
+    if fallback:
         if "theme" not in ckpt.extra:
             if log:
                 log("Dịch: tóm tắt nội dung + lấy thuật ngữ…")
@@ -462,76 +648,78 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                 if log:
                     log(f"Dịch: {len(summ['terms'])} thuật ngữ — "
                         + ", ".join(f"{t['src']}={t['tgt']}" for t in summ["terms"][:8]))
+            except (ModelUnavailable, RenderCancelled):
+                halt()
+                raise
             except ValueError as exc:                   # phụ: không lấy được thì dịch tiếp với từ điển của bạn
                 logger.warning("VideoLingo: không lấy được tóm tắt / thuật ngữ (%s)", exc)
                 if log:
                     log("⚠ Không lấy được thuật ngữ của video — vẫn dịch, chỉ dùng từ điển khi dịch.")
-    theme, terms = ckpt.extra.get("theme", ""), ckpt.extra.get("terms", custom)
+        theme, terms = ckpt.extra.get("theme", ""), ckpt.extra.get("terms", custom)
 
-    # 2) dịch từng lô: dịch sát → tự phê bình + dịch thoát
-    chunks = _chunks(lines)
-    unsure: set[int] = set()                            # câu AI không trả nổi → giữ lời gốc, không ghi bộ nhớ dịch
+        def direct(idx: list[int], sp: str) -> dict[int, str]:
+            """Dịch sát ``idx``; AI bỏ sót / gộp dòng 3 lần → chia đôi lô dịch lại, còn một câu vẫn lỗi thì giữ lời gốc."""
+            keys = [str(n) for n in range(1, len(idx) + 1)]
+            try:
+                d = _ask(router, faith_prompt("\n".join(lines[i] for i in idx), sp, src_lang, tgt_lang),
+                         lambda d: all(isinstance(d.get(k), dict) and not cut_at_quote(d[k].get("direct"))
+                                       for k in keys))
+                return {i: str(d[k]["direct"]).replace("\n", " ").strip() for i, k in zip(idx, keys)}
+            except ValueError as exc:
+                if len(idx) > 1:
+                    logger.warning("VideoLingo: lô %d câu dịch sát lỗi (%s) → chia đôi dịch lại", len(idx), exc)
+                    half = len(idx) // 2
+                    return {**direct(idx[:half], sp), **direct(idx[half:], sp)}
+                logger.warning("VideoLingo: câu %d không dịch được (%s) → giữ lời gốc", idx[0] + 1, exc)
+                unsure.add(idx[0])
+                return {idx[0]: lines[idx[0]]}
 
-    def direct(idx: list[int], sp: str) -> dict[int, str]:
-        """Dịch sát ``idx``; AI bỏ sót / gộp dòng 3 lần → chia đôi lô dịch lại, còn một câu vẫn lỗi thì giữ lời gốc."""
-        keys = [str(n) for n in range(1, len(idx) + 1)]
-        try:
-            d = _ask(router, faith_prompt("\n".join(lines[i] for i in idx), sp, src_lang, tgt_lang),
-                     lambda d: all(isinstance(d.get(k), dict) and str(d[k].get("direct", "")).strip() for k in keys))
-            return {i: str(d[k]["direct"]).replace("\n", " ").strip() for i, k in zip(idx, keys)}
-        except ValueError as exc:
-            if len(idx) > 1:
-                logger.warning("VideoLingo: lô %d câu dịch sát lỗi (%s) → chia đôi dịch lại", len(idx), exc)
-                half = len(idx) // 2
-                return {**direct(idx[:half], sp), **direct(idx[half:], sp)}
-            logger.warning("VideoLingo: câu %d không dịch được (%s) → giữ lời gốc", idx[0] + 1, exc)
-            unsure.add(idx[0])
-            return {idx[0]: lines[idx[0]]}
-    for ci, idx in enumerate(chunks):
-        if all(i in results for i in idx):
-            continue
-        if stopped():
+        chunks = [[fallback[j] for j in ch] for ch in _chunks([lines[i] for i in fallback])]
+        for ci, idx in enumerate(chunks):
+            if stopped():
+                halt()
+                raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
+            chunk = "\n".join(lines[i] for i in idx)
+            prev = lines[max(0, idx[0] - 3):idx[0]] or None
+            after = lines[idx[-1] + 1:idx[-1] + 3] or None
+            sp = shared_prompt(prev, after, theme, _note(terms, chunk))
+            keys = [str(n) for n in range(1, len(idx) + 1)]
+            try:
+                sat = direct(idx, sp)
+            except (ModelUnavailable, RenderCancelled):
+                halt()
+                raise
+            faith = {k: {"origin": lines[i], "direct": sat[i]} for i, k in zip(idx, keys)}
+            try:
+                if any(i in unsure for i in idx):
+                    raise ValueError("lô có câu chưa dịch được")
+                budgets = {k: syllable_budget(cues, i, fit) for i, k in zip(idx, keys)} if fit else None
+                expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style, budgets),
+                            lambda d: all(isinstance(d.get(k), dict) for k in keys))
+                out = []
+                for k in keys:
+                    free, sat_k = expr[k].get("free"), faith[k]["direct"]
+                    if _free_broken(free, sat_k):
+                        logger.warning("VideoLingo lô %d câu %s: dịch thoát cụt / thiếu (%r) → dùng bản dịch sát",
+                                       ci + 1, k, free)
+                        out.append(sat_k)
+                        weak.add(idx[int(k) - 1])
+                    else:
+                        out.append(str(free).replace("\n", " ").strip())
+            except (ModelUnavailable, RenderCancelled):
+                halt()
+                raise
+            except ValueError as exc:                   # như bản gốc: bước dịch thoát lỗi → giữ bản dịch sát
+                logger.warning("VideoLingo lô %d: dịch thoát lỗi (%s) → dùng bản dịch sát", ci + 1, exc)
+                out = [faith[k]["direct"] for k in keys]
+                weak.update(idx)
+            for i, t in zip(idx, out):
+                keep(i, t)
             ckpt.save(total)
-            memory.save()
-            raise RenderCancelled("Đã huỷ dịch — tiến độ đã lưu, mở lại để tiếp tục.")
-        chunk = "\n".join(lines[i] for i in idx)
-        prev = None if ci == 0 else [lines[i] for i in chunks[ci - 1]][-3:]
-        after = None if ci == len(chunks) - 1 else [lines[i] for i in chunks[ci + 1]][:2]
-        sp = shared_prompt(prev, after, theme, _note(terms, chunk))
-        keys = [str(n) for n in range(1, len(idx) + 1)]
-
-        def has(field: str) -> Callable[[dict], bool]:
-            return lambda d: all(isinstance(d.get(k), dict) and str(d[k].get(field, "")).strip() for k in keys)
-
-        try:
-            sat = direct(idx, sp)
-        except (ModelUnavailable, RenderCancelled):
-            ckpt.save(total)
-            memory.save()
-            raise
-        faith = {k: {"origin": lines[i], "direct": sat[i]} for i, k in zip(idx, keys)}
-        try:
-            if any(i in unsure for i in idx):
-                raise ValueError("lô có câu chưa dịch được")
-            expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style), has("free"))
-            out = [str(expr[k]["free"]).replace("\n", " ").strip() for k in keys]
-        except (ModelUnavailable, RenderCancelled):
-            ckpt.save(total)
-            memory.save()
-            raise
-        except ValueError as exc:                       # như bản gốc: bước dịch thoát lỗi → giữ bản dịch sát
-            logger.warning("VideoLingo lô %d: dịch thoát lỗi (%s) → dùng bản dịch sát", ci + 1, exc)
-            out = [faith[k]["direct"] for k in keys]
-        for i, t in zip(idx, out):
-            results[i] = t
-            if i not in unsure:                         # câu giữ lời gốc: lần sau dịch lại, không nhớ
-                ckpt.done[str(i)] = t
-                memory.put(target, lines[i], t, key_style)
-        ckpt.save(total)
-        if on_progress:
-            on_progress(len(results) / max(1, total))
-        if log:
-            log(f"Dịch: xong lô {ci + 1}/{len(chunks)} ({router.current.provider}/{router.current.model})")
+            if on_progress:
+                on_progress(len(results) / max(1, total))
+            if log:
+                log(f"Dịch: xong lô {ci + 1}/{len(chunks)} ({router.current.provider}/{router.current.model})")
 
     texts = [results.get(i, lines[i]) for i in range(total)]
     # 3) câu còn sót chữ Hán / Kana / Hangul → dịch lại riêng (của Edit Studio)
@@ -564,6 +752,25 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     return [Cue(c.index, c.start, c.end, wrap_lines(t), dict(c.meta)) for c, t in zip(cues, texts)]
 
 
+def _slot(cues: list[Cue], i: int, fit: dict) -> float:
+    """Thời gian đọc được của câu ``i`` (giây, trên dòng thời gian video ra): khung câu + mượn ≤ 1,5 s khoảng lặng sau,
+    trừ khoảng nghỉ tối thiểu giữa hai câu."""
+    vs = max(0.5, float(fit.get("video_speed", 1.0)))
+    gap = max(0.0, float(fit.get("min_gap", 0.0)))
+    c = cues[i]
+    nxt = cues[i + 1].start if i + 1 < len(cues) else c.end + TOLERANCE
+    avail = (c.end - c.start) / vs + min(TOLERANCE, max(0.0, nxt - c.end) / vs) - (gap if i + 1 < len(cues) else 0)
+    return max(0.3, avail)
+
+
+def syllable_budget(cues: list[Cue], i: int, fit: dict) -> int:
+    """Số âm tiết tối đa đọc kịp trong khung câu ``i`` (chừa 10 % cho chỗ ngắt hơi)."""
+    from app.services.tts.quality import SEC_PER_SYL
+
+    ts = max(0.5, float(fit.get("tts_speed", 1.0)))
+    return max(3, int(_slot(cues, i, fit) * ts / SEC_PER_SYL * 0.9))
+
+
 def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log: Callable[[str], None] | None = None,
               ) -> list[str]:
     """check_len_then_trim của VideoLingo với ước lượng đúng nhịp đọc: thời gian có = khung câu + mượn ≤ 1,5 s khoảng
@@ -571,25 +778,21 @@ def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log:
     (lời nhắc gốc, cho biết số giây); vẫn dài hơn 10 % → thêm một lượt chặt hơn (cho biết số tiếng tối đa)."""
     from app.services.tts.quality import SEC_PER_SYL, expected_duration, syllable_count
 
-    vs = max(0.5, float(fit.get("video_speed", 1.0)))
     ts = max(0.5, float(fit.get("tts_speed", 1.0)))
-    gap = max(0.0, float(fit.get("min_gap", 0.0)))
     out, trimmed = list(texts), 0
-    for i, c in enumerate(cues):
-        nxt = cues[i + 1].start if i + 1 < len(cues) else c.end + TOLERANCE
-        avail = (c.end - c.start) / vs + min(TOLERANCE, max(0.0, nxt - c.end) / vs) - (gap if i + 1 < len(cues) else 0)
-        avail = max(0.3, avail)
+    for i in range(len(cues)):
+        avail = _slot(cues, i, fit)
         text = out[i]
         if expected_duration(text, ts) <= avail:
             continue
         try:
-            new = str(_ask(router, trim_prompt(text, round(avail, 2)), lambda d: bool(str(d.get("result", "")).strip()))
+            new = str(_ask(router, trim_prompt(text, round(avail, 2)), lambda d: not cut_at_quote(d.get("result")))
                       ["result"]).strip()
             if expected_duration(new, ts) > avail * 1.1:
                 syl = max(3, int(avail * ts / SEC_PER_SYL))
                 new2 = str(_ask(router, trim_prompt(new, round(avail, 2)) + f"\n\nThe result must be at most {syl} "
                                 "syllables (words) long, keep the key meaning.",
-                                lambda d: bool(str(d.get("result", "")).strip()))["result"]).strip()
+                                lambda d: not cut_at_quote(d.get("result")))["result"]).strip()
                 if syllable_count(new2) < syllable_count(new):
                     new = new2
         except RenderCancelled:
@@ -653,6 +856,122 @@ def _mechanical_split(sentence: str, num_parts: int) -> list[str]:
         lines.append(rest[:cut].strip())
         rest = rest[cut:].strip()
     return [ln for ln in lines + [rest] if ln]
+
+
+# ── Gộp mẩu chữ in sẵn (OCR) thành câu ──────────────────────────────────
+
+GROUP_MAX_PARTS = 4           # số dòng chữ tối đa trong một câu gộp
+GROUP_MAX_GAP = 1.0           # hai dòng cách nhau quá ngần này giây (theo tiếng nói) → không gộp
+GROUP_MAX_SPAN = 8.0          # câu gộp không dài quá ngần này giây
+GROUP_WINDOW = 120            # mỗi lần gửi AI tối đa ngần này dòng
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+_JOIN_PUNCT = "。！？，、；：…!?,.;:"
+
+
+def group_prompt(lines: list[str], spans: list[tuple[float, float]], language: str, max_chars: int) -> str:
+    rows = "\n".join(f"{i}. [{a:.1f}-{b:.1f}s] {t}" for i, (t, (a, b)) in enumerate(zip(lines, spans), 1))
+    return f'''
+## Role
+You are a professional subtitle editor for {language} short videos.
+
+## Task
+The numbered lines were read (OCR) from the burned-in subtitles of a video, with the time each one is spoken.
+Creators often split ONE spoken sentence across 2-3 consecutive subtitle lines. Group consecutive lines that belong to
+the same sentence, so each group can be translated and voiced as one natural sentence.
+
+1. Only group consecutive lines; keep the order; every line number appears exactly once.
+2. Never put lines spoken by different people in one group (e.g. a question and its answer).
+3. At most {GROUP_MAX_PARTS} lines and about {max_chars} characters per group; when unsure, keep a line alone.
+
+## Lines
+{rows}
+
+## Output in only JSON format and no other text
+```json
+{{"groups": [[1], [2, 3], [4, 5]]}}
+```
+
+Note: Start you answer with ```json and end with ```, do not add any other text.
+'''.strip()
+
+
+def _groups_ok(d: dict, n: int) -> bool:
+    """Mỗi dòng 1..n đúng một lần, theo thứ tự (nhóm liền nhau)."""
+    g = d.get("groups")
+    if not isinstance(g, list) or not all(isinstance(x, list) and x for x in g):
+        return False
+    try:
+        flat = [int(v) for x in g for v in x]
+    except (TypeError, ValueError):
+        return False
+    return flat == list(range(1, n + 1))
+
+
+def _chars(text: str) -> int:
+    return len(re.sub(r"\s+", "", text))
+
+
+def _fit_group(members: list[int], cues: list[Cue], texts: list[str], max_chars: int) -> list[list[int]]:
+    """Nhóm AI đề xuất mà quá dài / cách quãng → cắt lại (không tin AI tuyệt đối)."""
+    out: list[list[int]] = []
+    cur: list[int] = []
+    for k in members:
+        if cur and (len(cur) >= GROUP_MAX_PARTS or cues[k].start - cues[cur[-1]].end > GROUP_MAX_GAP
+                    or cues[k].end - cues[cur[0]].start > GROUP_MAX_SPAN
+                    or sum(_chars(texts[j]) for j in cur) + _chars(texts[k]) > max_chars):
+            out.append(cur)
+            cur = []
+        cur.append(k)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _join(parts: list[str], cjk: bool) -> str:
+    text = parts[0]
+    for part in parts[1:]:
+        if cjk:
+            text += ("" if text[-1:] in _JOIN_PUNCT else "，") + part
+        else:
+            text += " " + part
+    return text
+
+
+def group_fragments(cues: list[Cue], *, settings: Settings, language: str = "",
+                    log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> list[Cue]:
+    """Phụ đề in sẵn (OCR): người làm video hay cắt MỘT câu nói thành 2–3 dòng chữ → dịch / lồng tiếng từng mẩu thì
+    câu vụn, khung đọc ngắn phải rút gọn nhiều. AI gộp các dòng liền nhau cùng một câu (không gộp lời hai người, không
+    qua khoảng lặng dài) → câu trọn như khi nghe giọng nói, mà chữ vẫn đúng như trên hình (tên riêng). Không gọi được
+    AI → giữ nguyên từng dòng."""
+    if len(cues) < 2:
+        return cues
+    texts = [c.plain.replace("\n", " ").strip() for c in cues]
+    cjk = sum(1 for t in texts if _CJK.search(t)) * 2 >= len(texts)
+    max_chars = 20 if cjk else 70
+    lang = source_name(texts, language)
+    groups: list[list[int]] = []
+    try:
+        router = Router(settings, log, cancel)
+        for a in range(0, len(cues), GROUP_WINDOW):
+            if cancel is not None and cancel.is_set():
+                raise RenderCancelled("Đã huỷ")
+            part = list(range(a, min(len(cues), a + GROUP_WINDOW)))
+            d = _ask(router, group_prompt([texts[i] for i in part], [(cues[i].start, cues[i].end) for i in part],
+                                          lang, max_chars), lambda d: _groups_ok(d, len(part)))
+            for g in d["groups"]:
+                groups += _fit_group([a + int(v) - 1 for v in g], cues, texts, max_chars)
+    except RenderCancelled:
+        raise
+    except Exception as exc:                            # noqa: BLE001 — hết lượt / mất mạng / AI trả sai dạng
+        logger.warning("Gộp câu OCR lỗi (%s) → giữ từng dòng", exc)
+        if log:
+            log("Gộp mẩu chữ thành câu: không gọi được AI → giữ nguyên từng dòng chữ.")
+        return cues
+    out = [Cue(n + 1, cues[g[0]].start, cues[g[-1]].end, wrap_lines(_join([texts[i] for i in g], cjk)),
+               dict(cues[g[0]].meta)) for n, g in enumerate(groups)]
+    if log:
+        log(f"Gộp mẩu chữ thành câu: {len(cues)} dòng chữ → {len(out)} câu")
+    return out
 
 
 _SPLIT_AI_DOWN = 0.0          # AI tách câu hỏng lúc nào → tới mốc này các video sau trong lô cắt ở dấu câu luôn

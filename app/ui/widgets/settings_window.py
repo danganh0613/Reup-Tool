@@ -36,7 +36,7 @@ GUIDE = [
     ]),
     ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
         ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
-        ("F2 · Nhận diện lời thoại", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video."),
+        ("F2 · Nhận diện lời thoại", "AI nghe giọng nói ngay trên máy; video có phụ đề in sẵn thì tự đối chiếu chữ."),
         ("F3 · Lời thoại & phụ đề", "Sửa từng câu, «Nhờ AI sửa», dịch. Kiểu phụ đề mặc định giống TikTok; chỉnh chi tiết khi cần."),
         ("F4 · Lồng tiếng", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
     ]),
@@ -244,7 +244,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         b = self._card(c, "Nghe lời thoại", sub="Qwen3-ASR",
                        info="AI nghe giọng nói trong video rồi chép thành phụ đề (mốc thời gian từng chữ, tách câu theo "
-                            "nghĩa). Dùng khi tab Nhận diện chọn «Giọng nói trong video». Cài một lần.")
+                            "nghĩa). Cài một lần.")
         self.qwen_status, row = self._status_row(b)
         self.qwen_btn = button(row, "Cài", icon_name="download", size="sm", command=self._install_qwen)
 
