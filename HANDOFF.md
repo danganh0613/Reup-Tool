@@ -241,6 +241,31 @@
     - Test ẩn: `audit_out/headless/sitecustomize.py` chuyển bộ đếm sang `audit_out/_ai_usage_test/` — test dùng AI giả
       (giả hết lượt ngày, số dư giả) không ghi vào bộ đếm thật.
 
+35. **Giọng ưu tiên Nam / Nữ + đoán giới tính** (test `audit_out/qa/test_voice_priority.py` 39, ảnh `shot_prio.py`; đo
+    `audit_out/speaker_gender/`):
+    - Đoán giới: `diarize.gender_of(f0, df)` — cao độ < 165 Hz → Nam (không bao giờ lật); ΔF (khoảng cách formant, LPC
+      numpy `_dispersion`, ~ độ dài khoang họng) < 1100 Hz → Nam kể cả khi cao độ ≥ 210 Hz (nam nói giọng cao: video
+      «tải xuống (2)» 239 Hz / ΔF 1038 trước bị đoán Nữ); ≥ 210 Hz → Nữ; vùng giữa theo ΔF (> 1250 → Nữ) hoặc «chưa rõ».
+      Trên 150 giọng mẫu Edge TTS: chưa giọng nữ nào ΔF < 1100. Đã thử và BỎ: phân loại trên vân giọng CAM++ học từ giọng
+      Edge TTS (đúng 94 % trên giọng máy nhưng sai ngược trên video thật).
+    - `TTSConfig.male_voices` / `female_voices` (lưu theo mẫu, tối đa 4 mỗi giới, khung «Giọng ưu tiên» trong tab Lồng
+      tiếng, `app/ui/widgets/voice_priority.py`). `assign_voices`: giọng chọn riêng của video (`speakers.json` › `voices`)
+      trước, rồi người nói nhiều nhất nhận giọng 1 của giới mình…; thiếu → `suggest_voices` chọn giọng cùng giới chưa ai
+      dùng (`video_voices`, dùng chung lúc dựng và trên thẻ). Thay cho cách cũ «người 1 → giọng 1» không xét giới
+      (`resolve_voices` đã bỏ); cấu hình / mẫu cũ (`speaker_voices`) tự chuyển sang ưu tiên theo giới của giọng.
+    - Thẻ người nói: nút Nam / Nữ (sửa tay, lưu vào speakers.json), dòng nguồn giọng («Theo giọng ưu tiên «Nam 1»» / «chọn
+      riêng cho video này» / «Máy tự chọn»), «Theo ưu tiên» bỏ giọng riêng. Chữ ký giọng gồm giọng ưu tiên + mtime
+      speakers.json → đổi là lần chuẩn bị sau đọc lại.
+
+36. **Nhờ AI sửa + câu AI lồng object** (test `audit_out/qa/test_ai_edit.py` 18):
+    - Lời dặn: đọc HẾT thoại, sửa mọi câu liên quan (câu hỏi lẫn câu trả lời), rà lại cho nhất quán; chỉ đổi phần được
+      yêu cầu, không rút gọn / bỏ ý. Yêu cầu «sửa X thành Y» (`replace_request`): AI trả xong còn câu chứa X → hỏi lại AI
+      riêng các câu đó (kèm ví dụ đã sửa); vẫn sót → `replace_phrase` thay trực tiếp (đúng cụm từ, giữ hoa đầu câu).
+      Thử thật (flash-lite, video «tải xuống (2)»): trước sửa 11 câu hỏi, sót 11 câu trả lời → nay đủ 11/11 trong 1 lượt.
+    - `as_text`: AI đôi khi trả `"text": {"id": 6, "text": "…"}` hoặc viết object thành chữ → bóc lấy câu (ở `_parse`,
+      `_parse_items`, `ai_edit`, dịch cả lượt / từng lô, lưới cuối của `translate_cues_vl`). Trước đó câu 36 / 44 của
+      video trên bị ghi «{'id': 6, 'text': …}» vào phụ đề và giọng đọc đọc luôn.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

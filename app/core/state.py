@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import re
 import shutil
 import sys
 import threading
@@ -204,7 +205,12 @@ class TTSConfig:
     min_gap: float = 0.08              # khoảng nghỉ tối thiểu giữa 2 cue (giây)
     multi_voice: bool = True           # mỗi người nói một giọng (tự nhận diện); muốn một người đọc hết thì tắt
     speaker_count: str = SPEAKER_COUNTS[0]
-    #: giọng theo người nói: {name, provider, locale, voice_id, voice_name, speed}
+    #: giọng ưu tiên theo giới (lưu theo mẫu): người nói nhiều nhất nhận giọng 1 của giới mình, người kế giọng 2…
+    #: mỗi mục {provider, locale, voice_id, voice_name}
+    male_voices: list = field(default_factory=list)
+    female_voices: list = field(default_factory=list)
+    #: giọng đã gán cho từng người nói của MỘT video lúc dựng ({name, provider, locale, voice_id, voice_name, speed});
+    #: bản cũ lưu ở đây danh sách giọng theo thứ tự người nói → tự chuyển sang giọng ưu tiên theo giới
     speaker_voices: list = field(default_factory=list)
 
     def set_voice(self, voice_id: str) -> None:
@@ -226,6 +232,16 @@ class TTSConfig:
                 v = vieneu_for_gemini(str(sv.get("voice_id") or "")) if str(sv["provider"]).startswith("Gemini") else ""
                 sv.update(provider=VIENEU, locale="vi-VN", voice_id=v, voice_name=v)
                 changed = True
+        if self.speaker_voices and not (self.male_voices or self.female_voices):
+            # bản cũ: giọng theo thứ tự người nói (người 1 → giọng 1, không xét Nam / Nữ — nam có thể nhận giọng nữ)
+            # → danh sách ưu tiên theo giới của giọng, giữ thứ tự
+            for sv in self.speaker_voices:
+                g = voice_gender(sv) if isinstance(sv, dict) and sv.get("voice_id") else ""
+                lst = self.male_voices if g == "Nam" else self.female_voices if g == "Nữ" else None
+                if lst is not None and all(e.get("voice_id") != sv["voice_id"] for e in lst):
+                    lst.append({k: sv[k] for k in ("provider", "locale", "voice_id", "voice_name", "pitch") if k in sv})
+            self.speaker_voices = []
+            changed = True
         return changed
 
 
@@ -236,6 +252,17 @@ _GEMINI_MALE = {"Puck", "Charon", "Fenrir", "Orus", "Enceladus", "Iapetus", "Umb
 
 def vieneu_for_gemini(voice: str) -> str:
     return VIENEU_BY_GENDER["Male" if voice in _GEMINI_MALE else "Female"]
+
+
+#: giọng biết sẵn giới (giọng VieNeu ghi giới trong tên: «Trúc Ly — Nữ · Bắc…»)
+_KNOWN_GENDER = {VIENEU_BY_GENDER["Female"]: "Nữ", VIENEU_BY_GENDER["Male"]: "Nam",
+                 "vi-VN-HoaiMyNeural": "Nữ", "vi-VN-NamMinhNeural": "Nam"}
+
+
+def voice_gender(sv: dict) -> str:
+    """Nam / Nữ của một mục giọng đã lưu; «» nếu không biết."""
+    m = re.search(r"—\s*(Nam|Nữ)\b", str(sv.get("voice_name") or ""))
+    return m.group(1) if m else _KNOWN_GENDER.get(str(sv.get("voice_id") or ""), "")
 
 
 @dataclass

@@ -8,6 +8,7 @@ chọn model khác (``ModelUnavailable``). Cách dịch cả video nằm ở ``t
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -421,6 +422,35 @@ QUOTE_RULE = ("Never use the double-quote character (\") inside any text value; 
               "single quotes ('...') or «...» instead.")
 
 
+#: câu AI trả mà thực ra là một object bị viết thành chữ: «{'id': 6, 'text': 'Đây là…'}»
+_OBJ_TEXT = re.compile(r"""^\s*\{\s*['"](id|n|text|free|direct|translation)['"]\s*:""")
+_TEXT_KEYS = ("text", "free", "direct", "translation", "new")
+
+
+def as_text(value) -> str:
+    """Giá trị AI trả → câu chữ. AI (nhất là model nhẹ) đôi khi lồng thêm một lớp ({"text": {"id": 6, "text": "…"}}),
+    trả danh sách, hoặc viết cả object thành chữ «{'id': 6, 'text': '…'}» — bóc lấy đúng câu, không để chuỗi kỹ thuật lọt
+    vào phụ đề / giọng đọc."""
+    for _ in range(4):
+        if isinstance(value, str) and _OBJ_TEXT.match(value):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                try:
+                    value = ast.literal_eval(value.strip())
+                except (ValueError, SyntaxError):
+                    m = re.search(r"""['"](?:text|free|direct)['"]\s*:\s*['"](.*?)['"]\s*[,}]""", value, re.S)
+                    return m.group(1) if m else value
+        if isinstance(value, dict):
+            value = next((value[k] for k in _TEXT_KEYS if k in value),
+                         next((v for v in value.values() if isinstance(v, str)), ""))
+        elif isinstance(value, list):
+            value = " ".join(as_text(v) for v in value)
+        else:
+            break
+    return "" if value is None else str(value)
+
+
 def cut_at_quote(raw) -> bool:
     """Câu AI trả bị cắt ở dấu " quên thoát: rỗng, hoặc còn khoảng trắng ở cuối (cắt ngay trước dấu ngoặc mở)."""
     text = "" if raw is None else str(raw)
@@ -488,7 +518,7 @@ def _parse(text: str, expected: int) -> list[str]:
     arr = data.get("translations") if isinstance(data, dict) else data
     if not isinstance(arr, list):
         raise ValueError("JSON không đúng dạng")
-    out = [str(x).strip() for x in arr]
+    out = [as_text(x).strip() for x in arr]
     if len(out) != expected:
         raise ValueError(f"Số dòng trả về {len(out)} ≠ {expected}")
     return out
@@ -504,8 +534,8 @@ def _parse_items(text: str, ids: list[int]) -> list[str]:
     got: dict[int, str] = {}
     for it in items:
         try:
-            raw = it.get("text", "")
-            got[int(it["id"])] = "" if cut_at_quote(raw) else str(raw).strip()     # cụt → bỏ, giữ câu cũ
+            raw = as_text(it.get("text", ""))
+            got[int(it["id"])] = "" if cut_at_quote(raw) else raw.strip()     # cụt → bỏ, giữ câu cũ
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ValueError("JSON không đúng dạng (item thiếu id / text)") from None
     missing = [n for n in ids if n not in got]
@@ -632,11 +662,18 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
         "(and the original SOURCE line when it is a translation).\n"
         f"The user asks: «{instruction.strip()}»\n"
         "Rules:\n"
-        "- Change ONLY the lines this request applies to. Leave every other line exactly as it is and do not list it.\n"
+        "- First read ALL the lines — the whole dialogue, from the first line to the last.\n"
+        "- Apply the request to EVERY line it concerns: questions AND answers, early lines AND late lines. If the "
+        "request names words to change, every line that contains those words (any capitalization) must be changed.\n"
         "- Decide which lines are affected from their meaning (e.g. «the question about taking it home» → every line "
         "with that meaning), not just exact wording.\n"
-        "- Return each changed line in full (the whole new subtitle text), keep it short enough to be spoken in the "
-        "same time, never merge or split lines, no quotes or explanations inside the text.\n"
+        "- Then re-read the whole dialogue once more: also fix lines that the change makes inconsistent (the same "
+        "person / animal / thing must be called the same way everywhere, pronouns must match, each answer must still "
+        f"fit its question) and keep every changed line natural, spoken {target}.\n"
+        "- Leave every other line exactly as it is and do not list it.\n"
+        "- Return each changed line in full (the whole new subtitle text). Change only what the request needs and keep "
+        "the rest of the line as it is — do not shorten it or drop details (a word or two longer is fine) unless the "
+        "user asks for shorter lines. Never merge or split lines, no quotes or explanations inside the text.\n"
         f"- {QUOTE_RULE}\n"
         + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
         + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
@@ -646,11 +683,43 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
     )
 
 
+#: yêu cầu kiểu «sửa X thành Y» / «đổi X sang Y» / «X → Y» — để kiểm còn sót câu nào chứa X
+_REPLACE_REQ = (
+    re.compile(r"""^\s*(?:hãy\s+)?(?:sửa|đổi|thay|chuyển)\s+(?:hết\s+|tất cả\s+|mọi\s+)?(?:chữ|từ|cụm|câu)?\s*"""
+               r"""[«"'“]?(?P<old>[^«»"'“”]+?)[»"'”]?\s+(?:thành|bằng|sang|qua)\s+[«"'“]?(?P<new>[^«»"'“”]+?)[»"'”]?"""
+               r"""\s*[.!]?\s*$""", re.I),
+    re.compile(r"""^\s*[«"'“]?(?P<old>[^«»"'“”→]+?)[»"'”]?\s*(?:->|→|=>)\s*[«"'“]?(?P<new>[^«»"'“”]+?)[»"'”]?\s*$"""),
+)
+
+
+def replace_request(instruction: str) -> tuple[str, str] | None:
+    """(chữ cũ, chữ mới) nếu yêu cầu là «sửa X thành Y»; None nếu là yêu cầu tự do."""
+    for pat in _REPLACE_REQ:
+        m = pat.match(instruction or "")
+        if m and m.group("old").strip() and m.group("new").strip():
+            return m.group("old").strip(), m.group("new").strip()
+    return None
+
+
+def replace_phrase(text: str, old: str, new: str) -> str:
+    """Thay ``old`` → ``new`` (không phân biệt hoa thường); đầu câu thì viết hoa chữ đầu như bản cũ."""
+    def sub(m: re.Match) -> str:
+        at_start = not text[:m.start()].strip() or text[:m.start()].rstrip()[-1:] in ".!?…"
+        return new[:1].upper() + new[1:] if at_start or m.group(0)[:1].isupper() else new
+    return re.sub(_phrase(old), sub, text, flags=re.I)
+
+
+def _phrase(old: str) -> str:
+    """Đúng cụm từ (không khớp giữa một từ khác: «tao» không khớp «taobao»)."""
+    return r"(?<!\w)" + re.escape(old) + r"(?!\w)"
+
+
 def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, settings: Settings, target: str,
             style: str = "", log: Callable[[str], None] | None = None,
             cancel: threading.Event | None = None) -> tuple[dict[int, str], str]:
-    """Sửa phụ đề theo một yêu cầu tự do: AI tự tìm câu liên quan và chỉ trả về những câu đổi.
-    Trả ({chỉ số 0-based: câu mới}, ghi chú của AI)."""
+    """Sửa phụ đề theo một yêu cầu tự do: AI đọc hết thoại, sửa mọi câu liên quan (câu hỏi lẫn câu trả lời) rồi rà
+    lại cho nhất quán, chỉ trả về những câu đổi. Yêu cầu «sửa X thành Y»: AI trả xong mà còn câu chứa X → hỏi lại AI
+    riêng những câu đó (kèm ví dụ AI vừa sửa); vẫn sót → máy thay trực tiếp. Trả ({chỉ số 0-based: câu mới}, ghi chú)."""
     if not instruction.strip():
         return {}, ""
     router = Router(settings, log, cancel)
@@ -658,20 +727,46 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
     edits: dict[int, str] = {}
     notes: list[str] = []
     n = len(current)
-    for a in range(0, n, EDIT_CHUNK):
-        if cancel is not None and cancel.is_set():
-            raise RenderCancelled("Đã huỷ")
-        rows = [(i + 1, (source[i] if source and i < len(source) else "").replace("\n", " "),
-                 current[i].replace("\n", " ")) for i in range(a, min(n, a + EDIT_CHUNK))]
-        data = _load_json(router.call(_edit_prompt(rows, instruction, target_en, style, settings.glossary))) or {}
-        for e in (data.get("edits") or []) if isinstance(data, dict) else []:
-            try:
-                k = int(e.get("n")) - 1
-                new = str(e.get("text", "")).strip()
-            except (TypeError, ValueError, AttributeError):
-                continue
-            if a <= k < min(n, a + EDIT_CHUNK) and new and new != current[k].strip():
-                edits[k] = new
-        if isinstance(data, dict) and data.get("note"):
-            notes.append(str(data["note"]).strip())
+
+    def ask(idx: list[int], request: str) -> None:
+        for a in range(0, len(idx), EDIT_CHUNK):
+            if cancel is not None and cancel.is_set():
+                raise RenderCancelled("Đã huỷ")
+            part = idx[a:a + EDIT_CHUNK]
+            rows = [(i + 1, (source[i] if source and i < len(source) else "").replace("\n", " "),
+                     edits.get(i, current[i]).replace("\n", " ")) for i in part]
+            data = _load_json(router.call(_edit_prompt(rows, request, target_en, style, settings.glossary))) or {}
+            for e in (data.get("edits") or []) if isinstance(data, dict) else []:
+                try:
+                    k = int(e.get("n")) - 1
+                    new = as_text(e.get("text", "")).strip()
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                if k in part and new and new != edits.get(k, current[k]).strip():
+                    edits[k] = new
+            if isinstance(data, dict) and data.get("note"):
+                notes.append(str(data["note"]).strip())
+
+    ask(list(range(n)), instruction)
+    pair = replace_request(instruction)
+    if pair:
+        old, new = pair
+
+        def left() -> list[int]:
+            return [i for i in range(n) if re.search(_phrase(old), edits.get(i, current[i]), re.I)]
+
+        rest = left()
+        if rest:                          # AI bỏ sót (hay gặp: sửa câu hỏi, quên câu trả lời) → hỏi lại riêng các câu đó
+            done = [f"«{current[i]}» → «{edits[i]}»" for i in sorted(edits)[:3]]
+            if log:
+                log(f"Nhờ AI sửa: còn {len(rest)} câu chứa «{old}» → hỏi lại AI riêng các câu đó")
+            ask(rest, f"{instruction}. These lines still contain «{old}» — change every one of them the same way, "
+                      "keep the rest of each line natural." + (" Already changed like this: " + "; ".join(done)
+                                                                if done else ""))
+            rest = left()
+        for i in rest:                    # vẫn sót → thay trực tiếp đúng chữ người dùng yêu cầu
+            edits[i] = replace_phrase(edits.get(i, current[i]), old, new)
+        if rest:
+            notes.append(f"{len(rest)} câu còn «{old}» — máy thay trực tiếp thành «{new}».")
+    edits = {k: v for k, v in edits.items() if v.strip() != current[k].strip()}
     return edits, " ".join(notes)[:300]

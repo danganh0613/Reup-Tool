@@ -82,13 +82,18 @@ class TTSModule(BaseModule):
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
         self.multi = SwitchRow(sec.body, "Mỗi người nói một giọng", on_change=self._multi_changed,
-                               info="Máy nhận ra ai nói câu nào rồi lồng mỗi người một giọng. Người chưa chọn giọng dùng "
-                                    "giọng chính ở trên.")
+                               info="Máy nhận ra ai nói câu nào (tự chạy ở bước «Chuẩn bị», hoặc bấm «Nhận diện người "
+                                    "nói»), đoán Nam / Nữ rồi lồng mỗi người một giọng theo «Giọng ưu tiên».")
         self.multi.pack(fill="x")
         self.multi_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
         self.speaker_count = OptionRow(self.multi_frame, "Số người nói", SPEAKER_COUNTS,
                                        on_change=s(cfg, "speaker_count", preview=False))
         self.speaker_count.pack(fill="x", pady=(6, 3))
+        from app.ui.widgets.voice_priority import VoicePriority
+
+        # giọng ưu tiên Nam 1–4 / Nữ 1–4 (lưu theo mẫu) — đổi thì thẻ người nói gán lại ngay
+        self.priority = VoicePriority(self.multi_frame, self, on_change=lambda: self.speakers.refresh())
+        self.priority.pack(fill="x", pady=(2, 4))
         ButtonRow(self.multi_frame, [("🎙 Nhận diện người nói", self._detect_speakers, None),
                                      ("📝 Gán từng câu…", self._assign_speakers, None)]).pack(fill="x", pady=(4, 2))
         self.speaker_status = StatusLabel(self.multi_frame, "")
@@ -245,6 +250,7 @@ class TTSModule(BaseModule):
         self._engine = None
         self._layout_provider()
         self._load_voices()
+        self._layout_multi()                    # giọng ưu tiên chọn trong danh sách giọng của engine mới
 
     def _load_voices(self, force: bool = False) -> None:
         cfg = self.state.tts
@@ -327,6 +333,7 @@ class TTSModule(BaseModule):
         self.state.tts.edge_language = loc
         self._fill_voice_lists()
         self.state.config_changed("tts")
+        self._layout_multi()
 
     def _voice_changed(self, label: str) -> None:
         v = self._voice_by_label.get(label)
@@ -338,6 +345,7 @@ class TTSModule(BaseModule):
         if self.state.tts.multi_voice:
             if not self.multi_frame.winfo_ismapped():
                 self.multi_frame.pack(fill="x")
+            self.priority.refresh()
             self.speakers.refresh()
         else:
             self.multi_frame.pack_forget()

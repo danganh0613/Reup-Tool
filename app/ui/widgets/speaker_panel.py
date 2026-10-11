@@ -12,10 +12,10 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.config.paths import CACHE_DIR
 from app.core.state import VideoItem
-from app.services.diarize import SpeakerInfo, SpeakerMap, is_question, speaker_name
-from app.services.tts.generator import main_locale
+from app.services.diarize import SpeakerInfo, SpeakerMap, is_question, priority_slot, speaker_name, video_voices
+from app.services.tts.generator import main_locale, make_engine, voice_id_for
 from app.services.srt_utils import format_ts, load_srt
-from app.ui.widgets.common import SliderRow, StatusLabel
+from app.ui.widgets.common import SliderRow, StatusLabel, hint
 from app.ui.widgets.ui import Select, button
 from app.ui.widgets.voice_picker import VoicePicker
 
@@ -56,6 +56,7 @@ class SpeakerPanel(ctk.CTkFrame):
         self.window = module.window
         self.state = module.state
         self._sig = None
+        self._voices: dict[str, dict] = {}
         self.empty = StatusLabel(self, "")
         self.empty.pack(fill="x")
         self.cards = ctk.CTkFrame(self, fg_color="transparent")
@@ -65,31 +66,20 @@ class SpeakerPanel(ctk.CTkFrame):
     def pipeline(self):
         return self.window.pipeline
 
-    # ── Mục giọng của một người nói (trong cfg.speaker_voices) ────────────
-    def _entry(self, smap: SpeakerMap, name: str) -> dict:
-        """Mục giọng của người nói ``name`` trong video này. Chưa có mục đúng tên → lấy giọng theo thứ tự của mẫu
-        (người thứ k → giọng thứ k) làm mục riêng của người này — giống hệt lúc render."""
-        from app.services.diarize import resolve_voices
-
-        cfg = self.state.tts
-        for sv in cfg.speaker_voices:
-            if isinstance(sv, dict) and sv.get("name") == name:
-                return sv
-        base = next((r for r in resolve_voices(cfg.speaker_voices, smap) if r["name"] == name), None)
-        sv = dict(base) if base else {"provider": cfg.tts_provider, "locale": main_locale(cfg), "voice_id": "",
-                                      "voice_name": "", "speed": 0.0}
-        sv["name"] = name
-        cfg.speaker_voices.append(sv)
-        return sv
-
-    def refresh(self, force: bool = False) -> None:
-        item = self.state.active
+    # ── Giọng từng người nói của video đang chọn ─────────────────────────
+    def _signature(self, item: VideoItem | None) -> tuple:
         path = self.pipeline.speakers_path(item) if item else None
         try:
             mtime = path.stat().st_mtime_ns if path else 0
         except OSError:
             mtime = 0
-        sig = (item.path if item else "", mtime, id(self.state.tts))     # nạp preset thay cả object cấu hình
+        t = self.state.tts                                   # nạp preset thay cả object cấu hình
+        return (item.path if item else "", mtime, id(t), repr(t.male_voices), repr(t.female_voices), t.tts_provider,
+                voice_id_for(t))
+
+    def refresh(self, force: bool = False) -> None:
+        item = self.state.active
+        sig = self._signature(item)
         if sig == self._sig and not force:
             return
         self._sig = sig
@@ -98,89 +88,109 @@ class SpeakerPanel(ctk.CTkFrame):
         if item is None:
             self.empty.info("Chọn một video trong hàng đợi.")
             return
+        path = self.pipeline.speakers_path(item)
         smap = SpeakerMap.load(path)
         if smap is None or not smap.speakers:
             self.empty.info("Video này chưa nhận diện người nói — bấm «Nhận diện người nói», hoặc «Gán từng câu…» "
                             "để tự chia. Khi render, máy sẽ tự nhận diện nếu chưa có.")
             return
-        names = smap.names()
-        self.empty.info(f"{len(names)} người nói · mỗi người một giọng. «Lưu mẫu» nhớ giọng theo đúng thứ tự này — "
-                        "video sau: người 1 → giọng của Người 1, người 2 → giọng của Người 2…")
-        missing = [n for n in names if not self._entry(smap, n).get("voice_id")]
-        if missing:
-            self._suggest_then_build(smap)
-        else:
-            self._build(smap)
-
-    def _suggest_then_build(self, smap: SpeakerMap) -> None:
-        from app.services.diarize import suggest_voices
-        from app.services.tts.generator import make_engine, voice_id_for
-
+        self.empty.info(f"{len(smap.speakers)} người nói · giọng lấy theo «Giọng ưu tiên» ở trên (người nói nhiều nhất "
+                        "nhận giọng 1 của giới mình). Máy đoán sai Nam / Nữ thì bấm sửa; đổi giọng ở thẻ chỉ áp dụng "
+                        "cho video này.")
         cfg = self.state.tts
         engine = make_engine(cfg, self.state.settings)
 
         def done(result, error):
-            if not error and result:
-                from app.services.diarize import resolve_voices
-
-                have = resolve_voices(cfg.speaker_voices, smap)        # giọng đã chọn / của mẫu, đúng người nói
-                sug = suggest_voices([smap.speakers[n] for n in smap.names()], result, provider=cfg.tts_provider,
-                                     locale=main_locale(cfg), main_voice=voice_id_for(cfg), existing=have)
-                done_names = {h["name"] for h in have}
-                # giữ cả bảng giọng của mẫu (cho video khác), chỉ thêm gợi ý cho người chưa có giọng
-                cfg.speaker_voices = [sv for sv in cfg.speaker_voices if sv.get("voice_id")] + \
-                    [e for e in sug if e["name"] not in done_names]
-                self.state.config_changed("tts", auto=True)      # gợi ý tự động, không phải người dùng sửa
-            self._build(smap)
+            if self._sig != sig or not self.winfo_exists():
+                return                         # đã đổi video / cấu hình trong lúc tải danh sách giọng
+            pool = result if result and not error else []
+            self._voices = {e["name"]: e for e in video_voices(
+                smap, cfg.male_voices, cfg.female_voices, pool, provider=cfg.tts_provider, locale=main_locale(cfg),
+                main_voice=voice_id_for(cfg))}
+            for name in smap.names():
+                self._card(item, path, smap, smap.speakers.get(name) or SpeakerInfo(name))
 
         self.window.run_bg(engine.list_voices, done)
 
-    def _build(self, smap: SpeakerMap) -> None:
-        for w in self.cards.winfo_children():
-            w.destroy()
-        item = self.state.active
-        for name in smap.names():
-            self._card(item, smap, smap.speakers.get(name) or SpeakerInfo(name))
+    def _save(self, item: VideoItem, path: Path, smap: SpeakerMap) -> None:
+        """Ghi giọng chọn riêng / Nam–Nữ vào speakers.json của video (giọng của video đổi → lần chuẩn bị sau đọc lại)."""
+        smap.save(path)
+        self._sig = self._signature(item)                    # không dựng lại thẻ đang bấm
+        self.window.queue_update(item)
 
-    def _card(self, item: VideoItem, smap: SpeakerMap, info: SpeakerInfo) -> None:
+    def _card(self, item: VideoItem, path: Path, smap: SpeakerMap, info: SpeakerInfo) -> None:
         cfg = self.state.tts
-        e = self._entry(smap, info.name)
+        e = dict(self._voices.get(info.name) or {"provider": cfg.tts_provider, "locale": main_locale(cfg),
+                                                   "voice_id": "", "voice_name": "", "speed": 0.0})
         card = ctk.CTkFrame(self.cards, fg_color=T.BG_INPUT, corner_radius=8)
         card.pack(fill="x", pady=4)
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=10, pady=(8, 2))
         ctk.CTkLabel(head, text=info.name, font=T.font(13, "bold"), text_color=T.TEXT, anchor="w").pack(side="left")
-        bits = [info.gender or "chưa rõ Nam/Nữ", f"{info.count} câu", f"{info.seconds:.0f}s"]
+
+        def set_gender(v: str) -> None:
+            if v == info.gender:
+                return
+            smap.speakers[info.name].gender = v
+            self._save(item, path, smap)
+            self.after(10, lambda: self.refresh(force=True))     # gán lại giọng theo giới mới
+
+        gender = ctk.CTkSegmentedButton(head, values=["Nam", "Nữ"], command=set_gender, font=T.font(11), height=26)
+        gender.set(info.gender)
+        gender.pack(side="left", padx=(8, 0))
+        bits = [f"{info.count} câu", f"{info.seconds:.0f}s"]
         ctk.CTkLabel(head, text="  ·  ".join(bits), font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(
             side="left", padx=(8, 0))
         status = StatusLabel(card, "")
         segs = sorted([s for s in smap.segments if s[2] == info.name], key=lambda s: -(s[1] - s[0]))
-        if segs and item is not None:
+        if segs:
             a, b, _n = segs[0]
             button(head, "Nghe giọng gốc", icon_name="play", size="sm",
                    command=lambda: play_segment(self.window, item, a, b, status.error),
                    tip="Phát câu dài nhất của người này trong video gốc").pack(side="right")
+
+        own = info.name in smap.voices
+        src_row = ctk.CTkFrame(card, fg_color="transparent")
+        src_row.pack(fill="x", padx=10)
+        slot = priority_slot(e, cfg.male_voices, cfg.female_voices)
+        src = ctk.CTkLabel(src_row, font=T.font(11), text_color=T.TEXT_DIM, anchor="w", text=(
+            "Giọng chọn riêng cho video này" if own else f"Theo giọng ưu tiên «{slot}»" if slot else
+            "Máy tự chọn — chưa xếp đủ giọng ưu tiên cho giới này" if e.get("voice_id") else "Dùng giọng chính"))
+        src.pack(side="left")
+        if not info.gender:                       # cao độ / formant lưng chừng → nhắc người dùng bấm Nam / Nữ
+            hint(card, "Máy chưa chắc Nam hay Nữ — nghe giọng gốc rồi bấm chọn ở trên.").pack(fill="x", padx=10)
+
+        def back_to_priority() -> None:
+            smap.voices.pop(info.name, None)
+            self._save(item, path, smap)
+            self.after(10, lambda: self.refresh(force=True))
+
+        if own:
+            button(src_row, "Theo ưu tiên", icon_name="refresh", size="sm", command=back_to_priority,
+                   tip="Bỏ giọng chọn riêng — dùng lại giọng ưu tiên").pack(side="right")
+
+        def keep_own() -> None:
+            smap.voices[info.name] = {k: e[k] for k in ("provider", "locale", "voice_id", "voice_name", "speed", "pitch")
+                                      if k in e}
+            self._save(item, path, smap)
+            src.configure(text="Giọng chọn riêng cho video này")
 
         def get_sel():
             return (e.get("provider") or cfg.tts_provider, e.get("locale") or main_locale(cfg), e.get("voice_id", ""))
 
         def set_sel(provider: str, locale: str, vid: str, vname: str) -> None:
             e.update(provider=provider, locale=locale, voice_id=vid, voice_name=vname)
-            self.state.config_changed("tts", auto=picker.auto)
             pitch.slider.configure(state="normal" if provider == "Edge TTS" else "disabled")
+            if not picker.auto:                   # máy tự chọn lúc nạp danh sách giọng → không tính là chọn riêng
+                keep_own()
 
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="x", padx=10, pady=(0, 8))
+        pitch = SliderRow(body, "Cao độ (Edge)", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
+                          on_change=lambda v: (e.update(pitch=int(v)), keep_own()))
         picker = VoicePicker(body, self.window, get=get_sel, set_=set_sel,
                              speed=lambda: float(e.get("speed") or cfg.tts_speed))
         picker.pack(fill="x")
-
-        def set_pitch(v: float) -> None:
-            e["pitch"] = int(v)
-            self.state.config_changed("tts")
-
-        pitch = SliderRow(body, "Cao độ (Edge)", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
-                          on_change=set_pitch)
         pitch.set(int(e.get("pitch", cfg.tts_pitch) or 0))
         pitch.pack(fill="x", pady=(2, 0))
         pitch.slider.configure(state="normal" if (e.get("provider") or cfg.tts_provider) == "Edge TTS" else "disabled")

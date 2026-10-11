@@ -26,7 +26,8 @@ from app.core.state import Settings
 from app.services.ffmpeg import RenderCancelled
 from app.services.srt_utils import Cue, wrap_lines
 from app.services.translate_router import (_LANG_HINT, LEAK_REQUEST, QUOTE_RULE, Checkpoint, ModelUnavailable,
-                                           Router, TranslationMemory, _leaks, _load_json, cut_at_quote, retranslate)
+                                           Router, TranslationMemory, _leaks, _load_json, as_text, cut_at_quote,
+                                           retranslate)
 
 logger = logging.getLogger(__name__)
 
@@ -538,7 +539,7 @@ def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: 
                                   known_terms), ok)
     terms = [t for t in d.get("terms") or [] if isinstance(t, dict) and str(t.get("src", "")).strip()
              and str(t.get("tgt", "")).strip()]
-    return terms, {i: (str(d["lines"][k]["direct"]).replace("\n", " ").strip(), d["lines"][k].get("free"))
+    return terms, {i: (as_text(d["lines"][k]["direct"]).replace("\n", " ").strip(), as_text(d["lines"][k].get("free")))
                    for i, k in zip(idx, keys)}
 
 
@@ -720,7 +721,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                             lambda d: all(isinstance(d.get(k), dict) for k in keys))
                 out = []
                 for k in keys:
-                    free, sat_k = expr[k].get("free"), faith[k]["direct"]
+                    free, sat_k = as_text(expr[k].get("free")), as_text(faith[k]["direct"])
                     if _free_broken(free, sat_k):
                         logger.warning("VideoLingo lô %d câu %s: dịch thoát cụt / thiếu (%r) → dùng bản dịch sát",
                                        ci + 1, k, free)
@@ -773,6 +774,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     ckpt.finish()
     # câu gốc bị ngắt ở dấu phẩy (Qwen tách câu dài) → bản dịch cũng kết thúc bằng «,» → giọng đọc lên giọng lửng lơ,
     # nghe như dịch cụt → kết thúc bằng dấu chấm
+    texts = [as_text(t) for t in texts]                  # lưới cuối: không để «{'id': …, 'text': …}» lọt vào phụ đề
     texts = [re.sub(r"\s*[,;:，；：]+\s*$", ".", t) if t else t for t in texts]
     return [Cue(c.index, c.start, c.end, wrap_lines(t), dict(c.meta)) for c, t in zip(cues, texts)]
 

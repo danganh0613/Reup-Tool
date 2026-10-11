@@ -5,7 +5,7 @@ Chạy local, không cần mạng sau lần tải model đầu (~28 MB):
 1. Mỗi câu phụ đề → cắt đúng đoạn audio → đặc trưng fbank 80 chiều (giống Kaldi) → model CAM++ (3D-Speaker,
    ONNX, chạy bằng ``onnxruntime`` — thư viện đã có sẵn theo faster-whisper) → vector đặc trưng giọng.
 2. Gom nhóm các vector (average-linkage, độ giống cosine): tự đoán số người, hoặc theo số người do người dùng chọn.
-3. Ước lượng cao độ trung bình mỗi người → đoán Nam / Nữ để gợi ý giọng đọc.
+3. Ước lượng cao độ + khoảng cách formant (độ dài khoang họng) mỗi người → đoán Nam / Nữ để gán giọng đọc.
 
 Kết quả lưu cạnh phụ đề: ``<video>.speakers.json`` = danh sách [đầu, cuối, tên người nói] theo thời gian video gốc,
 nên dùng chung được cho phụ đề gốc lẫn bản dịch (cùng mốc thời gian).
@@ -59,13 +59,16 @@ class SpeakerInfo:
     seconds: float = 0.0
     f0: float = 0.0
     gender: str = ""            # "Nam" / "Nữ" / ""
+    df: float = 0.0             # khoảng cách formant (Hz) — khoang họng dài (nam) → nhỏ
 
 
 @dataclass
 class SpeakerMap:
-    """Ai nói đoạn nào, theo thời gian video gốc."""
+    """Ai nói đoạn nào, theo thời gian video gốc. ``voices``: giọng người dùng chọn riêng cho video này (tên người nói
+    → mục giọng) — đè lên giọng ưu tiên của mẫu."""
     segments: list[tuple[float, float, str]] = field(default_factory=list)
     speakers: dict[str, SpeakerInfo] = field(default_factory=dict)
+    voices: dict[str, dict] = field(default_factory=dict)
 
     # ── Lưu / đọc ─────────────────────────────────────────────────────────
     def save(self, path: Path) -> None:
@@ -73,7 +76,9 @@ class SpeakerMap:
         data = {"version": 1,
                 "segments": [[round(a, 3), round(b, 3), s] for a, b, s in self.segments],
                 "speakers": {k: {"count": v.count, "seconds": round(v.seconds, 1), "f0": round(v.f0, 1),
-                                 "gender": v.gender} for k, v in self.speakers.items()}}
+                                 "df": round(v.df), "gender": v.gender} for k, v in self.speakers.items()}}
+        if self.voices:
+            data["voices"] = self.voices
         tmp = path.with_suffix(".part")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
         tmp.replace(path)
@@ -86,9 +91,10 @@ class SpeakerMap:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             segs = [(float(a), float(b), str(s)) for a, b, s in data.get("segments", [])]
             spk = {str(k): SpeakerInfo(str(k), int(v.get("count", 0)), float(v.get("seconds", 0)),
-                                       float(v.get("f0", 0)), str(v.get("gender", "")))
+                                       float(v.get("f0", 0)), str(v.get("gender", "")), float(v.get("df", 0)))
                    for k, v in (data.get("speakers") or {}).items()}
-            m = cls(segs, spk)
+            voices = {str(k): dict(v) for k, v in (data.get("voices") or {}).items() if isinstance(v, dict)}
+            m = cls(segs, spk, voices)
             m.recount()
             return m
         except Exception:
@@ -144,8 +150,10 @@ class SpeakerMap:
     @classmethod
     def from_cues(cls, cues: list[Cue], labels: list[str], base: SpeakerMap | None = None) -> SpeakerMap:
         m = cls([(c.start, c.end, s) for c, s in zip(cues, labels) if s],
-                {k: SpeakerInfo(k, f0=v.f0, gender=v.gender) for k, v in (base.speakers if base else {}).items()})
+                {k: SpeakerInfo(k, f0=v.f0, gender=v.gender, df=v.df) for k, v in (base.speakers if base else {}).items()},
+                dict(base.voices) if base else {})
         m.recount()
+        m.voices = {k: v for k, v in m.voices.items() if k in m.speakers}    # người bị xoá → bỏ giọng chọn riêng
         return m
 
 
@@ -283,6 +291,49 @@ def _pitch(wav) -> float:
     peak = ac[np.arange(len(ac)), lag]
     f0 = SR / lag[peak > 0.5]
     return float(np.median(f0)) if len(f0) >= 5 else 0.0
+
+
+def _levinson(r, order: int):
+    import numpy as np
+
+    a = np.zeros(order + 1)
+    a[0], err = 1.0, r[0]
+    for i in range(1, order + 1):
+        k = -(r[i] + a[1:i] @ r[i - 1:0:-1]) / err
+        a[1:i + 1] = a[1:i + 1] + k * np.r_[a[i - 1:0:-1], 1.0]
+        err *= 1 - k * k
+        if err <= 0:
+            break
+    return a
+
+
+def _dispersion(wav, order: int = 14) -> float:
+    """Khoảng cách formant ΔF (Hz, trung vị các khung có tiếng; F2 ≈ 1,5·ΔF, F3 ≈ 2,5·ΔF) — tỉ lệ nghịch với độ dài
+    khoang họng: nam ~1000–1150, nữ ~1150–1650. Không đổi khi nam nói giọng cao (cao độ thì đổi). 0 nếu không đo được."""
+    import numpy as np
+
+    flen, shift = 512, 256
+    n = 1 + (len(wav) - flen) // shift
+    if n < 5:
+        return 0.0
+    idx = np.arange(flen)[None, :] + shift * np.arange(n)[:, None]
+    fr = wav[idx] - wav[idx].mean(axis=1, keepdims=True)
+    energy = (fr ** 2).sum(axis=1)
+    win = np.hamming(flen)
+    out = []
+    for x in fr[energy > np.percentile(energy, 50)]:
+        y = np.append(x[0], x[1:] - 0.97 * x[:-1]) * win
+        r = np.correlate(y, y, "full")[flen - 1:flen + order]
+        if r[0] <= 0:
+            continue
+        roots = np.roots(_levinson(r, order))
+        roots = roots[np.imag(roots) > 0]
+        f = np.angle(roots) * SR / (2 * np.pi)
+        bw = -SR / np.pi * np.log(np.abs(roots) + 1e-12)
+        f = np.sort(f[(f > 250) & (f < 5000) & (bw < 400)])
+        if len(f) >= 3:
+            out.append((f[1] / 1.5 + f[2] / 2.5) / 2)
+    return float(np.median(out)) if len(out) >= 5 else 0.0
 
 
 def _cluster(emb, n_speakers: int, threshold: float) -> list[int]:
@@ -438,10 +489,10 @@ def diarize(media: str | Path, cues: list[Cue], ffmpeg: FFmpeg, *, n_speakers: i
             total += len(w)
             if total > 25 * SR:
                 break
-        f0 = _pitch(np.concatenate(buf)) if buf else 0.0
+        wav = np.concatenate(buf) if buf else np.zeros(0, dtype=np.float32)
         info = smap.speakers[name]
-        info.f0 = f0
-        info.gender = gender_of(f0)
+        info.f0, info.df = _pitch(wav), _dispersion(wav)
+        info.gender = gender_of(info.f0, info.df)
     if on_progress:
         on_progress(1.0)
     if log:
@@ -450,40 +501,75 @@ def diarize(media: str | Path, cues: list[Cue], ffmpeg: FFmpeg, *, n_speakers: i
     return smap
 
 
-def gender_of(f0: float) -> str:
-    """Đoán theo cao độ: rõ ràng trầm → Nam, rõ ràng cao → Nữ; vùng giữa (nam nói to, nữ giọng trầm) → không đoán."""
-    if f0 <= 0:
-        return ""
-    if f0 < 165:
+#: khoảng cách formant dưới mức này = khoang họng dài → giọng nam (kể cả nam nói giọng cao, cao độ > 210 Hz). Đo trên
+#: 150 giọng mẫu: chưa có giọng nữ nào < 1100; nam nói cao trong video thật: 1038 (audit_out/speaker_gender)
+MALE_DF = 1100.0
+FEMALE_DF = 1250.0
+
+
+def gender_of(f0: float, df: float = 0.0) -> str:
+    """Đoán Nam / Nữ: cao độ rõ ràng trầm (< 165 Hz) → Nam; cao (≥ 210 Hz) → Nữ, TRỪ KHI khoang họng dài hẳn (ΔF <
+    ``MALE_DF``) → nam nói giọng cao. Vùng giữa (165–210 Hz) → theo ΔF, chưa rõ thì không đoán (người dùng chọn)."""
+    if 0 < f0 < 165:
+        return "Nam"
+    if 0 < df < MALE_DF:
         return "Nam"
     if f0 >= 210:
+        return "Nữ"
+    if df > FEMALE_DF:
         return "Nữ"
     return ""
 
 
-def resolve_voices(entries: list, smap: SpeakerMap | None) -> list[dict]:
-    """Giọng đã chọn (của video hoặc của mẫu) → người nói của video NÀY, theo THỨ TỰ.
+def guess_gender(info: SpeakerInfo) -> str:
+    """Giới để gán giọng: đã biết (máy đoán / người dùng chọn) → theo đó; chưa rõ → nghiêng theo cao độ."""
+    if info.gender:
+        return info.gender
+    if info.f0 > 0:
+        return "Nam" if info.f0 < 187 else "Nữ"
+    return ""
 
-    Mẫu lưu danh sách giọng theo thứ tự (giọng 1, giọng 2, …). Video nhận diện được N người: người nào đã có giọng
-    đúng tên thì giữ, còn lại lần lượt nhận giọng tiếp theo trong danh sách — người 1 → giọng 1, người 2 → giọng 2…
-    Thừa người (mẫu ít giọng hơn) → để trống, bước tạo giọng tự gợi ý giọng riêng theo Nam / Nữ."""
-    entries = [e for e in (entries or []) if isinstance(e, dict) and e.get("name") and e.get("voice_id")]
+
+def assign_voices(smap: SpeakerMap | None, male: list, female: list) -> list[dict]:
+    """Giọng của từng người nói trong video NÀY: giọng chọn riêng cho video (``smap.voices``) trước; còn lại theo
+    Nam / Nữ — người nói nhiều nhất nhận giọng ưu tiên 1 của giới mình, người kế nhận giọng 2… (mỗi giọng một người).
+    Hết giọng ưu tiên / không rõ giới → chưa gán (``suggest_voices`` tự chọn giọng khác cùng giới)."""
     if smap is None or not smap.speakers:
-        return entries
-    names = smap.names()
-    got: dict[str, dict] = {}
-    for nm in names:
-        e = next((e for e in entries if e["name"] == nm), None)
-        if e is not None:
-            got[nm] = e
-    rest = iter(e for e in entries if all(e is not g for g in got.values()))
-    for nm in names:
-        if nm not in got:
-            e = next(rest, None)
-            if e is None:
-                break
-            got[nm] = e
-    return [{**got[nm], "name": nm} for nm in names if nm in got]
+        return []
+    got: dict[str, dict] = {nm: {**e, "name": nm} for nm, e in smap.voices.items()
+                            if nm in smap.speakers and e.get("voice_id")}
+    used = {e["voice_id"] for e in got.values()}
+    queue = {"Nam": [e for e in male or [] if isinstance(e, dict) and e.get("voice_id")],
+             "Nữ": [e for e in female or [] if isinstance(e, dict) and e.get("voice_id")]}
+    for info in sorted(smap.speakers.values(), key=lambda i: -i.seconds):
+        if info.name in got:
+            continue
+        pick = next((e for e in queue.get(guess_gender(info), []) if e["voice_id"] not in used), None)
+        if pick is not None:
+            got[info.name] = {"speed": 0.0, **pick, "name": info.name}
+            used.add(pick["voice_id"])
+    return [got[nm] for nm in smap.names() if nm in got]
+
+
+def priority_slot(entry: dict, male: list, female: list) -> str:
+    """«Nam 1» / «Nữ 2»… nếu giọng nằm trong danh sách ưu tiên, «» nếu không."""
+    for label, lst in (("Nam", male), ("Nữ", female)):
+        for k, e in enumerate(lst or [], 1):
+            if isinstance(e, dict) and e.get("voice_id") == entry.get("voice_id") and \
+                    (e.get("provider") or "") == (entry.get("provider") or ""):
+                return f"{label} {k}"
+    return ""
+
+
+def video_voices(smap: SpeakerMap | None, male: list, female: list, pool: list | None, *, provider: str, locale: str,
+                 main_voice: str) -> list[dict]:
+    """Giọng cả video (lúc dựng và trên bảng người nói — cùng một cách): giọng chọn riêng + giọng ưu tiên
+    (``assign_voices``), người còn thiếu → máy chọn giọng cùng giới chưa ai dùng (``pool``: danh sách giọng của engine)."""
+    voices = assign_voices(smap, male, female)
+    if smap is not None and pool and len(voices) < len(smap.speakers):
+        voices = suggest_voices([smap.speakers[n] for n in smap.names()], pool, provider=provider, locale=locale,
+                                main_voice=main_voice, existing=voices)
+    return voices
 
 
 def suggest_voices(speakers: list[SpeakerInfo], voices: list, *, provider: str, locale: str, main_voice: str,
@@ -512,7 +598,8 @@ def suggest_voices(speakers: list[SpeakerInfo], voices: list, *, provider: str, 
     for sp in speakers:
         if sp.name in have:
             continue
-        want = sp.gender
+        known = guess_gender(sp)
+        want = known
         if not want:                      # không đoán được: xen kẽ nam / nữ
             want = ("Nữ", "Nam")[alt % 2]
             alt += 1
@@ -526,7 +613,7 @@ def suggest_voices(speakers: list[SpeakerInfo], voices: list, *, provider: str, 
             continue
         rank = {v.id: k for k, v in enumerate(cands)}
         # đúng giới tính trước (nếu đoán được), rồi giọng ít người dùng nhất — trùng giọng thì đổi cao độ bên dưới
-        pick = min(cands, key=lambda v: (bool(sp.gender) and g(v) != sp.gender, use_count.get(v.id, 0), rank[v.id]))
+        pick = min(cands, key=lambda v: (bool(known) and g(v) != known, use_count.get(v.id, 0), rank[v.id]))
         n = use_count.get(pick.id, 0)
         use_count[pick.id] = n + 1
         entry = {"name": sp.name, "provider": provider, "locale": pick.locale or locale, "voice_id": pick.id,

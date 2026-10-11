@@ -261,14 +261,17 @@ def voice_summary(tts: dict) -> str:
     if not tts.get("multi_voice"):
         return out + " — một người đọc hết."
     seq = []
-    for sv in tts.get("speaker_voices") or []:
-        if isinstance(sv, dict) and sv.get("voice_id"):
-            p = str(sv.get("provider") or "").split(" (")[0]
-            seq.append(f"Người {len(seq) + 1} → {short(str(sv.get('voice_name') or sv['voice_id']))}"
-                       + (f" ({p})" if p != prov else ""))
+    for title, key in (("Nam", "male_voices"), ("Nữ", "female_voices")):
+        names = []
+        for sv in tts.get(key) or []:
+            if isinstance(sv, dict) and sv.get("voice_id"):
+                p = str(sv.get("provider") or "").split(" (")[0]
+                names.append(short(str(sv.get("voice_name") or sv["voice_id"])) + (f" ({p})" if p != prov else ""))
+        if names:
+            seq.append(f"{title}: " + " → ".join(names))
     if not seq:
         return out + "\nMỗi người nói tự chọn một giọng Nam/Nữ."
-    return out + "\n" + " · ".join(seq)
+    return out + "\nGiọng ưu tiên — " + " · ".join(seq)
 
 
 def delete_template(name: str) -> None:

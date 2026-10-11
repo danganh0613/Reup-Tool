@@ -524,11 +524,12 @@ class Pipeline:
         except OSError:
             noread = 0
         multi = ""
-        if t.multi_voice:
+        if t.multi_voice:                          # giọng ưu tiên đổi / chọn riêng, đổi Nam–Nữ (speakers.json) → đọc lại
+            prio = f"{t.male_voices!r}{t.female_voices!r}"
             try:
-                multi = f"{t.speaker_voices!r}{int(self.speakers_path(item).stat().st_mtime_ns)}"
+                multi = f"{prio}{int(self.speakers_path(item).stat().st_mtime_ns)}"
             except OSError:
-                multi = repr(t.speaker_voices)
+                multi = prio
         raw = "|".join(str(x) for x in (
             "v2", t.tts_provider, t.edge_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo, t.min_gap,
             srt_path, mtime, extra_key, post_signature(self.state.settings),
@@ -702,22 +703,21 @@ class Pipeline:
             logger.warning("Không ghi được danh sách câu đã rút gọn / sửa tay", exc_info=True)
 
     def voice_config(self, item: VideoItem):
-        """Cấu hình giọng cho video này: nhiều giọng → giọng đã chọn / của mẫu gán đúng người nói (theo giới tính)."""
+        """Cấu hình giọng cho video này: nhiều giọng → giọng chọn riêng cho video, rồi giọng ưu tiên theo Nam / Nữ (người
+        nói nhiều nhất nhận giọng 1); người còn thiếu → máy chọn giọng cùng giới chưa ai dùng."""
         t = self.state.tts
         if not t.multi_voice:
             return t
-        from app.services.diarize import resolve_voices, suggest_voices
+        from app.services.diarize import assign_voices, video_voices
         from app.services.tts.generator import main_locale, make_engine, voice_id_for
 
         smap = self.speaker_map(item)
-        voices = resolve_voices(t.speaker_voices, smap)
+        voices = assign_voices(smap, t.male_voices, t.female_voices)
         if smap is not None and len(voices) < len(smap.speakers):
-            # người nói chưa có giọng (chưa mở bảng người nói / mẫu thiếu giới tính đó) → tự gợi ý giọng riêng theo
-            # Nam / Nữ, khác nhau — không để ai cũng dùng chung giọng chính
             try:
                 pool = make_engine(t, self.state.settings).list_voices()
-                voices = suggest_voices([smap.speakers[n] for n in smap.names()], pool, provider=t.tts_provider,
-                                        locale=main_locale(t), main_voice=voice_id_for(t), existing=voices)
+                voices = video_voices(smap, t.male_voices, t.female_voices, pool, provider=t.tts_provider,
+                                      locale=main_locale(t), main_voice=voice_id_for(t))
             except Exception:
                 logger.debug("Không gợi ý được giọng người nói", exc_info=True)
         return dataclasses.replace(t, speaker_voices=voices)
