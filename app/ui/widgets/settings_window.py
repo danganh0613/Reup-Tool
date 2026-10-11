@@ -36,9 +36,9 @@ GUIDE = [
     ]),
     ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
         ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
-        ("F2 · Nhận diện lời (STT)", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video."),
+        ("F2 · Nhận diện lời thoại", "AI nghe giọng nói ngay trên máy, hoặc đọc chữ in sẵn trên video."),
         ("F3 · Lời thoại & phụ đề", "Sửa từng câu, «Nhờ AI sửa», dịch. Kiểu phụ đề mặc định giống TikTok; chỉnh chi tiết khi cần."),
-        ("F4 · Lồng tiếng (TTS)", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
+        ("F4 · Lồng tiếng", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
     ]),
     ("Bộ công cụ video (F5 – F9)", T.WARNING, [
         ("F5 · Che mờ", "Che chữ cũ, logo… Tự dò phụ đề in sẵn của từng video."),
@@ -244,13 +244,13 @@ class SettingsWindow(ctk.CTkToplevel):
 
         b = self._card(c, "Nghe lời thoại", sub="Qwen3-ASR",
                        info="AI nghe giọng nói trong video rồi chép thành phụ đề (mốc thời gian từng chữ, tách câu theo "
-                            "nghĩa). Dùng khi tab STT chọn «Giọng nói trong video». Cài một lần ~11 GB.")
+                            "nghĩa). Dùng khi tab Nhận diện chọn «Giọng nói trong video». Cài một lần.")
         self.qwen_status, row = self._status_row(b)
         self.qwen_btn = button(row, "Cài", icon_name="download", size="sm", command=self._install_qwen)
 
         b = self._card(c, "Giọng đọc tiếng Việt", sub="VieNeu",
-                       info="25 giọng Việt (Bắc / Trung / Nam) chạy trên máy, có clone giọng. Câu đọc lỗi tự đọc lại; "
-                            "đọc lại vẫn hỏng thì đọc tạm bằng Edge (cần mạng) thay vì để im lặng.")
+                       info="25 giọng Việt (Bắc / Trung / Nam) chạy trên máy, có clone giọng. Câu đọc chưa đạt tự đọc "
+                            "lại; câu không đọc được (lỗi) thì đọc tạm bằng Edge (cần mạng) thay vì để im lặng.")
         self.vieneu_status, row = self._status_row(b)
         self.vieneu_btn = button(row, "Cài", icon_name="download", size="sm", command=self._install_vieneu)
         self.vieneu = OptionRow(b, "Chất lượng", ["int8", "fp32"], value=st.vieneu_precision,
@@ -259,7 +259,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.vieneu.pack(fill="x", pady=(6, 0))
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
-        button(row, "Từ điển phát âm…", icon_name="book", size="sm", command=self._open_pron).pack(side="left")
+        button(row, "Từ điển phát âm (khi đọc)…", icon_name="book", size="sm", command=self._open_pron,
+               tip="Cách đọc tên hãng / tên riêng cho giọng lồng, vd «Xiaomi» → «xao mi». Khác «Từ điển tên riêng» "
+                   "(dùng khi dịch) ở trang AI dùng API key.").pack(side="left")
         info_icon(row, "Mở pronunciation.json: «chữ viết»: «cách đọc», vd \"ANC\": \"ây en xi\". Áp cho mọi giọng — lưu file "
                        "rồi tạo lại giọng.").pack(side="left", padx=(6, 0))
 
@@ -319,8 +321,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.models_status = hint(b, "")
         self.models_status.pack(fill="x")
 
-        b = self._card(c, "Từ điển tên riêng", info="Mỗi dòng: chữ gốc=nghĩa, vd 周彦淑=Chu Ngạn Thục. AI luôn dịch đúng "
-                                                    "như vậy (cả khi dịch lại / Nhờ AI sửa).")
+        b = self._card(c, "Từ điển tên riêng (khi dịch)",
+                       info="Mỗi dòng: chữ gốc=nghĩa, vd 周彦淑=Chu Ngạn Thục. AI dịch đúng như vậy (cả khi dịch lại / "
+                            "Nhờ AI sửa). Cách ĐỌC tên (giọng lồng) ở «Từ điển phát âm» trang AI trên máy.")
         self.glossary = ctk.CTkTextbox(b, height=200, font=T.mono(11))
         self.glossary.insert("1.0", st.glossary)
         self.glossary.pack(fill="x")
@@ -519,6 +522,9 @@ class SettingsWindow(ctk.CTkToplevel):
             self.align_btn.pack(side="right")
         if qwen_ok():
             self.qwen_status.ok("✓ Đã cài.")
+        elif getattr(sys, "frozen", False):
+            self.qwen_status.warn("Chưa có. Bản .exe chưa tự cài được — chép thư mục models\\qwen_asr_env + "
+                                  "models\\hf từ máy đã cài sang thư mục app này.")
         else:
             self.qwen_status.warn(f"Chưa cài — cần để nhận diện giọng nói (~{INSTALL_GB} GB, một lần).")
             self.qwen_btn.pack(side="right")
@@ -539,8 +545,8 @@ class SettingsWindow(ctk.CTkToplevel):
         uvr = "đã có" if vocal_remove.model_ready() else f"tự tải lần đầu (~{vocal_remove.MODEL_SIZE_MB} MB)"
         spk = "đã có" if diarize.MODEL_PATH.exists() else f"tự tải lần đầu (~{diarize.MODEL_SIZE_MB} MB)"
         self.small_status.info(f"Khử giọng gốc: {uvr} · Nhận ra người nói: {spk}.")
-        missing = sum(not ok for ok in (qwen_ok(), vieneu_ok(), bool(size), align_ok()))
-        self._badge("local", str(missing) if missing else "")          # số phần chưa cài, hiện trên menu trái
+        # số trên menu trái: chỉ phần CẦN cho việc chính (nghe lời thoại) — Whisper, căn chữ nổi, VieNeu là tuỳ chọn
+        self._badge("local", "" if qwen_ok() else "1")
 
     def _after_install(self, what: str) -> Callable:
         def done(ok: bool, error: Exception | None) -> None:
@@ -650,9 +656,14 @@ class SettingsWindow(ctk.CTkToplevel):
             self.out_var.set(d)
 
     def _open_out(self) -> None:
-        d = self.out_var.get().strip()
+        d = self.out_var.get().strip().strip('"')
         if d:
-            Path(d).mkdir(parents=True, exist_ok=True)
+            try:
+                Path(d).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                messagebox.showerror("Cài đặt", f"Không mở được thư mục:\n{d}\n\nỔ đĩa đã rút hoặc đường dẫn sai.",
+                                     parent=self)
+                return
             open_path(d)
 
     def _save(self, close: bool = True, silent: bool = False) -> None:
@@ -667,8 +678,15 @@ class SettingsWindow(ctk.CTkToplevel):
         st.translate_model = self.tr_model.get().strip() or DEFAULT_MODEL
         st.gemini_api_keys = "\n".join(st.split_keys(self._key_text()))
         st.glossary = self.glossary.get("1.0", "end").strip()
-        out = self.out_var.get().strip()
+        out = self.out_var.get().strip().strip('"')
         if out and out != self.app_state.output_dir:
+            try:                                       # ổ đã rút / gõ sai / không có quyền → báo ngay, không lưu
+                Path(out).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                messagebox.showerror("Cài đặt", f"Không tạo được thư mục xuất:\n{out}\n\nỔ đĩa đã rút, đường dẫn sai "
+                                                "hoặc không có quyền ghi — chọn thư mục khác.", parent=self)
+                self.show_page("export")
+                return
             self.app_state.output_dir = out
             self.app_state.mark_dirty()                # thư mục xuất nằm trong cấu hình làm việc → tự lưu
         if not self.app_state.save_settings():

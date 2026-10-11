@@ -13,6 +13,23 @@ from app.config import theme as T
 from app.ui.widgets.ui import Popover, Select, Tooltip, button
 
 
+def auto_wrap(label: ctk.CTkLabel, pad: int = 4, min_width: int = 80) -> ctk.CTkLabel:
+    """Chữ tự xuống dòng theo bề rộng THẬT của nhãn (bảng tính năng hẹp tới 360 px trên laptop): wraplength cố định
+    lớn hơn chỗ trống thì chữ bị cắt mép phải."""
+    def on_configure(event) -> None:
+        try:
+            k = float(ctk.ScalingTracker.get_widget_scaling(label)) or 1.0
+        except Exception:                              # noqa: BLE001
+            k = 1.0
+        w = max(min_width, int(event.width / k) - pad)
+        if abs(w - getattr(label, "_wrap_w", 0)) > 3:
+            label._wrap_w = w
+            label.configure(wraplength=w)
+
+    tk.Misc.bind(label, "<Configure>", on_configure, add="+")     # bind gốc của Tk: CTk 5.2 / 6.0 đều nhận
+    return label
+
+
 def info_icon(master, text: str) -> ctk.CTkLabel:
     """Dấu «ⓘ» nhỏ cạnh nhãn: rê chuột vào xem giải thích dài — nhãn giữ ngắn gọn."""
     lbl = ctk.CTkLabel(master, text="ⓘ", font=T.font(13), text_color=T.TEXT_MUTED, width=16, cursor="hand2")
@@ -38,6 +55,7 @@ class Section(ctk.CTkFrame):
     def __init__(self, master, title: str, *, subtitle: str = "", info: str = "", collapsed: bool | None = None,
                  on_open: Callable[[], None] | None = None) -> None:
         super().__init__(master, fg_color=T.BG_CARD, corner_radius=T.RADIUS_CARD, border_width=0)
+        self.title_text = title
         self.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
@@ -366,6 +384,7 @@ class StatusLabel(ctk.CTkLabel):
     def __init__(self, master, text: str = "") -> None:
         super().__init__(master, text=text, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w",
                          justify="left", wraplength=360)
+        auto_wrap(self)
 
     def info(self, text: str) -> None:
         self.configure(text=text, text_color=T.TEXT_DIM)
@@ -381,8 +400,8 @@ class StatusLabel(ctk.CTkLabel):
 
 
 def hint(master, text: str) -> ctk.CTkLabel:
-    return ctk.CTkLabel(master, text=text, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", justify="left",
-                        wraplength=370)
+    return auto_wrap(ctk.CTkLabel(master, text=text, font=T.font(11), text_color=T.TEXT_MUTED, anchor="w",
+                                  justify="left", wraplength=370))
 
 
 def pack_rows(parent, rows: list, pady: int = 3) -> None:

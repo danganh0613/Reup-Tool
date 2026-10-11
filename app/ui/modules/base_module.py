@@ -64,6 +64,22 @@ class BaseModule(ctk.CTkScrollableFrame):
         except Exception:
             pass
 
+    def scroll_to_section(self, title: str) -> None:
+        """Cuộn tới khối ``title`` (mở ra nếu đang thu gọn) — «Sửa ›» ở tab Duyệt trỏ đúng chỗ."""
+        from app.ui.widgets.common import Section
+
+        sec = next((w for w in self.winfo_children() if isinstance(w, Section) and w.title_text == title), None)
+        if sec is None:
+            return
+        if sec.collapsible and not sec.is_open:
+            sec.set_open(True)
+        try:
+            self.update_idletasks()
+            total = max(1, self.winfo_height())
+            self._parent_canvas.yview_moveto(max(0.0, min(1.0, (sec.winfo_y() - 4) / total)))
+        except Exception:
+            pass
+
     # ── Tiện ích ──────────────────────────────────────────────────────────
     def set_value(self, cfg: Any, field: str, value: Any, *, preview: bool = True) -> None:
         if self._loading:

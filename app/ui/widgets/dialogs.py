@@ -125,7 +125,8 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl + Z", "Hoàn tác (vùng che / khung phụ đề / xóa)"),
         ("Ctrl + Shift + Z / Ctrl + Y", "Làm lại"),
         ("Ctrl + S", "Lưu cấu hình ngay (app vẫn tự lưu)"),
-        ("Ctrl + R", "Nút chính trên cùng: Render MP4 · bật Duyệt thì Chuẩn bị / Xuất"),
+        ("Ctrl + R", "Nút chính trên cùng: Xuất video · bật Duyệt thì Chuẩn bị / Xuất"),
+        ("Ctrl + O", "Nạp video (ở tab nào cũng được)"),
         ("Esc ×2", "Dừng tất cả (bấm 2 lần trong 3 giây — tránh lỡ tay)"),
     ]),
     ("Duyệt trước khi xuất", [
@@ -133,7 +134,7 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl + ↑ / ↓", "Video trước / sau"),
     ]),
     ("Chuyển module nhanh", [
-        ("F1 – F4", "Video · STT · Lời thoại · TTS"),
+        ("F1 – F4", "Video · Nhận diện · Lời thoại · Lồng tiếng"),
         ("F5 – F9", "Che mờ · Nhạc · Logo · Cắt · Hiệu ứng"),
         ("F10", "Dựng Truyện AI"),
     ]),

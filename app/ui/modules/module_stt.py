@@ -1,14 +1,15 @@
-"""Module STT: lấy lời thoại thành phụ đề — AI nghe giọng nói (Qwen3-ASR, chạy trên máy) hoặc đọc chữ in sẵn trên
-video (OCR); nhận diện cả file media bất kỳ."""
+"""Module Nhận diện lời thoại: lấy lời thoại thành phụ đề — AI nghe giọng nói (Qwen3-ASR, chạy trên máy) hoặc đọc chữ
+in sẵn trên video (OCR); nhận diện cả file media bất kỳ. «Ngôn ngữ video» ở đây dùng chung cho bước dịch."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from app.config import theme as T
 from app.core.languages import language_label
-from app.core.state import STT_ENGINES, STT_LABELS, STT_LANGUAGES, SRT_SOURCES
+from app.core.state import SOURCE_BY_CODE, STT_ENGINES, STT_LABELS, STT_LANGUAGES, SRT_SOURCES
 from app.services.qwen_asr import INSTALL_GB
 from app.services.srt_utils import load_srt, stats
 from app.ui.modules.base_module import BaseModule
@@ -23,23 +24,22 @@ ENGINE_INFO = ("Giọng nói trong video: AI Qwen3-ASR nghe lời thoại, chạ
 
 class STTModule(BaseModule):
     key = "stt"
-    title = "STT"
+    title = "Nhận diện lời thoại"
     icon = "🎙"
     section = "subtitle"
 
     def build(self) -> None:
-        cfg = self.state.subtitle
-        s = self.setter
         hint(self, "Tạo phụ đề từ lời thoại của video đang chọn.").pack(fill="x", pady=(0, 4))
 
         sec = Section(self, "Nhận diện lời thoại")
         sec.pack(fill="x", pady=4)
         self.engine = OptionRow(sec.body, "Lấy lời từ", STT_ENGINES, labels=STT_LABELS, on_change=self._engine_changed,
                                 info=ENGINE_INFO)
-        self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False),
+        self.lang = OptionRow(sec.body, "Ngôn ngữ video", STT_LANGUAGES, on_change=self._lang_changed,
                               labels={c: language_label(c) for c in STT_LANGUAGES},
-                              info="Ngôn ngữ người nói trong video. Lẫn hai thứ tiếng (vd Trung + Anh) thì để «Tự nhận "
-                                   "diện»; chỉ chọn hẳn khi cả video một thứ tiếng mà máy nhận sai.")
+                              info="Ngôn ngữ người nói trong video — dùng cho cả nhận diện lẫn bước dịch. Lẫn hai thứ "
+                                   "tiếng (vd Trung + Anh) thì để «Tự nhận diện»; chỉ chọn hẳn khi cả video một thứ "
+                                   "tiếng mà máy nhận sai.")
         self.auto = SwitchRow(sec.body, "Tự nhận diện khi chuẩn bị video", on_change=self._auto_changed,
                               info="Video chưa có phụ đề thì bước «Chuẩn bị» tự nhận diện. Tắt khi bạn luôn dùng file SRT "
                                    "có sẵn.")
@@ -53,8 +53,7 @@ class STTModule(BaseModule):
         sec.pack(fill="x", pady=4)
         ButtonRow(sec.body, [("Tạo phụ đề cho video đang chọn", self._run_active, T.primary_button())]).pack(fill="x", pady=2)
         ButtonRow(sec.body, [("🎞 Nhận diện từ file khác (audio / video)…", self._run_file, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Xem / sửa lời thoại", self._open_srt, None)]).pack(fill="x", pady=2)
-        self.status = StatusLabel(sec.body, "Chưa có phụ đề — tạo xong rồi bấm «Xem / sửa lời thoại».")
+        self.status = StatusLabel(sec.body, "Chưa có phụ đề — tạo xong xem / sửa ở tab «Lời thoại».")
         self.status.pack(fill="x", pady=(4, 0))
 
     def refresh(self) -> None:
@@ -79,17 +78,28 @@ class STTModule(BaseModule):
             except Exception:
                 self.status.ok(f"Phụ đề: {Path(it.srt_path).name}")
         else:
-            self.status.info("Chưa có phụ đề — tạo xong rồi bấm «Xem / sửa lời thoại».")
+            self.status.info("Chưa có phụ đề — tạo xong xem / sửa ở tab «Lời thoại».")
 
     def _layout_engine(self) -> None:
         if self.state.subtitle.stt_engine == "ocr":
-            self.engine_status.info("Đọc chữ in sẵn trên hình — chạy trên máy, không cần mạng.")
+            from app.services.ocr_hardsub import available
+
+            if available():
+                self.engine_status.info("Đọc chữ in sẵn trên hình — chạy trên máy, không cần mạng.")
+            else:
+                self.engine_status.warn("Máy này chưa có bộ đọc chữ (PaddleOCR) — video sẽ được nghe giọng nói "
+                                        "(Qwen3-ASR) thay thế.")
             self.qwen_btn.pack_forget()
             return
         from app.services.qwen_asr import is_installed
 
         if is_installed():
             self.engine_status.ok("✓ Bộ nghe lời thoại (Qwen3-ASR) đã cài — chạy trên máy, không tốn lượt AI.")
+            self.qwen_btn.pack_forget()
+        elif getattr(sys, "frozen", False):
+            # bản .exe không tự cài được Qwen (cần Python) → không mời bấm nút vô tác dụng
+            self.engine_status.warn("Chưa có bộ nghe lời thoại (Qwen3-ASR). Bản .exe chưa tự cài được — chép thư mục "
+                                    "models\\qwen_asr_env + models\\hf từ máy đã cài, hoặc chọn «Chữ in sẵn trên video».")
             self.qwen_btn.pack_forget()
         else:
             self.engine_status.warn("Chưa cài bộ nghe lời thoại (Qwen3-ASR) — cài một lần rồi dùng mãi, không cần mạng.")
@@ -111,6 +121,11 @@ class STTModule(BaseModule):
 
         if install_qwen(self.window, done):
             self.engine_status.warn("Đang cài bộ nghe lời thoại (vài chục phút)… xem log")
+
+    def _lang_changed(self, code: str) -> None:
+        """Một ô ngôn ngữ cho cả nhận diện lẫn dịch (trước: tab Lời thoại có ô «Ngôn ngữ gốc» riêng, dễ lệch nhau)."""
+        self.set_value(self.state.subtitle, "stt_language", code, preview=False)
+        self.set_value(self.state.subtitle, "translate_source", SOURCE_BY_CODE.get(code, "Tự nhận diện"), preview=False)
 
     def _engine_changed(self, v: str) -> None:
         self.set_value(self.state.subtitle, "stt_engine", v, preview=False)
@@ -134,14 +149,17 @@ class STTModule(BaseModule):
         self.status.warn("Đang nhận diện… (xem log)")
 
         def work(cancel):
-            return pipe.transcribe(item, progress=self.window.set_busy_progress, log=self.window.log_bg, cancel=cancel)
+            return pipe.transcribe(item, progress=self.window.set_busy_progress, log=self.window.log_bg, cancel=cancel,
+                                   force=True)
 
         def done(result, error):
             if error:
                 self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.on_active_changed()
-                self.status.ok(f"Xong {len(result)} câu — tiếp: tab Lời thoại › «Dịch phụ đề» (hoặc bấm Chuẩn bị / Render).")
+                self.status.ok(f"Xong {len(result)} câu — tiếp: tab Lời thoại › «Dịch phụ đề» (hoặc bấm nút chính "
+                               "trên cùng).")
+                self.window.mark_changed(item)
                 self.window.queue_update(item)
                 self.window.preview.schedule_refresh(0)
                 self.state.mark_dirty()
@@ -174,17 +192,11 @@ class STTModule(BaseModule):
             else:
                 self.status.ok(f"Đã tạo {Path(tmp.srt_path).name} ({len(result)} câu) trong output/subs")
                 if messagebox.askyesno("Edit Studio", "Gán phụ đề vừa tạo cho video đang chọn?") and self.state.active:
-                    self.state.active.srt_path = tmp.srt_path
-                    self.state.active.srt_translated_path = None
+                    self.window.pipeline.attach_srt(self.state.active, tmp.srt_path)
+                    self.window.mark_changed(self.state.active)
                     self.state.mark_dirty()
                     self.on_active_changed()
                     self.window.preview.schedule_refresh(0)
 
         self.window.run_task("Nhận diện file", work, done)
 
-    def _open_srt(self) -> None:
-        it = self.state.active
-        if it and it.srt_path and Path(it.srt_path).exists():
-            self.window.show_module("srt")          # xem / sửa ngay ở tab «Lời thoại»
-        else:
-            messagebox.showinfo("Edit Studio", "Chưa có phụ đề cho video này.")

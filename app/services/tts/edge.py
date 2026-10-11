@@ -23,6 +23,25 @@ PREFERRED_LOCALES = ["vi-VN", "en-US", "en-GB", "en-AU", "zh-CN", "ja-JP", "ko-K
                      "es-ES", "th-TH", "id-ID", "ru-RU"]
 
 
+_NET = {"at": 0.0, "down": False}
+
+
+def _offline() -> bool:
+    """Máy chủ Edge không kết nối được (mất mạng / DNS lỗi) — dò nhanh 3 s, nhớ kết quả 20 s cho mọi câu."""
+    import socket
+
+    now = time.time()
+    if now - _NET["at"] < 20:
+        return _NET["down"]
+    try:
+        socket.create_connection(("speech.platform.bing.com", 443), timeout=3).close()
+        down = False
+    except OSError:
+        down = True
+    _NET.update(at=now, down=down)
+    return down
+
+
 class EdgeTTS(TTSEngine):
     name = "edge"
     native_speed_range = (0.5, 2.0)
@@ -101,6 +120,8 @@ class EdgeTTS(TTSEngine):
             except Exception as exc:
                 last = exc
                 logger.warning("Edge TTS lỗi (lần %d): %s", attempt + 1, exc)
+                if _offline():
+                    raise RuntimeError("Mất mạng — giọng Edge cần Internet. Kiểm tra mạng rồi Thử lại.") from exc
                 if "No audio was received" in str(exc) and attempt >= 1:
                     # Edge trả rỗng ngay lập tức khi giọng không đọc được văn bản (khác ngôn ngữ) → thử lại vô ích
                     raise RuntimeError("Edge TTS không đọc được câu này (ngôn ngữ chữ không khớp giọng, hoặc câu chỉ có ký hiệu): "

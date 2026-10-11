@@ -14,19 +14,17 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.config.paths import SUBS_DIR, VOICE_DIR
-from app.core.state import SRT_MODES, TRANSLATE_TARGETS
+from app.core.state import SRT_MODE_LABELS, SRT_MODES, TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
 from app.services.subtitle_presets import CUSTOM as SUB_CUSTOM, STYLES as SUB_STYLES, apply_style, refit, style_of
 from app.services.translate_router import RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
-from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, pack_rows, row_label
+from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows, row_label
 from app.ui.widgets.ui import button, button_width, set_variant
 from app.core.platform import open_path
 from app.ui.progress_panel import friendly_error
 
-MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MODES[2]: "Song ngữ (dịch trên, gốc dưới)"}
-SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
-                "ไทย", "Bahasa Indonesia", "Русский"]
+MODE_LABELS = SRT_MODE_LABELS
 TAB_TEXT, TAB_SUB = "Lời thoại", "Phụ đề"
 NO_KEY = "Chưa có API key Gemini — nhập ở Cài đặt › AI dùng API key."
 
@@ -62,9 +60,11 @@ class SRTModule(BaseModule):
                                          "tiếng thì tự rút gọn câu đọc không kịp. Lỗi giữa chừng thì «Thử lại» dịch "
                                          "tiếp. Key và model: Cài đặt › AI dùng API key.")
         sec.pack(fill="x", pady=4)
-        self.src_lang = OptionRow(sec.body, "Ngôn ngữ gốc", SOURCE_LANGS, on_change=s(cfg, "translate_source", preview=False))
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
-        pack_rows(sec.body, [self.src_lang, self.target])
+        self.target.pack(fill="x", pady=3)
+        # ngôn ngữ gốc: một ô duy nhất «Ngôn ngữ video» ở tab Nhận diện (trước: hai ô ở hai tab, dễ lệch)
+        self.src_hint = hint(sec.body, "")
+        self.src_hint.pack(fill="x")
         # một ô duy nhất cho phong cách dịch (dùng chung với tab Duyệt / bảng dịch từng câu)
         row = ctk.CTkFrame(sec.body, fg_color="transparent")
         row.pack(fill="x", pady=3)
@@ -116,7 +116,7 @@ class SRTModule(BaseModule):
         cfg = self.state.subtitle
         self._loading = True
         try:
-            self.src_lang.set(cfg.translate_source if cfg.translate_source in SOURCE_LANGS else SOURCE_LANGS[0])
+            self.src_hint.configure(text=f"Ngôn ngữ gốc: {cfg.source_hint} (đổi ở tab Nhận diện › «Ngôn ngữ video»)")
             self.target.set(cfg.translate_target)
             self.style.set(cfg.translate_style or "")
             self.tr_enable.set(cfg.translate_enable)
@@ -253,7 +253,7 @@ class SRTModule(BaseModule):
                 self.file_status.ok(f"{name} · {stats(cues)}" if cues else name)
             self.file_section.set_subtitle(name)
         else:
-            self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab STT.")
+            self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab Nhận diện.")
             self.file_section.set_subtitle("chưa có")
         if has_tr:
             self.tr_status.ok(f"Đã dịch: {Path(it.srt_translated_path).name}")
@@ -277,11 +277,12 @@ class SRTModule(BaseModule):
                                        initialdir=str(Path(it.path).parent))
         if not p:
             return
-        it.srt_path, it.srt_translated_path = p, None
+        self.window.pipeline.attach_srt(it, p)      # bản dịch / người nói theo SRT cũ bỏ đi
         self.state.mark_dirty()
         self._after_change(it)
 
     def _after_change(self, it) -> None:
+        self.window.mark_changed(it)                # video đã xuất mà đổi lời thoại → «Cần xuất lại»
         if it is self.state.active and not self.editor.dirty():
             self.editor.load(it)                    # file SRT / bản dịch đổi → nạp lại danh sách câu
         self.on_active_changed()
@@ -329,7 +330,12 @@ class SRTModule(BaseModule):
                                                    "(trong output/subs, output/voice)?"):
             return
         removed = 0
-        for p in (it.srt_path, it.srt_translated_path, it.voice_path):
+        files = [it.srt_path, it.srt_translated_path]
+        if it.voice_path:                           # track giọng + file đi kèm (.json .srt .cues.csv .words.json)
+            files += [str(Path(it.voice_path).with_suffix(ext)) for ext in (".wav", ".json", ".srt", ".cues.csv",
+                                                                             ".words.json")]
+        files.append(str(self.window.pipeline.noread_path(it)))
+        for p in files:
             if p and Path(p).exists() and (Path(p).parent in (SUBS_DIR, VOICE_DIR)):
                 try:
                     Path(p).unlink()
@@ -337,6 +343,7 @@ class SRTModule(BaseModule):
                 except OSError:
                     pass
         it.srt_path = it.srt_translated_path = it.voice_path = None
+        it.voice_locked = False
         self.state.mark_dirty()
         self._after_change(it)
         self.window.log(f"Đã xoá {removed} file cache của {it.name}.")
@@ -347,8 +354,19 @@ class SRTModule(BaseModule):
         if it is None:
             return
         if not it.srt_path or not Path(it.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
+            messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (tab Nhận diện) hoặc chọn file SRT trước.")
             return
+        old = it.srt_translated_path if it.srt_translated_path and Path(it.srt_translated_path).exists() else None
+        if old:
+            if not messagebox.askyesno("Dịch lại", "Video này đã có bản dịch (có thể đã sửa tay). Dịch lại sẽ thay bản "
+                                                   "hiện tại — bản cũ giữ lại thành file .bak cạnh bản dịch.\n\nDịch lại?"):
+                return
+            if self.editor.item is it and self.editor.dirty():
+                self.editor.save(regen=False)       # chữ đang sửa dở cũng vào bản .bak + bộ nhớ dịch
+            try:
+                shutil.copyfile(old, Path(old).with_suffix(".srt.bak"))
+            except OSError:
+                pass
         pipe = self.window.pipeline_for(it)
         self.tr_status.warn("Đang dịch… (xem log)")
 
@@ -377,7 +395,7 @@ class SRTModule(BaseModule):
         if it is None:
             return
         if not it.srt_path or not Path(it.srt_path).exists():
-            messagebox.showinfo("Dịch thủ công", "Chưa có SRT để dịch.\nHãy chọn file SRT, hoặc tạo phụ đề bằng tab STT trước.")
+            messagebox.showinfo("Dịch thủ công", "Chưa có SRT để dịch.\nHãy chọn file SRT, hoặc tạo phụ đề ở tab Nhận diện trước.")
             return
         from app.ui.widgets.srt_editor import ManualTranslateDialog
 

@@ -1,7 +1,8 @@
 """Kiểm tra máy: cái gì có, cái gì thiếu và bấm đâu để bổ sung — dùng cho nút «Kiểm tra máy» (Cài đặt) và ``--selftest``.
 
 Mỗi mục là ``Check(name, status, detail, fix)``: status ``ok`` · ``warn`` (thiếu nhưng có cách khác) · ``bad`` (không chạy được).
-Không cài/tải gì ở đây — chỉ báo và chỉ đường (nút trong module tương ứng).
+``page``: trang Cài đặt có nút cài / nhập (cửa sổ «Kiểm tra máy» hiện nút mở thẳng trang đó) · ``optional``: thiếu vẫn
+làm được việc chính (không tính vào số «cần cài»). Không cài/tải gì ở đây — chỉ báo và chỉ đường.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ class Check:
     status: str            # ok | warn | bad
     detail: str
     fix: str = ""
+    page: str = ""         # trang Cài đặt để bổ sung: local · cloud · export
+    optional: bool = False
 
     @property
     def icon(self) -> str:
@@ -89,11 +92,23 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
 
         if qwen_installed():
             out.append(Check("Nghe lời thoại (Qwen3-ASR)", "ok", "Đã cài — chạy trên máy" + (f" ({gpu})" if nvidia else " (CPU, chậm)")))
+        elif _frozen():
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", "Chưa có → video tiếng nước ngoài chưa nhận diện được "
+                             "(trừ video có chữ in sẵn)",
+                             "Bản .exe chưa tự cài được: chép models\\qwen_asr_env + models\\hf từ máy đã cài.", "local"))
         else:
-            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", "Chưa cài → chỉ nhận diện được chữ in sẵn trên video",
-                             f"Cài đặt › AI trên máy › «Cài» (một lần, ~{INSTALL_GB} GB)."))
+            out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", "Chưa cài → video tiếng nước ngoài chưa nhận diện được "
+                             "(trừ video có chữ in sẵn)", f"Cài một lần, ~{INSTALL_GB} GB.", "local"))
     except Exception as exc:
         out.append(Check("Nghe lời thoại (Qwen3-ASR)", "warn", f"Không kiểm tra được: {exc}"))
+    try:
+        from app.services.ocr_hardsub import available as ocr_ok
+
+        out.append(Check("Đọc chữ in sẵn (OCR)", "ok" if ocr_ok() else "warn",
+                         "Sẵn sàng (PaddleOCR)" if ocr_ok() else "Thiếu PaddleOCR → video «Chữ in sẵn» sẽ được nghe giọng "
+                         "nói thay thế", "" if ocr_ok() else "Không bắt buộc.", optional=True))
+    except Exception:
+        pass
     try:
         import faster_whisper  # noqa: F401
 
@@ -104,13 +119,13 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
                 out.append(Check("Whisper GPU", "ok", f"cuBLAS/cuDNN sẵn sàng — kiểm lỗi giọng đọc chạy trên {gpu}"))
             else:
                 out.append(Check("Whisper GPU", "warn", f"Có {gpu} nhưng thiếu CUDA runtime → bỏ bước Whisper nghe lại giọng đọc",
-                                 "Cài đặt › AI trên máy › «Cài CUDA»"))
+                                 "«Cài CUDA» (một lần).", "local", optional=True))
         models = sorted(re.sub(r"^models--.*?--faster-whisper-", "", p.name) for p in MODELS_DIR.glob("models--*faster-whisper-*"))
         if models:
             out.append(Check("Model Whisper", "ok", "Đã có trên máy: " + ", ".join(models)))
         else:
             out.append(Check("Model Whisper", "warn", "Chưa có → không nghe lại được câu lồng tiếng, không đọc liền câu",
-                             "Cài đặt › AI trên máy › «Tải» ở mục kiểm lỗi giọng đọc."))
+                             "«Tải» ở mục kiểm lỗi giọng đọc.", "local", optional=True))
     except Exception as exc:
         out.append(Check("Whisper", "bad", f"Không nạp được faster-whisper: {exc}", "Cài lại bộ cài."))
 
@@ -130,10 +145,11 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
             has_model = hf.exists() and any(hf.rglob("*.onnx"))
             out.append(Check("VieNeu (giọng Việt offline)", "ok" if has_model else "warn",
                              "Sẵn sàng, model đã tải" if has_model else "Có sẵn — lần dùng đầu sẽ tự tải model (~300 MB, cần Internet)",
-                             "" if has_model else "Mục TTS → chọn VieNeu → «Nghe thử giọng» để tải."))
+                             "" if has_model else "Tab Lồng tiếng → chọn VieNeu → «Nghe thử giọng» để tải."))
         else:
             out.append(Check("VieNeu (giọng Việt offline)", "warn", "Chưa có — dùng Edge TTS thay thế",
-                             "Bản đóng gói: cài lại bản mới nhất." if _frozen() else "Mục TTS → nút «Cài VieNeu»."))
+                             "Bản đóng gói: cài lại bản mới nhất." if _frozen() else "«Cài» (một lần).",
+                             "" if _frozen() else "local", optional=True))
     except Exception as exc:
         out.append(Check("VieNeu", "warn", f"Không kiểm tra được: {exc}"))
 
@@ -142,7 +158,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     if settings is not None:
         g = len(settings.gemini_keys())
         out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / dựng truyện được",
-                         "" if g else "Cài đặt › AI dùng API key (miễn phí tại aistudio.google.com)."))
+                         "" if g else "Miễn phí tại aistudio.google.com.", "cloud"))
 
     # 7. Font icon
     step("Font")
@@ -159,7 +175,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
         requests.head("https://pypi.org", timeout=4)
         out.append(Check("Internet", "ok", "Kết nối được (cần cho dịch AI, giọng cloud, tải model lần đầu)"))
     except Exception:
-        out.append(Check("Internet", "warn", "Không kết nối được lúc này", "Không có mạng vẫn render/STT (đã có model)/VieNeu được."))
+        out.append(Check("Internet", "warn", "Không kết nối được lúc này", "Không có mạng vẫn xuất video, nhận diện (đã có model), đọc VieNeu được."))
 
     # 9. Khử giọng nói gốc (AI, ONNX)
     try:
@@ -194,11 +210,14 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
 
 def summary(checks: list[Check]) -> str:
     n_bad = sum(c.status == "bad" for c in checks)
-    n_warn = sum(c.status == "warn" for c in checks)
+    need = sum(c.status == "warn" and not c.optional for c in checks)
+    extra = sum(c.status == "warn" and c.optional for c in checks)
     if n_bad:
-        return f"✖ {n_bad} mục không chạy được, {n_warn} mục thiếu tuỳ chọn"
-    if n_warn:
-        return f"⚠ Chạy được · {n_warn} mục có thể bổ sung (xem gợi ý)"
+        return f"✖ {n_bad} mục không chạy được" + (f", {need} mục cần cài" if need else "")
+    if need:
+        return f"⚠ Còn {need} mục cần cho việc chính" + (f" · {extra} mục tuỳ chọn" if extra else "")
+    if extra:
+        return f"✔ Đủ cho việc chính · {extra} mục tuỳ chọn có thể bổ sung"
     return "✔ Máy đã đủ mọi thứ"
 
 

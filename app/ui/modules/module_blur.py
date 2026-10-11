@@ -8,8 +8,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.core.state import BLUR_STYLES
-from app.services import render_pipeline as rp
-from app.services.ffmpeg import MediaInfo, parse_hhmmss
+from app.services.ffmpeg import parse_hhmmss
 from app.ui.modules.base_module import BaseModule
 from app.ui.preview_panel import new_region
 from app.ui.widgets.ui import Select, button
@@ -43,15 +42,15 @@ class BlurModule(BaseModule):
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", pady=2)
         row.grid_columnconfigure(1, weight=1)
-        ctk.CTkButton(row, text="− Xóa", width=64, height=32, command=self._remove_region, **T.danger_button()).grid(row=0, column=0)
+        ctk.CTkButton(row, text="− Xoá", width=64, height=32, command=self._remove_region, **T.danger_button()).grid(row=0, column=0)
         self.region_var = tk.StringVar(value="")
         self.region_menu = Select(row, ["(chưa có vùng)"], variable=self.region_var, command=self._select_region, height=34)
         self.region_menu.grid(row=0, column=1, sticky="ew", padx=6)
         button(row, "Thêm", icon_name="add", variant="primary", size="sm", command=self._add_region).grid(row=0, column=2)
-        ButtonRow(self, [("Vùng đáy", lambda: self._preset("bottom"), None), ("Chạm 2 mép", lambda: self._preset("full"), None)]).pack(fill="x", pady=2)
-        ButtonRow(self, [("Giữa khung", lambda: self._preset("center"), None), ("Làm mới", lambda: self._preset("reset"), None)]).pack(fill="x", pady=2)
+        ButtonRow(self, [("Vùng đáy", lambda: self._preset("bottom"), None), ("Kín 2 bên", lambda: self._preset("full"), None)]).pack(fill="x", pady=2)
+        ButtonRow(self, [("Giữa khung", lambda: self._preset("center"), None), ("Đặt lại vùng", lambda: self._preset("reset"), None)]).pack(fill="x", pady=2)
 
-        sec = Section(self, "Khung che (pixels)")
+        sec = self.px_sec = Section(self, "Khung che (pixel)")
         sec.pack(fill="x", pady=4)
         grid = ctk.CTkFrame(sec.body, fg_color="transparent")
         grid.pack(fill="x")
@@ -77,7 +76,7 @@ class BlurModule(BaseModule):
                                   on_change=lambda v: self._set("strength", float(v), preview=False), on_release=rel)
         self.feather = SliderRow(sec.body, "Mềm mép", from_=0, to=100, step=1, suffix="%",
                                  on_change=lambda v: self._set("feather", float(v), preview=False), on_release=rel)
-        self.opacity = SliderRow(sec.body, "Độ đục", from_=10, to=100, step=5, suffix="%",
+        self.opacity = SliderRow(sec.body, "Độ đậm", from_=10, to=100, step=5, suffix="%",
                                  on_change=lambda v: self._set("opacity", float(v), preview=False), on_release=rel)
         self.rounded = SliderRow(sec.body, "Bo góc", from_=0, to=100, step=5, suffix="%",
                                  on_change=lambda v: self._set("rounded", float(v), preview=False), on_release=rel)
@@ -102,12 +101,12 @@ class BlurModule(BaseModule):
         return rs[i] if 0 <= i < len(rs) else None
 
     def _frame_size(self) -> tuple[int, int]:
+        """Kích thước video GỐC: vùng che lưu theo khung nguồn (0..1) và che đúng ở đó — trước đây nhân với khung RA
+        (9:16) nên số pixel không khớp chỗ bị che."""
         it = self.state.active
         if it is None or not it.width:
             return 1920, 1080
-        geo = rp.output_geometry(MediaInfo(duration=it.duration, width=it.width, height=it.height, fps=it.fps,
-                                           has_audio=it.has_audio), self.state.video)
-        return geo.width, geo.height
+        return it.width, it.height
 
     def refresh(self) -> None:
         cfg = self.state.blur
@@ -118,6 +117,7 @@ class BlurModule(BaseModule):
             self._refresh_menu()
             r = self._active()
             W, H = self._frame_size()
+            self.px_sec.set_subtitle(f"theo video gốc {W}×{H}")
             if r:
                 self.style.set(r.get("style", BLUR_STYLES[0]))
                 self.strength.set(float(r.get("strength", 88)))
@@ -198,7 +198,7 @@ class BlurModule(BaseModule):
 
     def _refresh_menu(self) -> None:
         rs = self._regions()
-        names = [f"Blur {i + 1}" for i in range(len(rs))]
+        names = [f"Vùng {i + 1}" for i in range(len(rs))]
         self.region_menu.configure(values=names or ["(chưa có vùng)"])
         i = self.state.blur.active_index
         self.region_var.set(names[i] if 0 <= i < len(names) else (names[0] if names else "(chưa có vùng)"))

@@ -74,6 +74,15 @@ class StoryProject:
     updated_at: float = field(default_factory=time.time)
     path: str = ""             # thư mục dự án (không lưu vào JSON)
 
+    @classmethod
+    def create(cls, name: str) -> StoryProject:
+        """Dự án mới ở thư mục chưa dùng (trùng tên dự án có sẵn → thêm -2, -3…; không ghi đè project.json cũ)."""
+        base = slugify(name)
+        d, i = PROJECTS_DIR / base, 2
+        while d.exists() and any(d.iterdir()):
+            d, i = PROJECTS_DIR / f"{base}-{i}", i + 1
+        return cls(name=name, path=str(d))
+
     # ── Thư mục ──────────────────────────────────────────────────────────
     @property
     def dir(self) -> Path:

@@ -67,28 +67,45 @@ def is_vietnamese(text: str) -> bool:
     return bool(_VI_CHARS.search(text or ""))
 
 
+#: cách đọc sẵn cho tên hãng / nền tảng hay gặp trong video review (từ điển của bạn ghi đè các mục này)
+BUILTIN_PRON = {
+    "Xiaomi": "xao mi", "Redmi": "rét mi", "Shopee": "sốp pi", "Lazada": "la da đa", "Tiki": "ti ki",
+    "Taobao": "tao bao", "Tmall": "ti mon", "Pinduoduo": "pin đô đô", "Alibaba": "a li ba ba", "Douyin": "đẩu âm",
+    "TikTok": "tíc tóc", "YouTube": "diu túp", "Facebook": "phây búc", "Google": "gu gồ", "iPhone": "ai phôn",
+    "iPad": "ai pát", "AirPods": "e pót", "Apple": "áp pồ", "Samsung": "sam sung", "Huawei": "hoa uây",
+    "Oppo": "óp pô", "Vivo": "vi vô", "Honor": "ô nơ", "Realme": "ri ồ mi", "Bluetooth": "blu tút", "WiFi": "oai phai",
+}
+
+
 def load_pronunciations(path: Path | None = None) -> tuple[dict[str, str], re.Pattern | None]:
-    """Từ điển phát âm JSON {"từ": "cách đọc"} (khoá bắt đầu bằng «_» là ghi chú). Đọc lại khi file đổi."""
+    """Từ điển phát âm JSON {"từ": "cách đọc"} (khoá bắt đầu bằng «_» là ghi chú) + cách đọc sẵn ``BUILTIN_PRON``.
+    Đọc lại khi file đổi."""
     global _pron_cache
     p = Path(path or PRON_FILE)
     try:
         mtime = p.stat().st_mtime
     except OSError:
-        return {}, None
+        mtime = 0.0
     with _pron_lock:
         if _pron_cache[0] == mtime:
             return _pron_cache[1], _pron_cache[2]
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except Exception as exc:
-            logger.warning("Từ điển phát âm %s lỗi: %s", p, exc)
-            raw = {}
-        words = {str(k).strip(): str(v).strip() for k, v in (raw.items() if isinstance(raw, dict) else [])
-                 if str(k).strip() and not str(k).startswith("_") and str(v).strip()}
+        raw = {}
+        if mtime:
+            try:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("Từ điển phát âm %s lỗi: %s", p, exc)
+                raw = {}
+        mine = {str(k).strip(): str(v).strip() for k, v in (raw.items() if isinstance(raw, dict) else [])
+                if str(k).strip() and not str(k).startswith("_") and str(v).strip()}
+        words = {k: v for k, v in BUILTIN_PRON.items() if k.lower() not in {m.lower() for m in mine}}
+        words.update(mine)
         pat = None
         if words:
             keys = sorted(words, key=len, reverse=True)           # khớp cụm dài trước («Redmi Buds» trước «Redmi»)
-            pat = re.compile(r"(?<![\w])(" + "|".join(re.escape(k) for k in keys) + r")(?![\w])", re.I)
+            # ranh giới là CHỮ CÁI (không phải \w): «Xiaomi14», «Redmi13C» vẫn khớp phần tên hãng
+            pat = re.compile(r"(?<![A-Za-zÀ-ỹ])(" + "|".join(re.escape(k) for k in keys) + r")(?![A-Za-zÀ-ỹ])",
+                             re.I)
         _pron_cache = (mtime, {k.lower(): v for k, v in words.items()}, pat)
         return _pron_cache[1], _pron_cache[2]
 

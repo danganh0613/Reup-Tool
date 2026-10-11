@@ -67,6 +67,15 @@ class StoryEngine:
     # ── Kịch bản ─────────────────────────────────────────────────────────
     def write_script(self, proj: StoryProject, *, on_progress: ProgressCb | None = None, log: LogCb | None = None,
                      cancel: threading.Event | None = None) -> StoryProject:
+        if proj.scenes:                              # kịch bản cũ (có thể đã sửa tay) → giữ một bản .bak trước khi viết lại
+            try:
+                import shutil
+
+                src = proj.dir / "project.json"
+                if src.exists():
+                    shutil.copyfile(src, src.with_suffix(".json.bak"))
+            except OSError:
+                pass
         story_ai.write_script(self.client(), self.state.story.text_model, proj, on_progress=on_progress, log=log,
                               cancel=cancel)
         # giọng đọc cũ không còn khớp

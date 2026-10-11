@@ -67,6 +67,7 @@ class TemplateBar(ctk.CTkFrame):
             return
         self._compact = compact
         self.select.configure(width=180 if compact else 290)
+        self._check()                                 # chữ nhắc bên cạnh ô Mẫu: bản ngắn khi thanh hẹp
         if compact:
             self.label.pack_forget()
         else:
@@ -92,9 +93,15 @@ class TemplateBar(ctk.CTkFrame):
         self._check_id = None
         act = self.state.active
         if act is not None and act.config is not None:
-            self.dirty.configure(text="✎ video này chỉnh riêng", text_color=T.INFO)
+            text = f"✎ video này: mẫu «{act.template}»" if act.template else "✎ video này chỉnh riêng"
+            self.dirty.configure(text=text if len(text) <= 34 else text[:33] + "…»", text_color=T.INFO)
             return
         t = TP.get_template(self.state.template_name) if self.state.template_name else None
+        if t is None and not self.state.ui.get("edited"):
+            # người mới: mặc định chỉ giữ lời gốc (không dịch, không lồng tiếng) → nhắc chọn mẫu
+            self.dirty.configure(text="← chọn mẫu" if self._compact else "← chọn mẫu để dịch + lồng tiếng",
+                                 text_color=T.INFO)
+            return
         self.dirty.configure(text="• đã chỉnh" if TP.differs(self.state, t) else "", text_color=T.WARNING)
 
     # ── Hành động ────────────────────────────────────────────────────────
@@ -126,7 +133,8 @@ class TemplateBar(ctk.CTkFrame):
             return
         TP.apply_shared(self.state, t)
         _reset_approved(self.window, approved)
-        self.window.log(f"Đã áp mẫu «{t.name}» cho các video chưa chỉnh riêng.")
+        self.window.log(f"Đã áp mẫu «{t.name}» cho các video chưa chỉnh riêng"
+                        + (" (video đang xem có cấu hình riêng — giữ nguyên)." if own else "."), notice=True)
         self.window.preview.schedule_refresh(0)
 
     def save(self) -> None:
@@ -149,8 +157,12 @@ class SaveTemplateDialog(ctk.CTkToplevel):
         act = self.app_state.active
         own = act is not None and act.config is not None
         cur = (act.template if own else self.app_state.template_name) or ""
-        body = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=10)
-        body.pack(fill="both", expand=True, padx=12, pady=12)
+        frame = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=10)
+        frame.pack(fill="both", expand=True, padx=12, pady=12)
+        foot = ctk.CTkFrame(frame, fg_color="transparent")
+        foot.pack(fill="x", side="bottom", padx=14, pady=12)
+        body = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=2, pady=(2, 0))
         ctk.CTkLabel(body, text="Lưu thiết lập đang chỉnh thành mẫu", font=T.font(14, "bold"), anchor="w").pack(
             fill="x", padx=14, pady=(12, 2))
         hint(body, ("Đang chỉnh riêng video «" + act.name + "» — mẫu lấy thiết lập của video này.") if own else
@@ -171,7 +183,7 @@ class SaveTemplateDialog(ctk.CTkToplevel):
                                                                                 padx=(0, 12), pady=3)
             self.parts[k] = var
         hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối (không lưu nhiều đoạn), và không "
-                   "lưu cách lấy lời (Giọng nói / Chữ in sẵn — chọn ở tab STT).").pack(fill="x", padx=14, pady=(4, 0))
+                   "lưu cách lấy lời (Giọng nói / Chữ in sẵn — chọn ở tab Nhận diện).").pack(fill="x", padx=14, pady=(4, 0))
         self._order_voices()
         tts = self.app_state.sections_dict().get("tts", {})
         if "tts" in self.parts and tts.get("enable_tts"):
@@ -188,8 +200,6 @@ class SaveTemplateDialog(ctk.CTkToplevel):
                         font=T.font(12)).pack(anchor="w", padx=14, pady=(10, 0))
         self.status = StatusLabel(body, "")
         self.status.pack(fill="x", padx=14, pady=(8, 0))
-        foot = ctk.CTkFrame(body, fg_color="transparent")
-        foot.pack(fill="x", side="bottom", padx=14, pady=12)
         button(foot, "Lưu mẫu", icon_name="save", variant="primary", command=self._save).pack(side="right")
         ctk.CTkButton(foot, text="Huỷ", width=80, height=36, command=self.destroy, **T.secondary_button()).pack(
             side="right", padx=8)

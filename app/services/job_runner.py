@@ -28,6 +28,10 @@ from app.services.subtitle_style import write_ass
 logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[[float], None]
+
+
+class NoSpeech(RuntimeError):
+    """Video không có lời nói (chỉ nhạc / không có luồng tiếng) — bỏ phụ đề + lồng tiếng, vẫn xuất được."""
 LogCb = Callable[[str], None]
 
 
@@ -42,9 +46,54 @@ def select_sub_cues(scfg, orig: list[Cue], translated: list[Cue] | None) -> list
     return shift(cues, scfg.sub_delay)
 
 
+def _same_source(scfg, tcfg) -> bool:
+    """Chữ trên video cùng nguồn với chữ được đọc → phụ đề đi theo mốc của giọng đọc (song ngữ: dòng chính là bản
+    dịch, nên đọc bản dịch cũng tính)."""
+    return ((tcfg.tts_source == TTS_SOURCES[0] and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2]))
+            or (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
+
+
 _LANG_NAMES = {"zh": "tiếng Trung", "yue": "tiếng Quảng Đông", "en": "tiếng Anh", "ja": "tiếng Nhật", "ko": "tiếng Hàn",
                "vi": "tiếng Việt", "th": "tiếng Thái", "id": "tiếng Indonesia", "fr": "tiếng Pháp", "de": "tiếng Đức",
                "es": "tiếng Tây Ban Nha", "ru": "tiếng Nga", "pt": "tiếng Bồ Đào Nha", "it": "tiếng Ý"}
+
+
+#: bước người dùng thấy (theo thứ tự chạy) ← thông điệp pipeline ghi vào ``item.message``
+STEPS: list[tuple[str, str]] = [
+    ("read", "Đọc video"),
+    ("stt", "Nhận diện lời thoại"),
+    ("translate", "Dịch phụ đề"),
+    ("speakers", "Nhận diện người nói"),
+    ("voice", "Tạo giọng lồng"),
+    ("novocal", "Khử giọng gốc"),
+    ("render", "Xuất video"),
+]
+STEP_ORDER = [k for k, _ in STEPS]
+_STEP_MESSAGES = [("Đọc thông tin", "read"), ("Nhận diện giọng nói", "stt"), ("Dịch phụ đề", "translate"),
+                  ("Nhận diện người nói", "speakers"), ("Tạo giọng đọc", "voice"), ("Khử giọng gốc", "novocal"),
+                  ("Ghép timeline", "render"), ("Render", "render")]
+#: thời gian tương đối của từng bước (đo trên máy RTX 3060 Ti, video 1–3 phút) — chia thanh tiến độ cho sát thực tế
+STEP_WEIGHTS = {"read": 0.2, "stt": 3.0, "translate": 2.0, "speakers": 1.0, "voice": 3.0, "novocal": 3.0, "render": 4.0}
+
+
+def step_key(message: str) -> str | None:
+    m = message or ""
+    for prefix, key in _STEP_MESSAGES:
+        if m.startswith(prefix):
+            return key
+    return None
+
+
+def step_bands(steps: list[str]) -> dict[str, tuple[float, float]]:
+    """Dải tiến độ (gốc, độ dài) của từng bước SẼ chạy, theo trọng số thời gian — chỉ còn bước xuất thì xuất chạy
+    0 → 100 % (trước: luôn bắt đầu ở 65 %, «còn ~» báo sắp xong khi còn cả phút)."""
+    total = sum(STEP_WEIGHTS.get(k, 1.0) for k in steps) or 1.0
+    out, base = {}, 0.0
+    for k in steps:
+        span = STEP_WEIGHTS.get(k, 1.0) / total
+        out[k] = (base, span)
+        base += span
+    return out
 
 
 def _safe_stem(name: str) -> str:
@@ -60,6 +109,9 @@ class Pipeline:
 
     # ── Bước lẻ ───────────────────────────────────────────────────────────
     def probe(self, item: VideoItem) -> None:
+        if not Path(item.path).exists():
+            raise RuntimeError(f"Không tìm thấy file {item.name} — đã bị di chuyển / xoá, hoặc ổ ngoài chưa cắm. "
+                               "Nạp lại video từ chỗ mới.")
         info = self.ffmpeg.probe(item.path)
         item.duration, item.width, item.height, item.fps, item.has_audio = (
             info.duration, info.width, info.height, info.fps, info.has_audio)
@@ -92,8 +144,19 @@ class Pipeline:
             stem += "_" + hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:6]
         return stem
 
+    def _nospeech_known(self, item: VideoItem) -> bool:
+        try:
+            import json as _json
+
+            data = _json.loads(self.nospeech_flag(item).read_text(encoding="utf-8"))
+            return data.get("language") == self.state.subtitle.stt_language
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def transcribe(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
-                   cancel: threading.Event | None = None, source_path: str | None = None) -> list[Cue]:
+                   cancel: threading.Event | None = None, source_path: str | None = None,
+                   force: bool = False) -> list[Cue]:
+        """``force``: nhận diện lại kể cả khi lần trước đã nghe là «không có lời» (nút ở tab Nhận diện)."""
         cfg = self.state.subtitle
         src = source_path or item.path
         res = None
@@ -105,18 +168,20 @@ class Pipeline:
             try:
                 res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
                                      log=log, cancel=cancel)
-            except NoHardsub:
+            except NoHardsub as exc:
                 if not is_installed() or self.silent(src):
                     raise
                 if log:
-                    log(f"{item.name}: không thấy phụ đề in sẵn → nghe giọng nói (Qwen3-ASR).")
+                    log(f"{item.name}: {exc} → nghe giọng nói (Qwen3-ASR).")
         if res is None:
             # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
             from app.services.qwen_asr import transcribe as qwen_transcribe
 
             if self.silent(src):
-                raise RuntimeError("Video không có tiếng — không nghe được lời thoại. Video có phụ đề in sẵn thì chọn "
-                                   "«Chữ in sẵn trên video»; không thì tắt Phụ đề / Lồng tiếng cho video này.")
+                raise NoSpeech("Video không có tiếng — không nghe được lời thoại. Video có phụ đề in sẵn thì chọn "
+                               "«Chữ in sẵn trên video».")
+            if not force and source_path is None and self._nospeech_known(item):
+                raise NoSpeech("Lần trước đã nghe: video không có lời nói.")
 
             res = qwen_transcribe(src, self.ffmpeg, language=cfg.stt_language, settings=self.state.settings,
                                   work_dir=self.job_dir(item), on_progress=progress, log=log, cancel=cancel)
@@ -129,12 +194,36 @@ class Pipeline:
         except Exception:                               # noqa: BLE001
             return False
 
+    def nospeech_flag(self, item: VideoItem) -> Path:
+        return self.job_dir(item) / "nospeech.json"
+
     def save_transcript(self, item: VideoItem, res, log: LogCb | None = None) -> list[Cue]:
-        """Lưu kết quả nhận diện thành phụ đề gốc của ``item`` (bản dịch / người nói cũ bỏ vì không còn khớp)."""
+        """Lưu kết quả nhận diện thành phụ đề gốc của ``item`` (bản dịch / người nói cũ bỏ vì không còn khớp).
+        SRT cũ (có thể đã sửa tay) giữ lại một bản ``.bak``."""
         if not res.cues:
-            raise RuntimeError("Không nghe thấy lời nói nào (video chỉ có nhạc?). Thử chọn đúng ngôn ngữ thay vì "
-                               "«Tự nhận diện», hoặc tắt Phụ đề / Lồng tiếng cho video này.")
+            try:                                       # nhớ «không có lời» (theo ngôn ngữ đang chọn) → lần sau khỏi nghe lại
+                flag = self.nospeech_flag(item)
+                flag.parent.mkdir(parents=True, exist_ok=True)
+                import json as _json
+
+                flag.write_text(_json.dumps({"language": self.state.subtitle.stt_language}), encoding="utf-8")
+            except OSError:
+                pass
+            raise NoSpeech("Không nghe thấy lời nói nào (video chỉ có nhạc?). Chọn đúng ngôn ngữ thay vì «Tự nhận "
+                           "diện» nếu video có lời.")
         out = SUBS_DIR / f"{self.file_stem(item)}.srt"
+        Path(str(out) + ".progress.json").unlink(missing_ok=True)
+        try:                                       # nhớ video nguồn của SRT → nạp lại đúng video mới hỏi dùng lại
+            out.with_suffix(".video.txt").write_text(item.path, encoding="utf-8")
+        except OSError:
+            pass
+        if out.exists():
+            try:
+                import shutil as _shutil
+
+                _shutil.copyfile(out, out.with_suffix(".srt.bak"))
+            except OSError:
+                pass
         save_srt(res.cues, out)
         item.srt_path = str(out)
         item.srt_translated_path = None
@@ -160,7 +249,7 @@ class Pipeline:
             cues = load_srt(item.srt_path)
         from app.services.translate_vl import same_language
 
-        if same_language([c.plain for c in cues], cfg.translate_target, cfg.translate_source):
+        if same_language([c.plain for c in cues], cfg.translate_target, cfg.source_hint):
             out = self.translated_path(item)
             save_srt(cues, out)
             item.srt_translated_path = str(out)
@@ -171,7 +260,7 @@ class Pipeline:
         fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100, "min_gap": t.min_gap}
                if t.enable_tts else None)
         out_cues = translate_cues_vl(cues, settings=self.state.settings, target=cfg.translate_target,
-                                     source_hint=cfg.translate_source, style=cfg.translate_style,
+                                     source_hint=cfg.source_hint, style=cfg.translate_style,
                                      srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel)
         out = self.translated_path(item)
         save_srt(out_cues, out)
@@ -179,6 +268,17 @@ class Pipeline:
         if log:
             log(f"Dịch xong → {out.name}")
         return out_cues
+
+    def attach_srt(self, item: VideoItem, path: str) -> None:
+        """Gắn file phụ đề gốc khác cho video (kéo thả / «Chọn SRT»): bản dịch, người nói, giọng có sẵn làm theo SRT cũ
+        không còn khớp → bỏ (trước: kéo thả chỉ đổi SRT gốc, Chuẩn bị vẫn dùng bản dịch cũ)."""
+        item.srt_path = str(path)
+        item.srt_translated_path = None
+        item.voice_locked = False
+        try:
+            self.speakers_path(item).unlink()
+        except OSError:
+            pass
 
     def translated_path(self, item: VideoItem) -> Path:
         from app.services.translate_router import LANG_CODE
@@ -211,10 +311,13 @@ class Pipeline:
             current = []                              # bản dịch lệch số câu → dịch lại cả video từ gốc
         if previous is None:
             previous = [c.plain for c in current]
+        from app.services.translate_vl import memory_style
+
         style = "" if instruction.strip() == cfg.translate_style.strip() else cfg.translate_style   # khỏi lặp 2 lần
         new = retranslate(orig, previous, idxs, settings=self.state.settings, target=cfg.translate_target,
-                          source_hint=cfg.translate_source, style=style, instruction=instruction,
-                          on_progress=progress, log=log, cancel=cancel, budgets=budgets)
+                          source_hint=cfg.source_hint, style=style, instruction=instruction,
+                          on_progress=progress, log=log, cancel=cancel, budgets=budgets,
+                          memory_key=memory_style(cfg.translate_style, self.state.settings.glossary))
         if save and new:
             base = current or orig
             out = [Cue(c.index, c.start, c.end, wrap_lines(new[i]) if i in new else c.text, dict(c.meta))
@@ -230,6 +333,47 @@ class Pipeline:
     def speakers_path(self, item: VideoItem) -> Path:
         h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
         return SUBS_DIR / f"{_safe_stem(item.stem)[:60]}_{h}.speakers.json"
+
+    # ── Câu «không đọc» (giữ âm gốc: lời bài hát, câu trích…) ─────────────
+    def noread_path(self, item: VideoItem) -> Path:
+        h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
+        return SUBS_DIR / f"{_safe_stem(item.stem)[:60]}_{h}.noread.json"
+
+    def load_noread(self, item: VideoItem) -> list[float]:
+        """Mốc bắt đầu (giây, theo video gốc) của các câu người dùng đánh dấu «không đọc» — khớp theo mốc nên vẫn đúng
+        cho cả lời gốc lẫn bản dịch; nhận diện lại (mốc đổi) thì tự hết hiệu lực."""
+        try:
+            import json as _json
+
+            data = _json.loads(self.noread_path(item).read_text(encoding="utf-8"))
+            return sorted(float(x) for x in data.get("starts") or [])
+        except (OSError, ValueError, TypeError, AttributeError):
+            return []
+
+    def save_noread(self, item: VideoItem, starts) -> None:
+        import json as _json
+
+        path = self.noread_path(item)
+        starts = sorted({round(float(x), 3) for x in starts})
+        if not starts:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"video": item.path, "starts": starts}, ensure_ascii=False), encoding="utf-8")
+
+    @staticmethod
+    def is_noread(cue: Cue, starts: list[float]) -> bool:
+        return any(abs(cue.start - s) <= 0.05 for s in starts)
+
+    def mark_noread(self, item: VideoItem, cues: list[Cue]) -> list[tuple[float, float]]:
+        """Gắn ``meta["noread"]`` cho câu không đọc; trả các khoảng (đầu, cuối) theo mốc nguồn — để giữ âm gốc ở đó."""
+        starts = self.load_noread(item)
+        spans = []
+        for c in cues:
+            if starts and self.is_noread(c, starts):
+                c.meta["noread"] = True
+                spans.append((c.start, c.end))
+        return spans
 
     def speaker_map(self, item: VideoItem):
         from app.services.diarize import SpeakerMap
@@ -263,7 +407,7 @@ class Pipeline:
         from app.services.diarize import diarize
 
         if not item.srt_path or not Path(item.srt_path).exists():
-            raise RuntimeError("Chưa có phụ đề gốc — bấm «Tạo phụ đề cho video đang chọn» ở mục STT hoặc chọn file SRT trước.")
+            raise RuntimeError("Chưa có phụ đề gốc — bấm «Tạo phụ đề cho video đang chọn» ở tab Nhận diện hoặc chọn file SRT trước.")
         sc = self.state.tts.speaker_count
         n = int(sc) if sc.isdigit() else 0
         smap = diarize(item.path, load_srt(item.srt_path), self.ffmpeg, n_speakers=n, on_progress=progress, log=log,
@@ -279,6 +423,10 @@ class Pipeline:
             mtime = int(Path(srt_path).stat().st_mtime)
         except OSError:
             mtime = 0
+        try:                                       # câu «không đọc» đổi → giọng đổi
+            noread = int(self.noread_path(item).stat().st_mtime_ns)
+        except OSError:
+            noread = 0
         multi = ""
         if t.multi_voice:
             try:
@@ -289,8 +437,27 @@ class Pipeline:
             "v2", t.tts_provider, t.edge_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo, t.min_gap,
             srt_path, mtime, extra_key, post_signature(self.state.settings),
             self.state.video.speed)                # track dựng theo mốc video ra → phụ thuộc tốc độ video
-            + ((multi,) if multi else ()))
+            + ((multi,) if multi else ()) + ((f"noread{noread}",) if noread else ()))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+
+    @staticmethod
+    def srt_sha(path: str | None) -> str:
+        """Băm nội dung SRT — chữ ký track chỉ có mốc sửa (làm tròn giây): sửa 2 lần cùng giây vẫn nhận ra."""
+        try:
+            return hashlib.sha1(Path(path or "").read_bytes()).hexdigest()[:12]
+        except OSError:
+            return ""
+
+    @classmethod
+    def track_matches(cls, track: Path, srt_path: str | None) -> bool:
+        """Track (đúng chữ ký) còn khớp nội dung SRT không — track cũ chưa ghi băm thì coi như khớp."""
+        try:
+            import json as _json
+
+            want = _json.loads(track.with_suffix(".json").read_text(encoding="utf-8")).get("srt_sha")
+        except (OSError, ValueError, AttributeError):
+            return True
+        return not want or not srt_path or want == cls.srt_sha(srt_path)
 
     def generate_voice(self, item: VideoItem, cues: list[Cue] | None = None, *, srt_path: str | None = None,
                        progress: ProgressCb | None = None, log: LogCb | None = None,
@@ -303,9 +470,10 @@ class Pipeline:
             cues = load_srt(srt_path)
             self.ensure_speakers(item, log=log, cancel=cancel)
             self.annotate_speakers(item, cues)
+            self.mark_noread(item, cues)
         srt_path = srt_path or item.srt_path or ""
         out = (out_dir or VOICE_DIR) / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt_path, extra_key)}.wav"
-        if out.exists() and not force:
+        if out.exists() and not force and self.track_matches(out, srt_path):
             if log:
                 log(f"Dùng lại track giọng đã có: {out.name}")
             item.voice_path = str(out)
@@ -328,10 +496,14 @@ class Pipeline:
                 "voice": voice_id_for(self.state.tts), "speed": self.state.tts.tts_speed,
                 "duration": res.duration, "cues": res.cue_count, "created": time.time(),
                 "synced_srt": str(synced) if res.synced_cues else "", "timeline_speed": vspeed,
-                "overflow_cues": res.overflow_cues, "failed": res.failed}, ensure_ascii=False, indent=2),
+                "overflow_cues": res.overflow_cues, "failed": res.failed, "fallback": res.fallback,
+                "qc_bad": res.qc_bad, "noread": res.noread, "srt_sha": self.srt_sha(srt_path)},
+                ensure_ascii=False, indent=2),
                 encoding="utf-8")
         except Exception:
             logger.exception("Không ghi được ghi chú track giọng")
+        if out_dir is None:
+            self._prune_tracks(item, keep=out)
         if res.report:                             # báo cáo từng câu: engine, tempo, số lần đọc, lỗi kiểm tra…
             try:
                 import csv
@@ -344,6 +516,35 @@ class Pipeline:
                 logger.exception("Không ghi được báo cáo từng câu")
         item.voice_path = str(out)
         return out
+
+    TRACKS_KEPT = 3            # mỗi video giữ 3 track gần nhất (đổi qua lại giọng / Cắt không phải đọc lại)
+
+    def _prune_tracks(self, item: VideoItem, keep: Path) -> None:
+        """Mỗi lần sửa lời / đổi giọng để lại một track WAV mới (~5 MB / 2 phút video) → xoá bớt track cũ của CHÍNH
+        video này (ghi chú .json có đường dẫn video), giữ vài bản gần nhất + bản đang dùng / đang chọn."""
+        import json as _json
+
+        mine = []
+        for meta in VOICE_DIR.glob(f"{_safe_stem(item.stem)}_*.json"):
+            wav = meta.with_suffix(".wav")
+            if wav == keep or not wav.exists():
+                continue
+            try:
+                if _json.loads(meta.read_text(encoding="utf-8")).get("video") == item.path:
+                    mine.append(wav)
+            except (OSError, ValueError, AttributeError):
+                continue
+        mine.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        protect = {str(Path(p)) for p in (item.voice_path,) if p}
+        for wav in mine[self.TRACKS_KEPT - 1:]:
+            # track vừa tạo (< 30 phút: các đoạn của chế độ «mỗi đoạn một file» cùng lượt) / đang dùng → giữ
+            if str(wav) in protect or time.time() - wav.stat().st_mtime < 1800:
+                continue
+            for ext in (".wav", ".srt", ".json", ".cues.csv", ".words.json"):
+                try:
+                    wav.with_suffix(ext).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     @staticmethod
     def voice_overflow(voice: Path | None, *, untried: bool = False) -> list[tuple[int, float, float]]:
@@ -374,6 +575,35 @@ class Pipeline:
             meta.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except (OSError, ValueError, TypeError):
             logger.exception("Không ghi được ghi chú rút gọn")
+
+    @staticmethod
+    def line_key(text: str) -> str:
+        return hashlib.sha1(" ".join((text or "").split()).encode("utf-8")).hexdigest()[:10]
+
+    @staticmethod
+    def line_locks(tr_path: str | None) -> dict[str, set[str]]:
+        """{"shortened": câu gốc đã nhờ AI rút gọn, "edited": câu người dùng tự sửa bản dịch} — đừng rút gọn lại."""
+        try:
+            import json as _json
+
+            data = _json.loads(Path(str(tr_path) + ".locks.json").read_text(encoding="utf-8"))
+            return {k: set(data.get(k) or []) for k in ("shortened", "edited")}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return {"shortened": set(), "edited": set()}
+
+    @classmethod
+    def add_line_locks(cls, tr_path: str | None, kind: str, texts) -> None:
+        if not tr_path:
+            return
+        import json as _json
+
+        locks = cls.line_locks(tr_path)
+        locks[kind] |= {cls.line_key(t) for t in texts if t}
+        try:
+            Path(str(tr_path) + ".locks.json").write_text(
+                _json.dumps({k: sorted(v) for k, v in locks.items()}), encoding="utf-8")
+        except OSError:
+            logger.warning("Không ghi được danh sách câu đã rút gọn / sửa tay", exc_info=True)
 
     def voice_config(self, item: VideoItem):
         """Cấu hình giọng cho video này: nhiều giọng → giọng đã chọn / của mẫu gán đúng người nói (theo giới tính)."""
@@ -419,20 +649,31 @@ class Pipeline:
         key = repr([(round(a, 3), round(b, 3)) for a, b in trim.segments]) if trim.active else ""
         p = VOICE_DIR / f"{_safe_stem(item.stem)}_{self.voice_signature(item, srt, key)}.wav"
         if p.exists():
-            return p, True, trim.active
+            return p, self.track_matches(p, srt), trim.active
         if item.voice_path and Path(item.voice_path).exists():
             return Path(item.voice_path), False, False
         return None, False, False
 
-    def preview_sub_cues(self, item: VideoItem, voice: Path | None) -> list[Cue]:
-        """Phụ đề sẽ ghi lên video (theo thời gian nguồn) — dùng mốc đã dời theo giọng nếu bản render cũng dùng."""
+    def preview_sub_cues(self, item: VideoItem, voice: Path | None, fresh: bool = True) -> list[Cue]:
+        """Phụ đề sẽ ghi lên video (theo thời gian nguồn) — dùng mốc đã dời theo giọng nếu bản render cũng dùng.
+        ``fresh=False`` (giọng là bản cũ, vd vừa sửa SRT): mốc của giọng cũ nhưng CHỮ lấy từ file hiện tại."""
         scfg, tcfg = self.state.subtitle, self.state.tts
         synced = voice.with_suffix(".srt") if voice else None
-        same_source = tcfg.enable_tts and ((tcfg.tts_source == TTS_SOURCES[0] and scfg.srt_mode == SRT_MODES[1]) or
-                                           (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
+        same_source = tcfg.enable_tts and _same_source(scfg, tcfg)
         if synced is not None and synced.exists() and same_source and not self.state.trim.enable:
             try:
                 cues = load_srt(synced)
+                if not fresh:
+                    cur = load_srt(self._tts_srt_path(item))
+                    if len(cur) != len(cues):
+                        return self.subtitle_cues(item)
+                    for c, n in zip(cues, cur):
+                        c.text = n.text
+                if scfg.srt_mode == SRT_MODES[2]:          # song ngữ: thêm dòng lời gốc của cùng câu
+                    orig = load_srt(item.srt_path) if item.srt_path and Path(item.srt_path).exists() else []
+                    if len(orig) != len(cues):
+                        return self.subtitle_cues(item)
+                    cues = merge_bilingual(cues, orig)
                 if scfg.karaoke:                 # mốc chữ đã căn (không chạy model ở đây — tính ở bước chuẩn bị)
                     cues = word_timing.attach(cues, voice, self.ffmpeg)
                 # track mới dựng theo mốc video ra → nhân lại tốc độ lúc dựng để về mốc nguồn
@@ -450,7 +691,7 @@ class Pipeline:
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình.")
-        self.ensure_hardsub(item, info, log)
+        self.ensure_hardsub(item, info, log, cancel)
         trim = stages_mod.collect(self.state, item, info).trim
         segs = trim.segments if trim.active else [(0.0, info.duration)]
         speed = max(0.25, self.state.video.speed / 100.0)
@@ -484,12 +725,13 @@ class Pipeline:
             pass
         return out, window
 
-    def ensure_hardsub(self, item: VideoItem, info, log: LogCb | None = None) -> None:
+    def ensure_hardsub(self, item: VideoItem, info, log: LogCb | None = None,
+                       cancel: threading.Event | None = None) -> None:
         """«Tự dò chữ cứng» bật → dò vùng phụ đề in sẵn của video (một lần, có cache) trước khi dựng filter."""
         if self.state.blur.auto_detect:
             from app.services.hardsub import ensure_region
 
-            ensure_region(item, self.ffmpeg, info.duration, log=log)
+            ensure_region(item, self.ffmpeg, info.duration, log=log, cancel=cancel)
 
     def output_path(self, item: VideoItem, suffix: str = "", ext: str = ".mp4", create: bool = True) -> Path:
         """Đường dẫn file xuất theo «Tên file xuất» / «Thư mục con» của cấu hình (mã {ten} {hauto} {mau} {ngay} {gio} {stt})."""
@@ -522,38 +764,99 @@ class Pipeline:
             out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / f"{name}{suffix}{ext}"
 
+    def planned_steps(self, item: VideoItem, mode: str) -> list[str]:
+        """Các bước video này sẽ đi qua (tính lúc bắt đầu, theo cấu hình của pipeline). Bước đã có sẵn kết quả
+        (SRT, bản dịch, người nói, giọng khớp cấu hình, bản khử giọng) được bỏ — chỉ còn việc thật sự phải chờ."""
+        st = self.state
+        s, t, v = st.subtitle, st.tts, st.video
+        has = lambda p: bool(p) and Path(p).exists()      # noqa: E731
+        steps = ["read"]
+        need_cues = s.enable_subtitle or t.enable_tts
+        want_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or (t.enable_tts and t.tts_source == TTS_SOURCES[0])
+        no_srt = need_cues and not has(item.srt_path) and s.srt_source == SRT_SOURCES[0]
+        if no_srt:
+            steps.append("stt")
+        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path)
+        if no_tr:
+            steps.append("translate")
+        locked = item.voice_locked and has(item.voice_path)
+        if t.enable_tts and t.multi_voice and not locked:
+            try:
+                done = self.speakers_path(item).exists()
+            except Exception:                           # noqa: BLE001
+                done = False
+            if not done:
+                steps.append("speakers")
+        if t.enable_tts and not locked:
+            try:                                        # phụ đề có sẵn + giọng khớp cấu hình → không đọc lại
+                fresh = not (no_srt or no_tr) and self.current_voice_track(item)[1]
+            except Exception:                           # noqa: BLE001
+                fresh = False
+            if not fresh:
+                steps.append("voice")
+        if v.demucs_enable and v.keep_original_audio and not v.mute and item.has_audio:
+            from app.services.vocal_remove import cached_no_vocals
+
+            if cached_no_vocals(item.path) is None:
+                steps.append("novocal")
+        if mode == "render":
+            steps.append("render")
+        return steps
+
+    def _free_output(self, item: VideoItem, out: Path) -> Path:
+        """File xuất đã là file xuất của video KHÁC (mẫu tên không có {ten} / {stt}, hai video cùng tên) → thêm _2,
+        _3… thay vì ghi đè. Xuất lại chính video này thì ghi đè như cũ."""
+        taken = {str(v.output_path).lower() for v in self.state.videos if v is not item and v.output_path}
+        if str(out).lower() not in taken:
+            return out
+        k = 2
+        while True:
+            cand = out.with_name(f"{out.stem}_{k}{out.suffix}")
+            if str(cand).lower() not in taken and not cand.exists():
+                return cand
+            k += 1
+
     @staticmethod
-    def _stager(item: VideoItem, on_update):
-        """``stage(tên, gốc, độ dài)`` → callback tiến độ ghi vào ``item`` (gộp cập nhật ~7 lần/giây)."""
+    def _stager(item: VideoItem, on_update, bands: dict[str, tuple[float, float]] | None = None):
+        """``stage(tên, gốc, độ dài)`` → callback tiến độ ghi vào ``item`` (gộp cập nhật ~7 lần/giây).
+        ``bands``: dải theo bước thật của lượt chạy (``step_bands``) — thay cho gốc / độ dài cố định; bước không có
+        trong kế hoạch giữ nguyên tiến độ. Thanh không bao giờ đi lùi trong một lượt."""
         def stage(name: str, base: float, span: float) -> ProgressCb:
             last = [0.0]
+            if bands is not None:
+                key = step_key(name)
+                base, span = bands.get(key, (item.progress, 0.0)) if key else (item.progress, 0.0)
 
             def cb(p: float) -> None:
                 now = time.time()
                 if now - last[0] < 0.15 and p < 1.0:
                     return
                 last[0] = now
-                item.progress = base + span * max(0.0, min(1.0, p))
+                val = base + span * max(0.0, min(1.0, p))
+                item.progress = max(item.progress, val) if bands is not None else val
                 item.message = name
                 on_update(item)
             return cb
         return stage
 
     def prepare(self, item: VideoItem, *, on_update: Callable[[VideoItem], None], log: LogCb,
-                cancel: threading.Event) -> None:
-        """Bước «Chuẩn bị» (chưa render): nhận diện giọng, dịch, người nói, tạo giọng lồng → «Chờ duyệt»."""
-        item.status, item.progress, item.message = "Đang chuẩn bị", 0.0, "Đọc thông tin"
+                cancel: threading.Event, bands: dict | None = None) -> None:
+        """Bước «Chuẩn bị» (chưa render): nhận diện giọng, dịch, người nói, tạo giọng lồng → «Chờ duyệt».
+        ``bands``: dải tiến độ JobRunner tính lúc bắt đầu lượt (đã có phần nghe lời thoại chạy trước)."""
+        if bands is None:
+            bands, item.progress = step_bands(self.planned_steps(item, "prepare")), 0.0
+        item.status, item.message = "Đang chuẩn bị", "Đọc thông tin"
         on_update(item)
         self.probe(item)
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
-        self.ensure_hardsub(item, info, log)
+        self.ensure_hardsub(item, info, log, cancel)
         trim = stages_mod.collect(self.state, item, info).trim
         # «Xuất mỗi đoạn thành 1 file»: giọng tạo theo từng đoạn — giống hệt lúc render để dùng lại được
         trims = [rp.TrimSpec(segments=[seg]) for seg in trim.segments] \
             if trim.active and self.state.trim.mode == TRIM_MODES[1] and len(trim.segments) > 1 else [trim]
-        stage = self._stager(item, on_update)
+        stage = self._stager(item, on_update, bands)
         for t in trims:
             self._prepare_assets(item, info, t, vcfg=self.state.video, stage=stage, log=log, cancel=cancel,
                                  on_update=on_update)
@@ -563,15 +866,17 @@ class Pipeline:
 
     # ── Chuỗi đầy đủ cho một video ────────────────────────────────────────
     def process(self, item: VideoItem, *, on_update: Callable[[VideoItem], None],
-                log: LogCb, cancel: threading.Event) -> Path:
+                log: LogCb, cancel: threading.Event, bands: dict | None = None) -> Path:
         st = self.state
-        item.status, item.progress, item.message, item.output_path = "Đang xử lý", 0.0, "Đọc thông tin", None
+        if bands is None:
+            bands, item.progress = step_bands(self.planned_steps(item, "render")), 0.0
+        item.status, item.message, item.output_path = "Đang xử lý", "Đọc thông tin", None
         on_update(item)
         self.probe(item)
         info = self.ffmpeg.probe(item.path)
         if info.width <= 0 or info.height <= 0:
             raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
-        self.ensure_hardsub(item, info, log)
+        self.ensure_hardsub(item, info, log, cancel)
         mods = stages_mod.collect(st, item, info)
         trim = mods.trim
         # "Xuất mỗi đoạn thành 1 file": render lần lượt từng đoạn thành file riêng
@@ -581,12 +886,39 @@ class Pipeline:
                 sub_trim = rp.TrimSpec(segments=[seg])
                 log(f"Đoạn {si + 1}/{len(trim.segments)}: {seg[0]:.1f}s → {seg[1]:.1f}s")
                 outs.append(self._render_one(item, info, sub_trim, on_update=on_update, log=log, cancel=cancel,
-                                             suffix=f"_p{si + 1}", final=False))
+                                             suffix=f"_p{si + 1}", final=False, bands=bands))
             item.output_path = str(outs[-1])
             item.status, item.progress, item.message = "Xong", 1.0, f"{len(outs)} file"
             on_update(item)
             return outs[-1]
-        return self._render_one(item, info, trim, on_update=on_update, log=log, cancel=cancel)
+        return self._render_one(item, info, trim, on_update=on_update, log=log, cancel=cancel, bands=bands)
+
+    def voice_now(self, item: VideoItem, *, progress: ProgressCb | None = None, log: LogCb | None = None,
+                  cancel: threading.Event | None = None) -> Path:
+        """Nút «Tạo giọng» ở tab Lồng tiếng: tạo track theo ĐÚNG đường của Chuẩn bị (Cắt, khớp thời lượng, rút gọn câu
+        tràn) → Chuẩn bị / xuất sau đó dùng lại, không đọc lại. Thiếu phụ đề / bản dịch thì làm luôn như Chuẩn bị.
+        Không đổi trạng thái hàng đợi, không khử giọng gốc."""
+        log = log or (lambda _m: None)
+        self.probe(item)
+        info = self.ffmpeg.probe(item.path)
+        if info.width <= 0 or info.height <= 0:
+            raise RuntimeError("File không có luồng hình (audio thuần) — chỉ xử lý được video.")
+        trim = stages_mod.collect(self.state, item, info).trim
+        trims = [rp.TrimSpec(segments=[seg]) for seg in trim.segments] \
+            if trim.active and self.state.trim.mode == TRIM_MODES[1] and len(trim.segments) > 1 else [trim]
+        shadow = dataclasses.replace(item, progress=0.0)      # tiến độ của nút này, không đụng dòng hàng đợi
+        steps = [k for k in self.planned_steps(item, "prepare") if k != "novocal"]
+        if "voice" not in steps:
+            steps.append("voice")
+        stage = self._stager(shadow, lambda it: progress(it.progress) if progress else None, step_bands(steps))
+        voice: Path | None = None
+        for t in trims:
+            _o, _tr, voice = self._prepare_assets(item, info, t, vcfg=self.state.video, stage=stage, log=log,
+                                                  cancel=cancel, on_update=lambda _it: None, voice_only=True,
+                                                  force_voice=True)
+        if voice is None:
+            raise RuntimeError("Không tạo được giọng — lồng tiếng đang tắt, hoặc video không có lời thoại.")
+        return voice
 
     def needs(self, item: VideoItem) -> set[str]:
         """Trước khi chạy: video này sẽ cần gì mà máy có thể thiếu — «gemini» (phải dịch, chưa có bản dịch) ·
@@ -604,10 +936,13 @@ class Pipeline:
         has_tr = bool(item.srt_translated_path and Path(item.srt_translated_path).exists())
         if want_tr and not has_tr and scfg.translate_enable:
             out.add("gemini")
+        elif want_tr and not has_tr:
+            out.add("translate_off")                 # cần bản dịch nhưng «Tự dịch khi chuẩn bị video» đang tắt
         return out
 
     def _prepare_assets(self, item: VideoItem, info, trim, *, vcfg, stage, log, cancel, on_update,
-                        preview_out: Path | None = None) -> tuple[list[Cue], list[Cue] | None, Path | None]:
+                        preview_out: Path | None = None, voice_only: bool = False,
+                        force_voice: bool = False) -> tuple[list[Cue], list[Cue] | None, Path | None]:
         """Phần «chuẩn bị» của một video: phụ đề (nhận diện / file SRT), bản dịch, người nói, track giọng lồng.
 
         Kết quả lưu ra file (SRT, WAV theo chữ ký cấu hình) → bước render sau dùng lại, không làm lại."""
@@ -626,8 +961,13 @@ class Pipeline:
             if item.srt_path and Path(item.srt_path).exists():
                 cues_orig = load_srt(item.srt_path)
             elif scfg.srt_source == SRT_SOURCES[0]:
-                cues_orig = self.transcribe(item, progress=stage("Nhận diện giọng nói", 0.0, 0.3), log=log,
-                                            cancel=cancel)
+                try:
+                    cues_orig = self.transcribe(item, progress=stage("Nhận diện giọng nói", 0.0, 0.3), log=log,
+                                                cancel=cancel)
+                except NoSpeech as exc:
+                    # video chỉ có nhạc / không có tiếng: không có gì để làm phụ đề, lồng tiếng → vẫn xuất phần hình
+                    log(f"⚠ {item.name}: {exc} Bỏ phụ đề + lồng tiếng, vẫn xuất video.")
+                    sub_on = tts_on = need_cues = want_translated = False
                 on_update(item)
             else:
                 guess = Path(item.path).with_suffix(".srt")
@@ -637,7 +977,7 @@ class Pipeline:
                     log(f"Dùng SRT cạnh video: {guess.name}")
                 else:
                     raise RuntimeError("Chưa chọn file SRT cho video này.")
-            if not cues_orig:
+            if not cues_orig and need_cues:
                 raise RuntimeError(f"File phụ đề {Path(item.srt_path or '').name} không đọc được câu nào — mở bằng "
                                    "Notepad, lưu lại dạng UTF-8 rồi Thử lại.")
             if want_translated:
@@ -652,11 +992,19 @@ class Pipeline:
                     cues_tr = None
 
         voice_path: Path | None = None
-        if tts_on:
+        locked = tts_on and item.voice_locked and bool(item.voice_path) and Path(item.voice_path or "").exists()
+        if locked:
+            # «Dùng giọng có sẵn» ở tab Lồng tiếng: giữ nguyên giọng, không đọc lại (chỉ đổi nhạc / phụ đề / hiệu ứng)
+            voice_path = Path(item.voice_path)
+            log(f"Dùng giọng có sẵn (chọn ở tab Lồng tiếng): {voice_path.name} — không tạo giọng mới.")
+            if trim.active:
+                log("⚠ Đang bật Cắt mà giọng có sẵn dựng theo video chưa cắt — giọng có thể lệch hình.")
+        elif tts_on:
+            item.voice_locked = False                     # file giọng đã chọn không còn → tạo giọng như thường
             use_tr = tcfg.tts_source == TTS_SOURCES[0] and bool(cues_tr)
             if use_tr and tcfg.tts_provider.startswith("VieNeu") and scfg.translate_target != "Tiếng Việt":
                 log(f"⚠ VieNeu chỉ đọc tiếng Việt mà bản dịch là {scfg.translate_target} — chọn Edge TTS + giọng đúng "
-                    "ngôn ngữ ở tab TTS.")
+                    "ngôn ngữ ở tab Lồng tiếng.")
 
             cut_idx: set[int] = set()      # câu bị Cắt / Bỏ đầu cắt mất một phần (chữ vẫn cả câu) → không nhờ AI rút gọn
 
@@ -667,19 +1015,25 @@ class Pipeline:
                 if tcfg.multi_voice:
                     self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.45, 0.05), log=log, cancel=cancel)
                     self.annotate_speakers(item, src_cues)
+                if self.mark_noread(item, src_cues):
+                    log(f"{sum(1 for c in src_cues if c.meta.get('noread'))} câu đánh dấu «không đọc» — giữ âm gốc ở đó.")
                 src_cues = rp.remap_cues_for_trim(src_cues, trim)
                 cut_idx.update(c.meta["src_idx"] for c in src_cues if c.meta.get("cut"))
                 fit = trim.kept_duration if trim.active else info.duration      # thời lượng nguồn (÷ tốc độ khi dựng)
                 return self.generate_voice(item, src_cues, srt_path=src_path or "", extra_key=trim_key,
                                            progress=stage("Tạo giọng đọc", 0.45, 0.2), log=log, cancel=cancel,
                                            fit_duration=fit if not (vcfg.loop_to_voice or preview_out) else None,
-                                           out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None)
+                                           out_dir=PREVIEW_CACHE_DIR / "voice" if preview_out else None,
+                                           force=force_voice)
 
             voice_path = build_voice(cues_tr if use_tr else cues_orig)
             # câu ≤ 3 tiếng («Không bắt», «Trắng tinh») không rút gọn được nữa — nhờ AI chỉ tốn lượt dịch + lượt đọc lại
+            locks = self.line_locks(item.srt_translated_path)
+            held = locks["shortened"] | locks["edited"]           # đã rút gọn / người dùng tự sửa → không đụng
             over = [o for o in self.voice_overflow(voice_path, untried=True) if o[1] > 0.15
                     and cues_tr and 0 <= o[0] < len(cues_tr) and len(cues_tr[o[0]].plain.split()) > 3
-                    and o[0] not in cut_idx]
+                    and o[0] not in cut_idx
+                    and not (o[0] < len(cues_orig) and self.line_key(cues_orig[o[0]].plain) in held)]
             # ngân sách < 6 ký tự = khung quá ngắn so với câu (thường do cắt): rút gọn kiểu gì cũng mất nghĩa → bỏ
             budgets = {i: b for i, d, slot in over
                        if (b := int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9)) >= 6}
@@ -701,12 +1055,15 @@ class Pipeline:
                     log(f"⚠ Không rút gọn được bản dịch ({str(exc)[:120]}) — giữ giọng hiện tại.")
                 if new and item.srt_translated_path:
                     cues_tr = load_srt(item.srt_translated_path)
+                    force_voice = False                       # SRT vừa đổi → chữ ký mới, khỏi ép đọc lại lần hai
                     voice_path = build_voice(cues_tr)
                     left = [o for o in self.voice_overflow(voice_path) if o[1] > 0.15]
                     log(f"Đã rút gọn {len(new)} câu · còn {len(left)} câu tràn khung"
                         + (" (video giữ khung cuối cho đủ giọng nếu cần)" if left else ""))
                 if new is not None:                 # lỗi mạng → lần sau thử lại; đã gọi được → không gọi lại
                     self.mark_shortened(voice_path, budgets)
+                    self.add_line_locks(item.srt_translated_path, "shortened",
+                                        [cues_orig[i].plain for i in budgets if i < len(cues_orig)])
             on_update(item)
             if voice_path is not None and sub_on and scfg.karaoke:
                 # chữ nổi: căn mốc từng chữ theo giọng một lần (lưu cạnh track) → khung xem trước cũng khớp
@@ -718,7 +1075,7 @@ class Pipeline:
                     logger.exception("Không căn được mốc chữ nổi")
                     log(f"⚠ Không căn được mốc chữ nổi ({str(exc)[:120]}) — dùng mốc ước lượng.")
 
-        if self.wants_voice_removal(info):
+        if self.wants_voice_removal(info) and not voice_only:
             self.remove_voice(item, progress=stage("Khử giọng gốc", 0.65, 0.3), log=log, cancel=cancel)
             on_update(item)
 
@@ -737,8 +1094,32 @@ class Pipeline:
         item.message = "Khử giọng gốc (AI)"
         return separate_no_vocals(item.path, self.ffmpeg, log=log, progress=progress, cancel=cancel)
 
+    def _keep_original_at_noread(self, item: VideoItem, novocal: Path, job_dir: Path, log: LogCb) -> Path:
+        """Câu «không đọc» (lời bài hát…): ở đúng các khoảng đó dùng âm gốc còn giọng thay cho bản đã khử giọng."""
+        try:
+            srt = self._tts_srt_path(item)
+        except RuntimeError:
+            return novocal
+        starts = self.load_noread(item)
+        spans = [(c.start, c.end) for c in load_srt(srt) if starts and self.is_noread(c, starts)]
+        if not spans:
+            return novocal
+        inside = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in spans)
+        fmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+        graph = (f"[0:a]{fmt},volume=0:enable='{inside}'[nv];"
+                 f"[1:a:0]{fmt},volume=0:enable='not({inside})'[og];"
+                 "[nv][og]amix=inputs=2:normalize=0:duration=first[a]")
+        out = job_dir / "override_noread.wav"
+        res = self.ffmpeg.run_simple(["-i", str(novocal), "-i", item.path, "-filter_complex", graph, "-map", "[a]",
+                                      str(out)], timeout=900)
+        if res.returncode != 0 or not out.exists():
+            log("⚠ Không giữ được âm gốc ở câu «không đọc» — dùng bản đã khử giọng.")
+            return novocal
+        log(f"Giữ âm gốc ở {len(spans)} câu «không đọc».")
+        return out
+
     def _render_one(self, item: VideoItem, info, trim, *, on_update, log, cancel, suffix: str = "",
-                    final: bool = True, preview_out: Path | None = None) -> Path:
+                    final: bool = True, preview_out: Path | None = None, bands: dict | None = None) -> Path:
         """``final=False``: một đoạn trong chế độ xuất nhiều file — không đánh dấu "Xong" để bộ đếm tiến độ
         của hàng đợi không nhảy trước. ``preview_out``: bản render thử (mã hoá nhanh, giọng/kết quả để trong cache)."""
         st = self.state
@@ -747,7 +1128,9 @@ class Pipeline:
         if preview_out is not None:
             vcfg = dataclasses.replace(vcfg, encode_preset=ENCODE_PRESETS[0], loop_to_voice=False)
         mods = stages_mod.collect(st, item, info, trim_override=trim)
-        stage = self._stager(item, on_update)
+        if bands is None:                              # xem thử: tiến độ riêng theo bước của bản thử
+            bands = step_bands(self.planned_steps(item, "render"))
+        stage = self._stager(item, on_update, bands)
 
         if trim.active:
             log(f"Cắt: giữ {len(trim.segments)} đoạn · {trim.kept_duration:.1f}s")
@@ -768,10 +1151,12 @@ class Pipeline:
             sub_cues = select_sub_cues(scfg, cues_orig, cues_tr)
             sub_cues = rp.scale_cues(rp.remap_cues_for_trim(sub_cues, trim), 1.0 / speed)
             synced_srt = voice_path.with_suffix(".srt") if voice_path else None
-            same_source = tts_on and ((tcfg.tts_source == TTS_SOURCES[0] and scfg.srt_mode == SRT_MODES[1]) or
-                                      (tcfg.tts_source == TTS_SOURCES[1] and scfg.srt_mode == SRT_MODES[0]))
+            same_source = tts_on and _same_source(scfg, tcfg)
             if synced_srt and synced_srt.exists() and same_source:
                 synced = load_srt(synced_srt)
+                if scfg.srt_mode == SRT_MODES[2] and cues_tr and len(cues_orig) == len(synced):
+                    # song ngữ: bản dịch (mốc theo giọng) + dòng lời gốc cùng câu
+                    synced = merge_bilingual(synced, cues_orig)
                 if scfg.karaoke:                                 # chữ nổi: mốc từng chữ theo giọng thật
                     synced = word_timing.attach(synced, voice_path, self.ffmpeg, use_model=True, log=log, cancel=cancel)
                 sub_cues = rp.scale_cues(shift(synced, scfg.sub_delay), tspeed / speed)
@@ -785,7 +1170,7 @@ class Pipeline:
             ass_name = "sub.ass"
 
         ext = ".mp3" if audio_only else ".mp4"
-        out_path = preview_out or self.output_path(item, suffix, ext)
+        out_path = preview_out or self._free_output(item, self.output_path(item, suffix, ext))
         # độ dài giọng theo mốc video ra (track cũ theo mốc nguồn còn atempo theo tốc độ video khi render)
         voice_dur = self.ffmpeg.duration_of(voice_path) * tspeed / speed if voice_path else 0.0
         audio_override: Path | None = None
@@ -796,6 +1181,8 @@ class Pipeline:
                 # không khử được (thiếu model / lỗi) → vẫn đúng ý «giọng gốc rất nhỏ»: hạ âm gốc xuống tối đa 8%
                 vcfg = dataclasses.replace(vcfg, original_volume=min(vcfg.original_volume, 8.0))
                 log("⚠ Không khử được giọng gốc — hạ âm gốc xuống ≤ 8%.")
+            elif tts_on:
+                audio_override = self._keep_original_at_noread(item, audio_override, job_dir, log)
             if audio_override is not None and trim.active:
                 # cắt track thay thế theo đúng các đoạn giữ lại
                 parts = []
@@ -807,6 +1194,8 @@ class Pipeline:
                 res = self.ffmpeg.run_simple(["-i", str(audio_override), "-filter_complex", graph, "-map", "[a]",
                                               str(trimmed)], timeout=600)
                 audio_override = trimmed if res.returncode == 0 and trimmed.exists() else None
+        if st.color.dup_gop and not vcfg.gop_size:
+            vcfg = dataclasses.replace(vcfg, gop_size=47)
         item.message = "Ghép timeline"
         on_update(item)
         plan = rp.plan_render(item, mods.info, vcfg, ffmpeg=self.ffmpeg, job_dir=job_dir, out_path=out_path,
@@ -815,7 +1204,7 @@ class Pipeline:
                               voice_duration=voice_dur, audio_only=audio_only, audio_override=audio_override,
                               audio_orig_filters=mods.audio_orig_filters, log=log, voice_tempo=speed / tspeed,
                               loudness=st.settings.loudness_target)
-        log(f"Render thử → {out_path.name}" if preview_out else f"Render → {out_path.name}")
+        log(f"Xuất thử → {out_path.name}" if preview_out else f"Xuất → {out_path.name}")
         rp.run_plan(plan, self.ffmpeg, on_progress=stage("Render", 0.65, 0.35), cancel=cancel)
         for tmp in (plan.mix_path, plan.master_path):    # WAV tạm lớn, chỉ dùng cho lần xuất này
             if tmp is not None:
@@ -859,6 +1248,7 @@ class JobRunner:
         self.current: VideoItem | None = None
         self._item_cancel = threading.Event()
         self._skipped: set[int] = set()
+        self._bands: dict[int, dict] = {}
 
     @property
     def running(self) -> bool:
@@ -884,6 +1274,13 @@ class JobRunner:
         # mỗi video một bản sao cấu hình (của mẫu / cấu hình riêng) — chụp lúc bấm Render, UI đổi gì sau đó không ảnh hưởng
         base = self.pipeline
         jobs = [(it, base.state.state_for(it)) for it in items]
+        # dải tiến độ theo đúng các bước từng video sẽ chạy (bước nghe lời thoại chung chạy trước cũng theo dải này)
+        self._bands = {}
+        for it, st in jobs:
+            try:
+                self._bands[id(it)] = step_bands(Pipeline(st, base.ffmpeg).planned_steps(it, mode))
+            except Exception:                               # noqa: BLE001 — không tính được thì dải cũ của pipeline
+                logger.debug("Không tính được bước của %s", it.name, exc_info=True)
 
         def _ui_update(it: VideoItem) -> None:
             self.ui_call(lambda: on_update(it))
@@ -917,10 +1314,11 @@ class JobRunner:
                         pipe.audio_only = base.audio_only
                         if it.config is not None or it.template:
                             _ui_log(f"{it.name}: dùng cấu hình riêng" + (f" (mẫu «{it.template}»)" if it.template else ""))
+                        bands = self._bands.get(id(it))
                         if mode == "prepare":
-                            pipe.prepare(it, on_update=_ui_update, log=_ui_log, cancel=ev)
+                            pipe.prepare(it, on_update=_ui_update, log=_ui_log, cancel=ev, bands=bands)
                         else:
-                            pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=ev)
+                            pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=ev, bands=bands)
                         ok += 1
                     except RenderCancelled:
                         skipped = not self.cancel.is_set()
@@ -964,7 +1362,7 @@ class JobRunner:
             return
         running = "Đang chuẩn bị" if mode == "prepare" else "Đang xử lý"
         batch = [qwen_asr.BatchJob(it.path, pipe.job_dir(it), pipe.state.subtitle.stt_language, it.name,
-                                   Pipeline._stager(it, ui_update)("Nhận diện giọng nói", 0.0, 0.3))
+                                   Pipeline._stager(it, ui_update, self._bands.get(id(it)))("Nhận diện giọng nói", 0.0, 0.3))
                  for it, pipe in todo]
 
         def on_current(k: int) -> None:
@@ -993,9 +1391,11 @@ class JobRunner:
                     it.status = "Chờ"
                     ui_update(it)
         for (it, pipe), res in zip(todo, results):
-            if res is not None and res.cues and id(it) not in self._skipped:
+            if res is not None and id(it) not in self._skipped:
                 try:
                     pipe.save_transcript(it, res, ui_log)
+                except NoSpeech:                        # đã ghi dấu «không có lời» → vòng chính bỏ phụ đề, vẫn xuất
+                    pass
                 except Exception:                       # noqa: BLE001 — chưa lưu được → vòng chính nghe lại
                     logger.warning("Lưu phụ đề %s lỗi", it.name, exc_info=True)
 

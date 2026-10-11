@@ -119,10 +119,25 @@
     `friendly_error` regex + đường dẫn · `error_line` cắt ở dấu cách · Esc ×2, Delete chỉ khi có vùng chọn · ✕ hướng dẫn
     (`close_help`) · tìm không dấu · `parse_time` (5s / 1p30) · `Pipeline.needs` chặn video cần Gemini khi model hết
     lượt · Duyệt khoá video chưa sẵn sàng, báo giọng cũ / câu bỏ trống / tràn khung (`_voice_issues`) · thông báo chưa đọc.
+28. **Lượt cuối của báo cáo QA** (mục cỡ M + P1/P2 còn sót; test `audit_out/qa/test_qa_m.py`, 75 kiểm tra):
+    - Bố cục: tab Lồng tiếng (công tắc + giọng đầu, «Khớp thời gian» / «Giọng đã tạo» thu gọn, Cao độ chỉ khi Edge) ·
+      tab Video (hàng đợi → khung hình → âm thanh → cấu hình riêng; theo dõi / «Tên & nơi lưu file xuất» / «Nâng cao
+      xuất file» thu gọn) · tab Truyện (Chủ đề + «Chạy tất cả» đầu trang) · công tắc «Duyệt trước» trên header
+      (`MainWindow.set_review_mode`) · ‹ n/N › trên thanh phát · «Sửa ›» cuộn tới khối (`BaseModule.scroll_to_section`).
+    - Tiến độ: `Pipeline.planned_steps` + `step_bands` (dải theo bước thật, không đi lùi); `ProgressPanel.set_detail`.
+    - Giọng: `VideoItem.voice_locked` («Dùng giọng có sẵn» thật sự dùng khi xuất) · `Pipeline.voice_now` (nút Tạo giọng
+      cùng đường Chuẩn bị) · `srt_sha` / `track_matches` (sửa SRT cùng giây) · `_prune_tracks` (giữ 3 track / video) ·
+      câu «không đọc» (`<srt>.noread.json`, ⊘ trong Lời thoại, giữ âm gốc khi khử giọng `_keep_original_at_noread`).
+    - Dịch: một ô «Ngôn ngữ video» (`SubtitleConfig.source_hint`) · Checkpoint theo câu nguồn · `retranslate(memory_key)`
+      · `<bản dịch>.locks.json` (câu đã rút gọn / sửa tay) · `_SPLIT_AI_DOWN` · Gemini treo 2 lần → mất mạng.
+    - Lỗi / dữ liệu: `NoSpeech` (video chỉ có nhạc vẫn xuất) · `ffmpeg_reason` · `friendly_error` OOM / mạng · Edge
+      `_offline` · OCR thiếu → nghe giọng · Qwen hết VRAM → CPU, báo tải model lần đầu, căn mốc theo ngôn ngữ từng đoạn ·
+      dòng video ở ổ chưa cắm giữ trong cấu hình (`_missing_rows`) · `last_config.json.bak` mỗi phiên · `_free_output` ·
+      `attach_srt` · nhạc nền bỏ hệ số ẩn 20 % (`_fold_bgm_master`) · `BUILTIN_PRON` (tên hãng) · `_tk_error`.
 
 ## Còn tồn / để ý khi làm tiếp
 
-- **Dải «Đang duyệt … chỉ áp cho video này»** hiện cả trên tab Video khi video chưa chuẩn bị. Có thể chỉ nên hiện khi video đã «Chờ duyệt».
+- **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).
 - **Ghi cấu hình lặng lẽ:**
   - `speaker_panel._entry` thêm mục giọng vào `tts.speaker_voices` khi chỉ xem;
   - `SaveTemplateDialog._order_voices` sắp lại danh sách giọng ngay khi mở hộp.
@@ -145,5 +160,8 @@
   4. Thử **Dừng** giữa chừng, nạp một file hỏng (sẽ hiện ✖ + Thử lại), và đổi theme trong Cài đặt.
   5. Chuẩn bị 3 video, bấm **Bỏ qua video này** ở thanh trạng thái (hoặc ✕ trên dòng đang chạy) → video sau chạy tiếp.
 - **Lint nhanh:** `python -m pyflakes app`.
-- **Bài test tự động (local, trong `audit_out/`, không commit):** `audit_out/qa/test_qa_fixes.py`, `audit_out/b_only/smoke_b_ui.py`,
+- **Bài test tự động (local, trong `audit_out/`, không commit):** `audit_out/qa/test_qa_*.py`, `audit_out/b_only/smoke_b_ui.py`,
   `audit_out/ux_sub/smoke_sub_ui.py`, `audit_out/review/smoke_retry_model.py` — thêm tham số `ctk52` để chạy với CustomTkinter 5.2.
+- **Chạy test ẨN** (không bật cửa sổ, không giành chuột / bàn phím): đặt `PYTHONPATH=audit_out\headless` (file
+  `sitecustomize.py` làm mọi cửa sổ Tk trong suốt, ngoài màn hình, không lên thanh tác vụ). Bài test trỏ cấu hình làm việc
+  sang `_test_last_config.json` — không ghi `output/last_config.json` thật.

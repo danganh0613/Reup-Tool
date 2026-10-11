@@ -26,64 +26,15 @@ if TYPE_CHECKING:
     from app.core.state import VideoItem
     from app.ui.main_window import MainWindow
 
-# bước người dùng thấy (theo thứ tự chạy) ← các thông điệp pipeline ghi vào ``item.message``
-STEPS: list[tuple[str, str]] = [
-    ("read", "Đọc video"),
-    ("stt", "Nhận diện lời thoại"),
-    ("translate", "Dịch phụ đề"),
-    ("speakers", "Nhận diện người nói"),
-    ("voice", "Tạo giọng lồng"),
-    ("novocal", "Khử giọng gốc"),
-    ("render", "Xuất video"),
-]
+from app.services.job_runner import STEP_ORDER as _ORDER, STEPS, step_key  # noqa: E402
+
 STEP_LABEL = dict(STEPS)
-_ORDER = [k for k, _ in STEPS]
-_MESSAGES = [("Đọc thông tin", "read"), ("Nhận diện giọng nói", "stt"), ("Dịch phụ đề", "translate"),
-             ("Nhận diện người nói", "speakers"), ("Tạo giọng đọc", "voice"), ("Khử giọng gốc", "novocal"),
-             ("Ghép timeline", "render"), ("Render", "render")]
 SPIN = "◐◓◑◒"
 
 
-def step_key(message: str) -> str | None:
-    m = message or ""
-    for prefix, key in _MESSAGES:
-        if m.startswith(prefix):
-            return key
-    return None
-
-
 def planned_steps(window: MainWindow, item: VideoItem, mode: str) -> list[str]:
-    """Các bước video này sẽ đi qua (tính lúc bắt đầu, theo cấu hình riêng của video). Bước đã có sẵn kết quả
-    (SRT, bản dịch, người nói, bản khử giọng) được bỏ — người dùng chỉ thấy việc thật sự phải chờ."""
-    from app.core.state import SRT_MODES, SRT_SOURCES, TTS_SOURCES
-
-    st = window.app_state.state_for(item)
-    s, t, v = st.subtitle, st.tts, st.video
-    has = lambda p: bool(p) and Path(p).exists()      # noqa: E731
-    steps = ["read"]
-    need_cues = s.enable_subtitle or t.enable_tts
-    want_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or (t.enable_tts and t.tts_source == TTS_SOURCES[0])
-    if need_cues and not has(item.srt_path) and s.srt_source == SRT_SOURCES[0]:
-        steps.append("stt")
-    if need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path):
-        steps.append("translate")
-    if t.enable_tts and t.multi_voice:
-        try:
-            done = window.pipeline_for(item).speakers_path(item).exists()
-        except Exception:
-            done = False
-        if not done:
-            steps.append("speakers")
-    if t.enable_tts:
-        steps.append("voice")
-    if v.demucs_enable and v.keep_original_audio and not v.mute and item.has_audio:
-        from app.services.vocal_remove import cached_no_vocals
-
-        if cached_no_vocals(item.path) is None:
-            steps.append("novocal")
-    if mode == "render":
-        steps.append("render")
-    return steps
+    """Các bước video này sẽ đi qua — cùng kế hoạch JobRunner dùng để chia thanh tiến độ."""
+    return window.pipeline_for(item).planned_steps(item, mode)
 
 
 def _clock(sec: float) -> str:
@@ -120,6 +71,13 @@ def friendly_error(message: str, item: VideoItem | None = None) -> str:
         return "API key chưa đúng hoặc hết hạn — kiểm tra ở Cài đặt › AI dùng API key"
     if re.search(r"no space left|errno 28|disk full|not enough space|ổ đĩa đầy|ổ đầy", low):
         return "ổ đĩa đầy — giải phóng dung lượng rồi thử lại"
+    if re.search(r"out of memory|cuda error|cudnn_status|cublas_status|gpu hết bộ nhớ", low):
+        return "card đồ hoạ hết bộ nhớ — đóng game / ứng dụng nặng rồi bấm Thử lại"
+    if re.search(r"connectionerror|max retries exceeded|getaddrinfo|name resolution|failed to establish|"
+                 r"read timed out|connecttimeout|sslerror|mất mạng", low):
+        return "mất mạng / không tải được — kiểm tra Internet rồi bấm Thử lại"
+    if low.startswith("ffmpeg lỗi:"):
+        return m.split(":", 1)[1].split(" (mã ")[0].strip()
     return m or "không rõ lý do — xem log"
 
 
@@ -163,6 +121,8 @@ class ProgressPanel(ctk.CTkFrame):
         self._run_title = ""
         self._p = 0.0
         self._p_at = 0.0
+        self._shown = 0.0
+        self._stopping = False          # đã bấm Dừng: giữ dòng «Đang dừng…», không để bước đang chạy ghi đè
         self.set_idle()
 
     # ── Khung hiển thị ───────────────────────────────────────────────────
@@ -221,8 +181,11 @@ class ProgressPanel(ctk.CTkFrame):
     def set_idle(self) -> None:
         n = len(self.window.app_state.videos)
         if n:
-            label = self.window.render_btn.cget("text").strip() if hasattr(self.window, "render_btn") else "Render"
-            detail = f"{n} video trong hàng đợi — bấm «{label}» trên cùng để bắt đầu"
+            label = self.window.render_btn.cget("text").strip() if hasattr(self.window, "render_btn") else "Xuất video"
+            if label == "Mở Duyệt":                   # không còn gì để chạy — chỉ còn xem / xuất lại
+                detail = (f"{n} video đã chuẩn bị / xuất — muốn xuất lại video nào: mở tab Duyệt, sửa rồi bấm «Duyệt»")
+            else:
+                detail = f"{n} video trong hàng đợi — bấm «{label}» trên cùng để bắt đầu"
         else:
             detail = "Nạp video vào hàng đợi để bắt đầu"
         self._show("idle", "•", T.TEXT_MUTED, "Sẵn sàng", detail)
@@ -236,22 +199,26 @@ class ProgressPanel(ctk.CTkFrame):
     def start_queue(self, items: list[VideoItem], mode: str, on_skip: Callable[[], None] | None = None) -> None:
         """``on_skip``: nhiều video → nút «Bỏ qua video này» (bỏ video đang chạy, các video sau chạy tiếp)."""
         self._t0 = time.time()
+        self._stopping = False
         self._steps = {it.path: planned_steps(self.window, it, mode) for it in items}
         self._run_title = "Đang chuẩn bị" if mode == "prepare" else "Đang xuất"
         self._show("running", SPIN[0], T.ACCENT, f"{self._run_title} {len(items)} video", "Bắt đầu…")
         self._meter(True)
         self._action("Bỏ qua video này", on_skip, None, False) if on_skip else self._action(None)
-        self.set_progress(0.0)
+        self.set_progress(0.0, reset=True)
 
     def stopping(self) -> None:
         """Đã bấm Dừng: báo ngay (bước đang chạy có thể cần vài giây mới dừng được)."""
         if self._mode != "running":
             return
+        self._stopping = True
         self.status.configure(text="Đang dừng…")
         self.detail.configure(text="Chờ bước đang chạy dừng hẳn (vài giây)")
         self._action(None)
 
     def update_item(self, it: VideoItem, index: int, total: int, overall: float) -> None:
+        if self._stopping:                           # bước đang chạy còn báo tiến độ sau khi bấm Dừng → giữ «Đang dừng…»
+            return
         steps = self._steps.setdefault(it.path, ["read"])
         key = step_key(it.message)
         if key and key not in steps:                 # bước phát sinh (vd. cần nhận diện người nói) → chèn đúng thứ tự
@@ -264,15 +231,24 @@ class ProgressPanel(ctk.CTkFrame):
         self._show("running", self.icon.cget("text"), T.ACCENT, f"{head} · {_clip(it.name, 36)}", what)
         self.set_progress(overall)
 
-    def start_task(self, name: str) -> None:
+    def start_task(self, name: str, detail: str = "Đang chạy…") -> None:
         self._t0 = time.time()
-        self._show("running", SPIN[0], T.ACCENT, name, "Đang chạy…")
+        self._stopping = False
+        self._show("running", SPIN[0], T.ACCENT, name, detail)
         self._meter(True)
         self._action(None)
-        self.set_progress(0.0)
+        self.set_progress(0.0, reset=True)
 
-    def set_progress(self, p: float) -> None:
+    def set_detail(self, text: str) -> None:
+        """Việc đang làm của tác vụ lẻ (vd từng bước cài Qwen) — thay chữ «Đang chạy…» đứng yên cả chục phút."""
+        if self._mode == "running" and not self._stopping:
+            self.detail.configure(text=_clip(text + self._waiting, 120))
+
+    def set_progress(self, p: float, reset: bool = False) -> None:
         p = max(0.0, min(1.0, p))
+        if self._mode == "running" and not reset:
+            p = max(p, self._shown)                  # trong một lượt thanh chỉ đi lên (bước sau tính lại không kéo lùi)
+        self._shown = p
         self.bar.set(p)
         self.percent.configure(text=f"{int(p * 100)}%")
         if p > self._p or p == 0:
@@ -298,6 +274,7 @@ class ProgressPanel(ctk.CTkFrame):
         """Kết quả cuối: ``kind`` ok / error / stopped. ``action`` = (chữ, lệnh, icon, primary?) — việc nên bấm tiếp."""
         icon, color = {"ok": ("✓", T.SUCCESS), "error": ("✖", T.DANGER), "stopped": ("■", T.WARNING)}[kind]
         self._t0 = 0.0
+        self._stopping = False
         self._show(kind, icon, color, title, detail)
         self._meter(False)
         if action:

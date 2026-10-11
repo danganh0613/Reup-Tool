@@ -43,8 +43,8 @@ class SelfCheckWindow(ctk.CTkToplevel):
         self.body.grid_columnconfigure(0, weight=1)
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 14))
-        ctk.CTkLabel(foot, text="Mục ⚠ là tuỳ chọn — phần mềm vẫn chạy; làm theo gợi ý để bổ sung.", font=T.font(11),
-                     text_color=T.TEXT_MUTED, anchor="w").pack(side="left")
+        ctk.CTkLabel(foot, text="Mục «tuỳ chọn» thiếu vẫn làm được việc chính. Bấm «Mở chỗ cài» để bổ sung.",
+                     font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(side="left")
         button(foot, "Đóng", size="sm", command=self.destroy).pack(side="right")
         self.copy_btn = button(foot, "Sao chép kết quả", icon_name="list", size="sm", command=self._copy, state="disabled")
         self.copy_btn.pack(side="right", padx=6)
@@ -83,7 +83,13 @@ class SelfCheckWindow(ctk.CTkToplevel):
         row.grid_columnconfigure(1, weight=1)
         color = getattr(T, _COLOR[c.status])
         ctk.CTkLabel(row, text="", image=icon(_ICON[c.status], 16, color), width=28).grid(row=0, column=0, rowspan=2, padx=(10, 4), pady=8, sticky="n")
-        ctk.CTkLabel(row, text=c.name, font=T.font(13, "medium"), text_color=T.TEXT, anchor="w").grid(row=0, column=1, sticky="ew", pady=(8, 0))
+        name = c.name + ("  · tuỳ chọn" if c.optional and c.status != "ok" else "")
+        ctk.CTkLabel(row, text=name, font=T.font(13, "medium"), text_color=T.TEXT, anchor="w").grid(row=0, column=1, sticky="ew", pady=(8, 0))
+        if c.page and c.status != "ok":
+            # nút làm luôn: mở đúng trang Cài đặt có nút Cài / ô nhập key (trước: chỉ có chữ chỉ đường)
+            button(row, "Nhập key…" if c.page == "cloud" else "Mở chỗ cài", icon_name="settings", size="sm",
+                   variant="secondary" if c.optional else "primary",
+                   command=lambda p=c.page: self.window.open_settings(tab=p)).grid(row=0, column=2, rowspan=2, padx=(4, 10))
         ctk.CTkLabel(row, text=c.detail, font=T.font(12), text_color=T.TEXT_DIM, anchor="w", justify="left", wraplength=600).grid(
             row=1, column=1, sticky="ew", pady=(0, 8 if not c.fix else 2))
         if c.fix:

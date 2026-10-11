@@ -58,12 +58,14 @@ def cached_region(item: VideoItem) -> dict | None | bool:
         return False
 
 
-def _frames(path: str, ffmpeg: FFmpeg, duration: float):
+def _frames(path: str, ffmpeg: FFmpeg, duration: float, cancel=None):
     import numpy as np
 
     times = [duration * (0.04 + 0.92 * k / max(1, SAMPLES - 1)) for k in range(SAMPLES)] if duration > 1 else [0.0]
 
     def grab(t: float):
+        if cancel is not None and cancel.is_set():
+            return b""
         cmd = [ffmpeg.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{t:.3f}", "-i", path,
                "-frames:v", "1", "-vf", f"scale={W}:-2,format=gray", "-f", "rawvideo", "-"]
         res = subprocess.run(cmd, capture_output=True, creationflags=NO_WINDOW, timeout=60)
@@ -71,6 +73,10 @@ def _frames(path: str, ffmpeg: FFmpeg, duration: float):
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         raws = list(pool.map(grab, times))
+    if cancel is not None and cancel.is_set():
+        from app.services.ffmpeg import RenderCancelled
+
+        raise RenderCancelled("Đã huỷ dò chữ cứng")
     raws = [r for r in raws if r and len(r) % W == 0]
     if not raws:
         return None
@@ -144,11 +150,11 @@ def _is_static(band, hit) -> bool:
     return bool(ious) and float(np.median(ious)) > 0.45
 
 
-def detect_region(path: str, ffmpeg: FFmpeg, duration: float) -> dict | None:
+def detect_region(path: str, ffmpeg: FFmpeg, duration: float, cancel=None) -> dict | None:
     """Vùng phụ đề cứng {x, y, w, h (0..1), …kiểu che mặc định} hoặc None nếu không thấy."""
     import numpy as np
 
-    frames = _frames(path, ffmpeg, duration)
+    frames = _frames(path, ffmpeg, duration, cancel)
     if frames is None or len(frames) < 4:
         return None
     n, H, Wd = frames.shape
@@ -194,21 +200,25 @@ _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
-def ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None) -> dict | None:
+def ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None, cancel=None) -> dict | None:
     """Vùng chữ cứng của ``item`` (dò một lần, lưu cache). Khung xem trước và bước Chuẩn bị cùng hỏi một video thì
     lượt sau chờ lượt đang dò rồi dùng kết quả — không dò hai lần cùng lúc."""
     with _locks_guard:
         lock = _locks.setdefault(str(cache_path(item)), threading.Lock())
     with lock:
-        return _ensure_region(item, ffmpeg, duration, log)
+        return _ensure_region(item, ffmpeg, duration, log, cancel)
 
 
-def _ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None) -> dict | None:
+def _ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None, cancel=None) -> dict | None:
+    from app.services.ffmpeg import RenderCancelled
+
     got = cached_region(item)
     if got is not False:
         return got
     try:
-        region = detect_region(item.path, ffmpeg, duration)
+        region = detect_region(item.path, ffmpeg, duration, cancel)
+    except RenderCancelled:
+        raise
     except Exception:
         logger.warning("Dò chữ cứng lỗi: %s", item.path, exc_info=True)
         if log:

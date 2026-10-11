@@ -20,9 +20,10 @@ TOPICS: list[dict] = [
             "Đưa video vào: kéo file video thả vào khung xem trước (bên phải). Hoặc mục Video bấm «＋ Nạp video».",
             "Chọn mẫu ở ô «Mẫu» trên cùng, vd «Review phim dọc 9:16» (dịch sang tiếng Việt + lồng tiếng + phụ đề TikTok). "
             "Không chọn mẫu thì video giữ nguyên tiếng gốc.",
-            "Cần chỉnh thêm thì bấm từng mục ở thanh bên trái (Lời thoại, TTS, Che mờ, Nhạc…) — khung xem trước đổi theo ngay.",
-            "Bấm nút chính trên cùng bên phải («Render MP4», hoặc «Chuẩn bị» khi bật Duyệt). Thanh trạng thái dưới cùng "
-            "cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
+            "Cần chỉnh thêm thì bấm từng mục ở thanh bên trái (Lời thoại, Lồng tiếng, Che mờ, Nhạc…) — khung xem trước "
+            "đổi theo ngay.",
+            "Bấm nút chính trên cùng bên phải («Xuất video», hoặc «Chuẩn bị» khi bật «Duyệt trước»). Thanh trạng thái dưới "
+            "cùng cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
         ]),
         ("warn", f"Video tiếng nước ngoài cần 2 thứ (cài một lần): bộ nghe lời thoại Qwen3-ASR (Cài đặt › AI trên máy, "
                  f"~{INSTALL_GB} GB — hoặc chọn «Chữ in sẵn trên video» nếu video có phụ đề in sẵn) và API key Gemini "
@@ -31,38 +32,42 @@ TOPICS: list[dict] = [
         ("kv", [
             ("Các ô nhỏ 16:9 · Gốc · Gốc · Cắt vừa khung", "Bấm vào để chọn khung video: 16:9 là video ngang (YouTube), 9:16 là video dọc (TikTok)."),
             ("V · T · B", "V: kéo hình đi. T: kéo ô chữ phụ đề. B: vẽ ô che mờ (hiện ở tab Lời thoại và Che mờ)."),
-            ("Sub · Blur", "Tạm giấu chữ / ô che để nhìn hình cho rõ. Không ảnh hưởng video xuất ra."),
+            ("Sub · Che mờ", "Tạm giấu chữ / ô che để nhìn hình cho rõ. Không ảnh hưởng video xuất ra."),
+            ("‹ 2/5 ›", "Đổi sang video trước / sau trong hàng đợi ngay trên khung xem trước, ở tab nào cũng được."),
             ("Phát", "Xem thử giống video xuất: đủ khung hình, màu, che mờ, logo, chữ, phụ đề; tiếng gồm âm gốc + giọng lồng "
                      "+ nhạc nền; bỏ qua đoạn đã cắt, đúng tốc độ. Đang phát mà chỉnh gì thì hình/tiếng đổi theo ngay."),
-            ("Hiệu ứng", "Tắt khi máy yếu, phát bị giật: lúc đó chỉ phát hình gốc, phụ đề vẽ đè (tiếng vẫn đủ)."),
-            ("Render thử", "Render thật 15 giây từ chỗ đang xem rồi phát luôn — giống hệt file xuất. Chưa có giọng lồng thì "
-                           "máy tự tạo giọng cho đoạn đó. Dùng để nghiệm thu trước khi render cả video."),
-            ("Xóa · phím Delete", "Xoá ô che hoặc ô chữ đang chọn. Lỡ tay thì bấm Ctrl+Z để lấy lại."),
+            ("Xem hiệu ứng", "Tắt khi máy yếu, phát bị giật: lúc đó chỉ phát hình gốc, phụ đề vẽ đè (tiếng vẫn đủ)."),
+            ("Xuất thử", "Xuất thật 15 giây từ chỗ đang xem rồi phát luôn — giống hệt file xuất. Chưa có giọng lồng thì "
+                         "máy tự tạo giọng cho đoạn đó. Dùng để nghiệm thu trước khi xuất cả video."),
+            ("Xoá · phím Delete", "Xoá ô che hoặc ô chữ đang chọn. Lỡ tay thì bấm Ctrl+Z để lấy lại."),
         ]),
-        ("tip", "Bạn không cần bấm lưu. Mọi thứ tự lưu, tắt máy mở lại vẫn còn."),
+        ("tip", "Cấu hình và hàng đợi tự lưu — tắt máy mở lại vẫn còn. Riêng câu lời thoại đang sửa: bấm «Lưu & tạo lại "
+                "giọng» (nút có dấu ● là còn câu chưa lưu; đóng app lúc đó máy sẽ hỏi)."),
         ("h", "Mẫu: làm hàng loạt video giống nhau"),
         ("steps", [
             "Chọn mẫu có sẵn ở ô «Mẫu» trên cùng (Review phim dọc 9:16, Thuyết minh ngang 16:9, Reup nhanh không lời…), "
             "hoặc tự chỉnh một video cho ưng ý rồi bấm «Lưu mẫu» (chọn lưu những phần nào, kèm ảnh đại diện).",
             "Giọng lồng tiếng: mẫu nhớ giọng chính + danh sách giọng theo thứ tự người nói (Người 1 → giọng 1, Người 2 → "
             "giọng 2…). Video sau nhận ra bao nhiêu người thì gán lần lượt; dư người thì tự chọn thêm giọng Nam/Nữ. "
-            "Muốn một người đọc hết thì tắt «Mỗi người nói một giọng» ở tab TTS.",
+            "Muốn một người đọc hết thì tắt «Mỗi người nói một giọng» ở tab Lồng tiếng.",
             "Nạp nhiều video / cả thư mục vào hàng đợi — mọi video dùng chung mẫu đang chọn.",
             "Video nào cần khác (vd. chữ cứng nằm chỗ khác): chọn video đó, ở mục Video bật «Chỉnh riêng cho video này» "
-            "hoặc «Áp mẫu riêng». Video đó có nhãn «✎ Riêng» trong hàng đợi.",
-            "Bấm «Render MP4»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó.",
+            "hoặc «Áp mẫu riêng». Video đó có nhãn «✎ Riêng» trong hàng đợi, ô Mẫu trên cùng ghi mẫu của nó.",
+            "Bấm «Xuất video»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó. Thứ tự xuất = thứ tự hàng đợi "
+            "(chuột phải vào video để đưa lên / xuống).",
             "Nút ≡ cạnh «Lưu mẫu» (Quản lý mẫu): xem tất cả mẫu, áp cho tất cả / chỉ video đang chọn, xuất file mẫu gửi "
             "máy khác, nhập mẫu.",
         ]),
         ("h", "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)"),
         ("steps", [
-            "Mục Video bật «Duyệt trước khi xuất». Nút Render trên cùng đổi thành «Chuẩn bị (n)».",
-            "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa render). "
+            "Bật công tắc «Duyệt trước» cạnh nút chính trên cùng (hoặc ở tab Video). Nút chính đổi thành «Chuẩn bị (n)».",
+            "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa xuất). "
             "Xong tự mở tab «Duyệt» (thanh bên trái) — khung xem trước vẫn ở ngay cạnh.",
             "Tab Duyệt: ‹ › hoặc ô chọn để đổi video, ▶ Phát để xem. Thấy câu sai: bấm «Sửa ›» ở dòng «Lời thoại» → sửa ở "
             "tab Lời thoại → «Lưu & tạo lại giọng» (câu không đổi dùng lại, rất nhanh) → «‹ Về Duyệt».",
             "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video chờ kế), không dùng thì «Bỏ qua».",
-            "Bấm «Xuất (n)» trên cùng: chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
+            "Bấm «Xuất (n)» trên cùng: chỉ xuất video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị. Sửa video đã xuất "
+            "→ nó thành «Cần xuất lại», bấm «Duyệt» lại rồi «Xuất».",
         ]),
         ("h", "Tự động hoá thêm"),
         ("kv", [
@@ -70,24 +75,32 @@ TOPICS: list[dict] = [
                                "che mờ (bỏ qua logo / watermark đứng yên). Mẫu Review phim / Thuyết minh bật sẵn."),
             ("Thư mục theo dõi", "Mục Video → «Thư mục theo dõi»: chép video vào thư mục là tự vào hàng đợi, áp mẫu đã chọn, "
                                  "rồi tuỳ chọn tự chuẩn bị (chờ duyệt) hoặc tự xuất luôn."),
-            ("Tên file xuất", "Mục Video → «Tên file xuất» / «Thư mục con» với mã {ten} {hauto} {mau} {ngay} {gio} {stt}, "
-                              "vd. {stt}_{ten} trong thư mục {mau}/{ngay}. Lưu vào mẫu được."),
+            ("Tên file xuất", "Mục Video → «Tên & nơi lưu file xuất»: thư mục xuất, «Tên file xuất» / «Thư mục con» với "
+                              "mã {ten} {hauto} {mau} {ngay} {gio} {stt}, vd. {stt}_{ten} trong thư mục {mau}/{ngay}. "
+                              "Lưu vào mẫu được."),
         ]),
     ]},
     {"key": "flow_dub", "title": "Video tiếng nước ngoài → tiếng Việt", "group": "Bắt đầu", "blocks": [
-        ("p", "Bạn có video tiếng Trung, tiếng Anh… muốn có chữ Việt và giọng đọc tiếng Việt. Làm theo thứ tự này, "
-              "mỗi bước bấm ở một mục bên cột trái."),
+        ("p", "Bạn có video tiếng Trung, tiếng Anh… muốn có chữ Việt và giọng đọc tiếng Việt."),
+        ("h", "Cách nhanh: dùng mẫu"),
         ("steps", [
-            "Mục Video: đưa video vào.",
-            "Mục STT: bấm «Tạo phụ đề cho video đang chọn». Máy nghe video rồi ghi ra chữ (tiếng gốc), chạy ngay trên máy. "
-            f"Lần đầu cần cài bộ nghe lời thoại (Cài đặt › AI trên máy › «Cài», ~{INSTALL_GB} GB, một lần).",
-            "Mục Lời thoại: chọn «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Cần có API key Gemini (miễn phí, lấy tại "
-            "aistudio.google.com, dán vào Cài đặt › AI dùng API key). Muốn sửa câu nào thì sửa ngay ở đầu tab.",
-            "Phụ đề tự hiện chữ Việt kiểu TikTok. Muốn dời / đổi cỡ: dùng 2 nút phụ đề trên khung video.",
-            "Mục TTS: bật «Thêm lồng tiếng vào video», chọn giọng, bấm «Nghe thử giọng» xem có thích không.",
-            "Mục Che mờ (nếu video có chữ tiếng nước ngoài dính sẵn trên hình): bấm B rồi vẽ một ô đè lên dòng chữ đó.",
-            "Mục Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung/Anh, giữ nhạc nền & tiếng động), «Âm gốc / nền» "
-            "khoảng 70, «Lồng tiếng» khoảng 150. Rồi bấm «Render MP4».",
+            "Đưa video vào (kéo thả vào khung xem trước, hoặc tab Video › «＋ Nạp video»).",
+            "Ô «Mẫu» trên cùng chọn «Review phim dọc 9:16» hoặc «Thuyết minh ngang 16:9» — mẫu bật sẵn: nghe lời thoại → "
+            "dịch sang tiếng Việt → lồng tiếng → phụ đề kiểu TikTok → khử giọng gốc → che chữ cứng.",
+            "Bấm «Xuất video» trên cùng. Muốn xem / sửa trước khi xuất: bật «Duyệt trước» rồi bấm «Chuẩn bị», xem từng "
+            "video ở tab Duyệt.",
+        ]),
+        ("warn", f"Cần cài một lần: bộ nghe lời thoại (Cài đặt › AI trên máy, ~{INSTALL_GB} GB) và API key Gemini để dịch "
+                 "(Cài đặt › AI dùng API key, miễn phí tại aistudio.google.com). Thiếu thì máy báo ngay khi bấm chạy."),
+        ("h", "Tự chỉnh từng bước (không dùng mẫu)"),
+        ("steps", [
+            "Tab Nhận diện: «Ngôn ngữ video» để «Tự nhận diện», bấm «Tạo phụ đề cho video đang chọn».",
+            "Tab Lời thoại: «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Sửa câu nào thì sửa ngay ở đầu tab.",
+            "Tab Lồng tiếng: bật «Thêm lồng tiếng vào video», «Đọc từ» = Bản dịch, chọn giọng, bấm «Nghe thử giọng».",
+            "Tab Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung / Anh, giữ nhạc nền & tiếng động), «Âm gốc "
+            "/ nền» khoảng 70, «Lồng tiếng» khoảng 150.",
+            "Video có chữ nước ngoài in sẵn: tab Che mờ bật «Tự dò & che chữ cứng», hoặc bấm B vẽ một ô đè lên.",
+            "Bấm «Xuất video».",
         ]),
         ("warn", "Câu tiếng Việt thường dài hơn câu gốc, nên giọng đọc phải nhanh hơn một chút. Máy tự chỉnh, câu vẫn "
                  "dài quá thì AI tự rút gọn. Muốn gọn hơn nữa: tab Lời thoại, ô «Nhờ AI sửa» gõ «ngắn gọn hơn»."),
@@ -98,7 +111,7 @@ TOPICS: list[dict] = [
             "Trên khung xem trước, bấm ô đầu tiên (đang ghi 16:9 hoặc Gốc) → chọn «9:16 (Dọc)».",
             "Bấm ô «Cắt vừa khung» → chọn «Nền mờ (blur)». Video sẽ nằm giữa, trên dưới là hình mờ. (Chọn «Cắt vừa khung» nếu muốn phóng to cắt hai bên.)",
             "Muốn cắt thành nhiều clip ngắn: mục Cắt → «＋ Thêm đoạn», gõ giây bắt đầu và kết thúc, chọn «Xuất mỗi đoạn thành 1 file».",
-            "Bấm «Render MP4».",
+            "Bấm «Xuất video».",
         ]),
         ("tip", "Mục Logo → thẻ «Watermark» bật «Bật watermark»; thẻ «Chuyển động» chọn «Vùng chạy» = TikTok/Reels để chữ không bị nút like/comment của TikTok che mất."),
     ]},
@@ -111,14 +124,16 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bấm «＋ Nạp video» rồi chọn file (mp4, mkv, mov…). Đưa nhiều file cũng được — máy làm lần lượt từng cái.",
             "Trong ô Hàng đợi, bấm vào tên video để chọn video đang chỉnh. Bấm ✕ để bỏ video khỏi danh sách.",
-            "Phần «Khung hình & tốc độ»: chọn Tỉ lệ (ngang 16:9, dọc 9:16…), Độ phân giải (1080p là đẹp), FPS để «Giữ nguyên».",
+            "Phần «Khung hình & tốc độ»: chọn Tỉ lệ (ngang 16:9, dọc 9:16…), Độ phân giải (1080p là đẹp), «Số hình / giây» "
+            "để «Giữ nguyên».",
             "Phần «Âm thanh»: «Âm gốc / nền» là tiếng có sẵn trong video, «Lồng tiếng» là giọng máy đọc. Có lồng tiếng thì bật "
             "«Khử giọng nói gốc (AI)» — chỉ còn nhạc nền & tiếng động, để âm nền 60–90. Không bật thì để âm gốc 10–20.",
         ]),
         ("kv", [
-            ("Tăng tốc GPU", "Để bật. Máy tự chọn card màn hình để làm nhanh; không có card thì tự dùng CPU, chỉ chậm hơn thôi."),
+            ("Nâng cao xuất file › Tăng tốc GPU", "Để bật. Máy tự chọn card màn hình để làm nhanh; không có card thì tự dùng "
+                                                 "CPU, chỉ chậm hơn thôi."),
             ("Chuẩn nén", "Để H.264 là an toàn nhất, mở được ở mọi nơi."),
-            ("Chất lượng (CRF)", "Số nhỏ = đẹp hơn nhưng file to hơn. 20–23 là vừa."),
+            ("Độ nét (CRF)", "Số nhỏ = đẹp hơn nhưng file to hơn. 18–23 là vừa (mặc định đã hợp lý)."),
             ("Lặp video cho đủ giọng", "Bật khi giọng đọc dài hơn video: máy sẽ chiếu lại video cho đủ."),
         ]),
     ]},
@@ -138,8 +153,8 @@ TOPICS: list[dict] = [
         ("tip", "Chữ hiện sớm / muộn hơn tiếng: tab «Phụ đề» › «Thời gian» › «Trễ phụ đề»."),
     ]},
     {"key": "review", "title": "Duyệt: xem từng video, chỗ nào chưa ổn thì sửa", "group": "Từng mục", "blocks": [
-        ("p", "Tab này chỉ hiện khi mục Video bật «Duyệt trước khi xuất». Video là trung tâm: khung xem trước bên phải luôn "
-              "hiện video đang duyệt, bảng bên trái tóm tắt video đó sẽ ra sao."),
+        ("p", "Tab này chỉ hiện khi bật «Duyệt trước» (công tắc cạnh nút chính trên cùng). Video là trung tâm: khung xem "
+              "trước bên phải luôn hiện video đang duyệt, bảng bên trái tóm tắt video đó sẽ ra sao."),
         ("steps", [
             "Đổi video bằng ‹ › hoặc ô chọn (● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
             "Đọc «Video này sẽ ra sao»: khung hình, lời thoại (bao nhiêu câu, đã dịch chưa), phụ đề, mấy người nói & ai "
@@ -147,23 +162,23 @@ TOPICS: list[dict] = [
             "Bấm ▶ Phát xem video. Thấy chỗ chưa ổn → bấm «Sửa ›» ở dòng đó → mở đúng tab tính năng. Chỉnh gì ở đó cũng CHỈ "
             "áp cho video đang duyệt (dải trên cùng ghi «✎ Chỉnh riêng»); muốn dùng cho mọi video thì bấm «Áp cho tất cả».",
             "Chỉnh xong bấm ▶ Phát xem lại → «‹ Về Duyệt» → «Duyệt» (hoặc Ctrl+Enter ở bất kỳ tab nào) → tự sang video chờ kế.",
-            "Duyệt hết thì bấm «Xuất (n)» trên cùng. Menu ☰ cạnh nút Duyệt: chuẩn bị lại video này, duyệt hết video đang chờ.",
+            "Duyệt hết thì bấm «Xuất (n)» trên cùng. Nút ⋯ cạnh nút Duyệt: chuẩn bị lại video này, duyệt hết video đang chờ.",
         ]),
         ("tip", "Sửa câu thoại: «Sửa ›» ở dòng Lời thoại → tab Lời thoại (bấm ô câu là video nhảy tới câu đó, ▶ phát đúng câu, "
                 "ô «Nhờ AI sửa» chỉ sửa đúng những câu liên quan)."),
     ]},
-    {"key": "stt", "title": "STT: nghe video và ghi ra chữ", "group": "Từng mục", "blocks": [
+    {"key": "stt", "title": "Nhận diện: nghe video và ghi ra chữ", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
-        ("p", "STT nghĩa là máy nghe lời nói trong video rồi gõ ra thành chữ, có kèm giờ giấc. Kết quả là file .srt — "
-              "dùng để hiện phụ đề, để dịch, để lồng tiếng."),
+        ("p", "Máy nghe lời nói trong video rồi gõ ra thành chữ, có kèm giờ giấc. Kết quả là file .srt — dùng để hiện phụ "
+              "đề, để dịch, để lồng tiếng."),
         ("h", "Làm thế nào?"),
         ("steps", [
             "«Lấy lời từ» = «Giọng nói trong video»: AI nghe lời thoại ngay trên máy (có card NVIDIA thì nhanh hơn nhiều), "
             f"không cần mạng, không tốn lượt AI. Lần đầu bấm «Cài bộ nghe lời thoại» (~{INSTALL_GB} GB, một lần).",
             "Video Douyin có phụ đề in sẵn: chọn «Chữ in sẵn trên video» — đọc đúng từng chữ creator gõ (kể cả tên riêng), "
             "mốc thời gian lấy theo tiếng nói.",
-            "Ngôn ngữ để «Tự nhận diện» — máy tự nhận.",
-            "Bấm «Tạo phụ đề cho video đang chọn». Xong sẽ thấy dòng «Phụ đề: … câu». Bấm «Xem / sửa lời thoại» để xem chữ.",
+            "«Ngôn ngữ video» để «Tự nhận diện» — máy tự nhận. Ô này dùng chung cho bước dịch (ngôn ngữ gốc).",
+            "Bấm «Tạo phụ đề cho video đang chọn». Xong sẽ thấy dòng «Phụ đề: … câu». Xem / sửa chữ ở tab «Lời thoại».",
             "Tên riêng hiếm có thể sai: mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó) hoặc gõ vào ô "
             "«Nhờ AI sửa».",
         ]),
@@ -192,41 +207,46 @@ TOPICS: list[dict] = [
             "Bản sửa được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
         ("kv", [
+            ("Tìm & thay", "Đổi một tên / chữ ở mọi câu một lần (nút cạnh «Nhờ AI sửa»)."),
+            ("⊘ Không đọc câu này", "Lời bài hát, câu trích muốn giữ tiếng gốc: bấm ⊘ ở câu đó — câu không lồng tiếng, chỗ "
+                                    "đó giữ âm gốc (kể cả khi khử giọng), phụ đề vẫn hiện."),
             ("Dán bản dịch ngoài", "Bảng từng câu để bạn tự gõ / dán bản dịch, không cần AI."),
             ("Dịch dở giữa chừng", "Mất mạng hay model hết lượt? Mỗi lô dịch đều được lưu — bấm «Thử lại» là dịch tiếp phần "
                                    "còn lại, không dịch lại từ đầu."),
             ("Từ điển tên riêng (trong Cài đặt)", "Gõ «tên gốc=tên Việt» mỗi dòng để AI dịch đúng tên riêng, ví dụ 松下=Panasonic."),
         ]),
     ]},
-    {"key": "tts", "title": "TTS: máy đọc chữ thành tiếng (lồng tiếng)", "group": "Từng mục", "blocks": [
+    {"key": "tts", "title": "Lồng tiếng: máy đọc chữ thành tiếng", "group": "Từng mục", "blocks": [
         ("h", "Để làm gì?"),
         ("p", "Máy đọc phụ đề thành giọng nói và ghép vào video, đúng lúc với từng câu."),
         ("h", "Làm thế nào?"),
         ("steps", [
             "Bật «Thêm lồng tiếng vào video».",
-            "«Đọc từ»: chọn «Sub đã dịch» (đọc tiếng Việt) hoặc «Sub gốc».",
-            "Chọn «Giọng đọc»: VieNeu (mặc định, khuyên dùng) — 25 giọng Việt 3 miền chạy ngay trên máy, miễn phí, không "
-            "giới hạn lượt; máy đọc liền vài câu kề nhau cho tự nhiên rồi tách lại, câu đọc lỗi tự đọc lại. Edge TTS miễn phí "
-            "(HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng) — cũng đọc tạm câu VieNeu đọc hỏng.",
+            "«Đọc từ»: chọn «Bản dịch» (đọc tiếng Việt) hoặc «Lời gốc».",
+            "Chọn «Bộ đọc»: VieNeu (mặc định, khuyên dùng) — 25 giọng Việt 3 miền chạy ngay trên máy, miễn phí, không "
+            "giới hạn lượt; máy đọc liền vài câu kề nhau cho tự nhiên rồi tách lại, câu đọc chưa đạt tự đọc lại. Edge TTS "
+            "miễn phí (HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng) — cũng đọc tạm câu VieNeu không đọc được.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
             "Giọng luôn khớp mềm với hình: câu dài đọc nhanh dần, câu bị trễ đọc nhanh hơn để đuổi kịp, câu vẫn tràn thì AI "
             "rút gọn bản dịch rồi đọc lại.",
-            "Bấm «Render MP4» ở trên. Giọng đã tạo được giữ lại, lần sau render lại rất nhanh.",
+            "Muốn nghe trước: khối «Giọng của video đang chọn» bấm «Tạo giọng cho video này». Hoặc bấm «Xuất video» trên "
+            "cùng. Giọng đã tạo được giữ lại, lần sau xuất lại rất nhanh.",
         ]),
         ("kv", [
-            ("Thư viện voice", "Giọng đã tạo trước đây. Chọn để dùng lại, khỏi tạo mới."),
+            ("Giọng đã tạo", "Giữ nguyên giọng đã có (chỉ đổi nhạc / phụ đề / hiệu ứng): chọn một giọng đã tạo — xuất video "
+                             "dùng thẳng file đó, không đọc lại."),
             ("Nén tối đa", "Máy được phép đọc nhanh tới mức này khi câu dài, tính cả «Tốc độ đọc» — tối đa 1,25 "
                            "để giọng không méo. Câu vẫn dài quá: máy nhờ AI rút gọn bản dịch rồi đọc lại."),
             ("Nghỉ giữa câu", "Khoảng lặng tối thiểu giữa hai câu thoại."),
         ]),
         ("h", "Video có nhiều người nói"),
         ("steps", [
-            "Cần có phụ đề gốc trước (mục STT bấm «Tạo phụ đề cho video đang chọn», hoặc chọn file SRT).",
-            "Mục TTS bật «Mỗi người nói một giọng», bấm «Nhận diện người nói». Lần đầu máy tải model ~28 MB.",
+            "Cần có phụ đề gốc trước (tab Nhận diện bấm «Tạo phụ đề cho video đang chọn», hoặc chọn file SRT).",
+            "Tab Lồng tiếng bật «Mỗi người nói một giọng», bấm «Nhận diện người nói». Lần đầu máy tải model ~28 MB.",
             "Máy chia ra Người 1, Người 2… và tự gợi ý giọng (nam/nữ). Bấm «Nghe giọng gốc» để biết ai là ai, rồi chọn giọng "
             "cho từng người. Edge tiếng Việt chỉ có 2 giọng — người thứ ba dùng lại giọng nhưng đổi «Cao độ» cho khác đi.",
             "Máy nhận sai câu nào thì bấm «Gán từng câu…» sửa tay. Không nhận diện được thì cũng tự chia tay ở đây.",
-            "Render hàng loạt: video nào chưa nhận diện, máy tự nhận diện trước khi lồng tiếng.",
+            "Xuất hàng loạt: video nào chưa nhận diện người nói, máy tự nhận diện trước khi lồng tiếng.",
         ]),
     ]},
     {"key": "blur", "title": "Che mờ: giấu chữ, logo, mặt người", "group": "Từng mục", "blocks": [
@@ -244,6 +264,7 @@ TOPICS: list[dict] = [
             ("Bắt đầu / Kết thúc (giây)", "Chỉ che trong khoảng này. Để 0 = che suốt video."),
             ("Mềm mép", "Viền ô mờ dần, nhìn tự nhiên hơn."),
             ("Nút «Vùng đáy»", "Tự đặt ô che sẵn ở dải phụ đề phía dưới."),
+            ("Khung che (pixel)", "Gõ toạ độ chính xác — tính theo pixel của video gốc."),
         ]),
         ("tip", "Ô che bám theo video gốc. Sau đó bạn đổi sang video dọc 9:16 hay phóng to thì ô vẫn che đúng chỗ, không phải vẽ lại."),
     ]},
@@ -254,8 +275,9 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bấm «Thư viện nhạc» chọn bài có sẵn, hoặc «+ Thêm từ máy…» chọn file mp3/wav. Hoặc kéo thả file nhạc vào cửa sổ.",
             "Chỉnh «Âm lượng» khoảng 15–25 để nhạc không át tiếng nói.",
-            "Muốn nhạc chỉ chạy một đoạn: gõ giây «Bắt đầu» và «Kết thúc». Để «Lặp» bật nếu nhạc ngắn hơn video.",
-            "Để «Tự hạ nhạc khi có giọng» bật.",
+            "Nhạc mới thêm phát từ đầu video. Muốn chỉ chạy một đoạn: tua tới chỗ cần rồi bấm «Đang xem» ở «Bắt đầu» / "
+            "«Kết thúc». Để «Lặp» bật nếu nhạc ngắn hơn video.",
+            "Để «Tự hạ nhạc khi có tiếng nói / giọng đọc» bật.",
         ]),
         ("tip", "Bỏ nhạc bạn hay dùng vào thư mục app\\assets\\music, rồi bấm «Thư viện nhạc» là thấy ngay."),
     ]},
@@ -264,7 +286,7 @@ TOPICS: list[dict] = [
         ("p", "Đóng dấu kênh của bạn lên video: hình logo, dòng chữ tên kênh, chữ mờ chống người khác lấy video, viền màu."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Thẻ «Logo»: bật, bấm «Chọn ảnh logo…» (PNG nền trong suốt là đẹp nhất). Chọn Vị trí (góc nào), «Cỡ logo», «Opacity».",
+            "Thẻ «Logo»: bật, bấm «Chọn ảnh logo…» (PNG nền trong suốt là đẹp nhất). Chọn Vị trí (góc nào), «Cỡ logo», «Độ đậm».",
             "Thẻ «Chữ»: bật, gõ tên kênh, chọn font, màu, vị trí.",
             "Thẻ «Watermark»: bật, gõ @tên kênh. Chữ này mờ mờ, hiện suốt video.",
             "Muốn logo / chữ trôi, nảy, nhấp nháy: chọn ô «Chuyển động» ngay trong thẻ đó. Không thì để «Đứng yên».",
@@ -291,11 +313,12 @@ TOPICS: list[dict] = [
         ("p", "Làm video đẹp hơn (màu ấm, điện ảnh…), xoay video, thêm chuyển động cho cảnh tĩnh. Và làm video của bạn khác đi một chút khi đăng lên nhiều kênh."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Bấm một nút màu sẵn hoặc chỉnh ô bất kỳ — công tắc «Bật chỉnh màu / hiệu ứng» tự bật.",
-            "Bấm một nút màu sẵn: Ấm áp, Điện ảnh, Tươi sáng… Nhìn khung xem trước thấy đổi ngay. Kéo Sáng / Tương phản nếu muốn chỉnh thêm.",
+            "Chọn «Bộ lọc màu» hoặc chỉnh ô bất kỳ — công tắc «Bật chỉnh màu / hiệu ứng» tự bật.",
+            "«Bộ lọc màu»: Ấm áp, Điện ảnh, Tươi sáng… Nhìn khung xem trước thấy đổi ngay. Kéo Sáng / Tương phản nếu muốn chỉnh thêm.",
             "Video bị nằm ngang / ngược? Chọn «Xoay» 90° hoặc 180°.",
-            "Cảnh tĩnh, ít chuyển động? Chọn «Chuyển động Ken Burns» = Zoom vào để hình từ từ phóng to cho đỡ chán.",
-            "Đăng lại video của chính bạn lên kênh khác: bấm «Bật nhanh chống trùng» ở trên cùng.",
+            "Cảnh tĩnh, ít chuyển động? Chọn «Máy quay chuyển động» = Zoom vào để hình từ từ phóng to cho đỡ chán.",
+            "Đăng lại video của chính bạn lên kênh khác: bấm «Bật nhanh chống trùng» ở trên cùng (video khác bản gốc một "
+            "chút — không đảm bảo qua được bộ dò trùng của nền tảng).",
         ]),
         ("kv", [
             ("Khử rung", "Video quay tay bị rung thì bật."),
@@ -309,9 +332,9 @@ TOPICS: list[dict] = [
         ("h", "Làm thế nào?"),
         ("steps", [
             "Cần API key Gemini (Cài đặt › AI dùng API key; model viết / ảnh chọn ở tab Truyện). Viết truyện thì miễn phí; vẽ ảnh AI cần tài khoản có bật thanh toán — chưa có thì máy dùng ảnh tạm (chữ trên nền màu).",
-            "Gõ ý tưởng vào ô «Chủ đề», chọn độ dài, giọng văn, khung video (ngang/dọc). Bấm «Viết kịch bản». Chờ 1–2 phút.",
-            "Bấm «Trình soạn kịch bản» để đọc lại từng cảnh. Sửa lời kể, thêm bớt cảnh, chọn giọng cho nhân vật.",
-            "Bấm «Tạo giọng» → «Tạo ảnh» (nếu có quota) → «Ghép video».",
+            "Gõ ý tưởng vào ô «Chủ đề» rồi bấm «Chạy tất cả»: AI viết kịch bản → đọc giọng → vẽ ảnh → ghép video. Độ dài, giọng văn, khung hình, giọng kể: mở các khối «Kịch bản», «Hình ảnh», «Giọng kể» bên dưới.",
+            "Muốn sửa trước khi làm tiếp: mở khối «Từng bước», bấm «1 · Viết kịch bản» → «Trình soạn kịch bản» để đọc lại từng cảnh, sửa lời kể, chọn giọng cho nhân vật.",
+            "Rồi bấm lần lượt «2 · Tạo giọng đọc» → «3 · Tạo ảnh» (nếu có quota) → «5 · Ghép thành video».",
             "Xong sẽ có: video MP4, file phụ đề, tiêu đề + mô tả + tag để đăng YouTube, ảnh bìa.",
         ]),
     ]},
@@ -343,7 +366,7 @@ TOPICS: list[dict] = [
             ("Báo NVENC không dùng được", "Không sao, máy tự chuyển sang cách khác. Muốn nhanh hơn thì cập nhật driver NVIDIA mới nhất."),
             ("Báo «Chưa cài bộ nghe lời thoại»", f"Bấm «Cài…» trên thanh trạng thái (hoặc Cài đặt › AI trên máy) — cài một lần ~{INSTALL_GB} GB."),
             ("Video bị giữ khung cuối thêm vài giây", "Giọng dài hơn video nên máy giữ khung cuối cho đọc hết (không cắt giọng). Máy đã tự nhờ AI rút gọn câu tràn; muốn gọn hơn nữa: tab Lời thoại, ô «Nhờ AI sửa» gõ «ngắn gọn hơn»; hoặc mục Video bật «Lặp video cho đủ thời lượng giọng đọc»."),
-            ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm Render lại là được."),
+            ("Edge TTS báo «No audio was received»", "Dịch vụ đang bận. Máy tự thử lại; câu nào vẫn lỗi sẽ ghi trong log — bấm «Thử lại» là được."),
             ("Không biết máy thiếu gì", "Cài đặt → nút «Kiểm tra máy»: liệt kê GPU, CUDA, model, giọng, key — mục nào thiếu có ghi bấm đâu để tải."),
             ("Gemini báo hết lượt / quá tải", "Máy dừng và báo (không tự đổi model). Bấm «Chọn model…» để chọn model khác, hoặc "
                                               "đợi hạn mức đặt lại (≈ 14–15 giờ chiều). Đã dịch được lô nào thì «Thử lại» dịch "

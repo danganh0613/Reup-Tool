@@ -183,6 +183,7 @@ class Router:
         for tried in range(len(self.cands)):
             c = self.current
             attempt = 0
+            stalls = 0                          # số lần liền máy chủ không trả lời (kết nối nửa vời)
             # quá tải / hết giờ / model bị gỡ / hết lượt ngày: lỗi theo MODEL (key cùng tài khoản dùng chung hạn mức)
             # → đổi key không giúp gì, dừng luôn
             model_down = False
@@ -209,6 +210,9 @@ class Router:
                     break
                 except requests.RequestException as exc:
                     last = str(exc)
+                    stalls = stalls + 1 if isinstance(exc, requests.ReadTimeout) else 0
+                    if stalls >= 2:                     # 2 lần liền chờ đủ 2 phút không có trả lời → coi như mất mạng
+                        attempt = self.TRIES - 1
                     self._sleep(2.0 * (attempt + 1) * random.uniform(0.6, 1.2))
                     if attempt == self.TRIES - 1:
                         model_down = offline = True
@@ -291,16 +295,19 @@ class TranslationMemory:
 class Checkpoint:
     """Lưu tiến độ dịch cạnh SRT nguồn: <srt>.progress.json — «Thử lại» / mở lại app thì dịch tiếp phần còn lại."""
 
-    def __init__(self, srt_path: str | Path | None, target: str, style: str = "") -> None:
+    def __init__(self, srt_path: str | Path | None, target: str, style: str = "", source: str = "") -> None:
+        """``source``: dấu vân tay các câu nguồn — lời gốc đổi (nhận diện lại, gộp / tách câu) thì bỏ tiến độ cũ."""
         self.path = Path(str(srt_path) + ".progress.json") if srt_path else None
         self.target = target
         self.style = " ".join(style.split())
+        self.source = source
         self.done: dict[str, str] = {}
         self.extra: dict = {}                   # chủ đề + thuật ngữ của video (bước tóm tắt)
         if self.path and self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
-                if data.get("target") == target and data.get("style", "") == self.style:
+                if (data.get("target") == target and data.get("style", "") == self.style
+                        and (not source or data.get("source", source) == source)):
                     self.done = {str(k): str(v) for k, v in (data.get("done") or {}).items()}
                     self.extra = data.get("extra") or {}
             except Exception:
@@ -310,7 +317,8 @@ class Checkpoint:
         if not self.path:
             return
         try:
-            self.path.write_text(json.dumps({"target": self.target, "style": self.style, "total": total,
+            self.path.write_text(json.dumps({"target": self.target, "style": self.style, "source": self.source,
+                                             "total": total,
                                              "done": self.done, "extra": self.extra, "updated": time.time()},
                                             ensure_ascii=False),
                                  encoding="utf-8")
@@ -436,8 +444,12 @@ def _retranslate_prompt(items: list[tuple[str, str, int, str, str]], target: str
 def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settings: Settings, target: str,
                 source_hint: str = "", style: str = "", instruction: str = "",
                 on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
-                cancel: threading.Event | None = None, budgets: dict[int, int] | None = None) -> dict[int, str]:
-    """Dịch (lại) các cue ``idxs`` (chỉ số trong ``cues`` — bản gốc) theo yêu cầu người dùng, có xem bản dịch hiện tại
+                cancel: threading.Event | None = None, budgets: dict[int, int] | None = None,
+                memory_key: str | None = None) -> dict[int, str]:
+    """``memory_key``: khoá bộ nhớ dịch của bước dịch chính (``translate_vl.memory_style``) — lần «Dịch phụ đề» sau dùng
+    lại câu vừa dịch lại thay vì trả về bản AI cũ.
+
+    Dịch (lại) các cue ``idxs`` (chỉ số trong ``cues`` — bản gốc) theo yêu cầu người dùng, có xem bản dịch hiện tại
     ``previous`` (trống = dịch mới) và câu xung quanh làm ngữ cảnh. Bỏ qua bộ nhớ dịch / checkpoint (đó chính là bản cũ
     bị chê); kết quả mới ghi đè vào bộ nhớ dịch. ``budgets``: số ký tự tối đa riêng cho từng câu (vd rút gọn câu đọc
     tràn khung). Trả {chỉ số: bản dịch mới}."""
@@ -473,7 +485,7 @@ def retranslate(cues: list[Cue], previous: list[str], idxs: list[int], *, settin
             if t:
                 out[i] = t
                 if cues[i].plain:
-                    memory.put(target, cues[i].plain, t, style)
+                    memory.put(target, cues[i].plain, t, memory_key if memory_key is not None else style)
         if on_progress:
             on_progress((n + 1) / len(batches))
         if log:

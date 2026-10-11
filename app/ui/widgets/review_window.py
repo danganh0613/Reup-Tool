@@ -20,7 +20,7 @@ from app.core.state import VideoItem
 from app.services.job_runner import error_line
 from app.services.srt_utils import format_ts
 from app.ui.icons import icon
-from app.ui.widgets.common import StatusLabel, hint
+from app.ui.widgets.common import StatusLabel, auto_wrap, hint
 from app.ui.widgets.ui import Select, Tooltip, button
 from app.ui.widgets.video_summary import OFF, WARN, summarize
 from app.ui.progress_panel import friendly_error
@@ -85,8 +85,8 @@ class ReviewPanel(ctk.CTkFrame):
                                       **T.secondary_button())
         self.next_vid.grid(row=0, column=2, padx=(4, 8), pady=(8, 4))
         Tooltip(self.next_vid, "Video kế (Ctrl+↓)")
-        self.info_lbl = ctk.CTkLabel(card, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w", justify="left",
-                                     wraplength=380)
+        self.info_lbl = auto_wrap(ctk.CTkLabel(card, text="", font=T.font(11), text_color=T.TEXT_DIM, anchor="w",
+                                               justify="left", wraplength=380))
         self.info_lbl.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10)
         acts = ctk.CTkFrame(card, fg_color="transparent")
         acts.grid(row=2, column=0, columnspan=3, sticky="ew", padx=8, pady=(6, 8))
@@ -162,7 +162,8 @@ class ReviewPanel(ctk.CTkFrame):
         target = self.app_state.active
         if self.item is not None and self.item in vids:
             target = self.item
-        elif target is None or target.review not in ("pending", ""):
+        elif target is None or target.review != "pending":
+            # lần đầu mở: video chờ duyệt đầu tiên (không rơi vào video lỗi / chưa chuẩn bị)
             target = next((it for it in vids if it.review == "pending"), target)
         if target is not None and target in vids:
             self.select(vids.index(target))
@@ -272,18 +273,18 @@ class ReviewPanel(ctk.CTkFrame):
                                                                               pady=8, sticky="n")
         ctk.CTkLabel(fr, text=r.title, font=T.font(12, "bold"), anchor="w",
                      text_color=T.TEXT_DIM if off else T.TEXT).grid(row=0, column=1, sticky="ew", pady=(8, 0))
-        ctk.CTkLabel(fr, text=("⚠ " if warn else "") + r.value, font=T.font(12), anchor="w", justify="left",
-                     wraplength=300, text_color=T.WARNING if warn else (T.TEXT_MUTED if off else T.TEXT_DIM)).grid(
-            row=1, column=1, sticky="ew", pady=(0, 0 if r.detail else 8))
+        auto_wrap(ctk.CTkLabel(fr, text=("⚠ " if warn else "") + r.value, font=T.font(12), anchor="w", justify="left",
+                               wraplength=300, text_color=T.WARNING if warn else (T.TEXT_MUTED if off else T.TEXT_DIM))
+                  ).grid(row=1, column=1, sticky="ew", pady=(0, 0 if r.detail else 8))
         if r.detail:
-            ctk.CTkLabel(fr, text=r.detail, font=T.font(11), anchor="w", justify="left", wraplength=300,
-                         text_color=T.TEXT_MUTED).grid(row=2, column=1, sticky="ew", pady=(0, 8))
-        go = button(fr, "Sửa ›", variant="ghost", size="sm", command=lambda m=r.module: self.window.edit_in(m),
+            auto_wrap(ctk.CTkLabel(fr, text=r.detail, font=T.font(11), anchor="w", justify="left", wraplength=300,
+                                   text_color=T.TEXT_MUTED)).grid(row=2, column=1, sticky="ew", pady=(0, 8))
+        go = button(fr, "Sửa ›", variant="ghost", size="sm", command=lambda m=r.module, t=r.title: self.window.edit_in(m, t),
                     tip=f"Mở tab chỉnh «{r.title}» cho riêng video này")
         go.grid(row=0, column=2, rowspan=3, padx=(4, 8))
         for w in (fr, *fr.winfo_children()):
             if w is not go:
-                w.bind("<Button-1>", lambda _e, m=r.module: self.window.edit_in(m))
+                w.bind("<Button-1>", lambda _e, m=r.module, t=r.title: self.window.edit_in(m, t))
         return fr
 
     # ── Hành động ────────────────────────────────────────────────────────
@@ -304,16 +305,28 @@ class ReviewPanel(ctk.CTkFrame):
             return
         pipe = self.window.pipeline_for(it)
         win = self.window
-        self.status.warn("Đang chuẩn bị lại… (xem log)")
+        keep = (it.review, it.status, it.message)
+        self.status.warn("Đang chuẩn bị lại…")
+
+        def upd(x) -> None:
+            win.queue_update(x)
+            win.progress.update_item(x, 1, 1, x.progress)
 
         def work(cancel):
-            pipe.prepare(it, on_update=lambda x: win.ui_call(lambda: win.queue_update(x)), log=win.log_bg, cancel=cancel)
+            pipe.prepare(it, on_update=lambda x: win.ui_call(lambda: upd(x)), log=win.log_bg, cancel=cancel)
 
         def done(_r, error):
+            from app.services.ffmpeg import RenderCancelled
+
+            if isinstance(error, RenderCancelled):
+                it.review, it.status, it.message = keep         # bấm Dừng: về như trước, không thành «Lỗi»
+            elif error:
+                it.status, it.message = "Lỗi", error_line(error)
             if not self.winfo_exists():
                 return
-            if error:
-                it.status, it.message = "Lỗi", error_line(error)
+            if isinstance(error, RenderCancelled):
+                self.status.info("Đã dừng — video giữ trạng thái cũ.")
+            elif error:
                 self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.status.ok("Chuẩn bị xong — bấm ▶ Phát để xem, ưng thì Duyệt.")

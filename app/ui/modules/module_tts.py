@@ -1,4 +1,5 @@
-"""Module TTS: thư viện voice đã tạo, giọng đọc (VieNeu / Edge), nhiều giọng theo người nói, khớp thời gian, dự án TTS."""
+"""Module Lồng tiếng: bật + giọng đọc (VieNeu / Edge) ở đầu, nhiều giọng theo người nói, giọng của video đang chọn;
+khớp thời gian và giọng đã tạo (dùng lại) thu gọn bên dưới."""
 
 from __future__ import annotations
 
@@ -11,13 +12,13 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.ui.icons import EMOJI_ICONS, icon
 from app.config.paths import VOICE_DIR
-from app.core.state import SPEAKER_COUNTS, TTS_LABELS, TTS_PROVIDERS, TTS_SOURCES
+from app.core.state import SPEAKER_COUNTS, TTS_LABELS, TTS_PROVIDERS, TTS_SOURCE_LABELS, TTS_SOURCES
 from app.services.tts.base import Voice
 from app.services.tts.generator import make_engine, preview_text, synthesize_cached, uses_language_list, voice_id_for
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, SliderRow, StatusLabel, SwitchRow, hint, pack_rows
+from app.ui.widgets.ui import button, relabel
 from app.core.languages import LocaleLabels
 from app.ui.progress_panel import friendly_error
 
@@ -27,7 +28,7 @@ SPEED_OPTIONS = ["0.8", "0.9", "0.95", "1.0", "1.05", "1.1", "1.15", "1.2", "1.3
 
 class TTSModule(BaseModule):
     key = "tts"
-    title = "TTS"
+    title = "Lồng tiếng"
     icon = "🔊"
     section = "tts"
 
@@ -39,30 +40,17 @@ class TTSModule(BaseModule):
         self._voice_by_label: dict[str, Voice] = {}
         self._engine = None
 
-        sec = Section(self, "Lồng tiếng đã tạo")
+        sec = Section(self, "Lồng tiếng")
         sec.pack(fill="x", pady=4)
-        lib = ctk.CTkFrame(sec.body, fg_color=T.BG_INPUT, corner_radius=8)
-        lib.pack(fill="x")
-        row = ctk.CTkFrame(lib, fg_color="transparent")
-        row.pack(fill="x", padx=8, pady=(8, 4))
-        ctk.CTkLabel(row, text=" THƯ VIỆN VOICE ĐÃ TẠO", image=icon(EMOJI_ICONS["🔒"], 14, dy=1), compound="left", font=T.font(11, "bold"), text_color=T.TEXT_DIM).pack(side="left")
-        ctk.CTkButton(row, text="Mở thư viện…", width=100, height=32, command=self._open_library, **T.primary_button()).pack(side="right")
-        ButtonRow(lib, [("📂 Chọn file voice cũ…", self._pick_voice, None), ("✕ Bỏ chọn", self._unpick_voice, None)]).pack(fill="x", padx=8, pady=(0, 4))
-        self.lib_status = StatusLabel(lib, "Chưa chọn voice cũ — render sẽ tạo giọng mới.")
-        self.lib_status.pack(fill="x", padx=8, pady=(0, 8))
         self.enable = SwitchRow(sec.body, "Thêm lồng tiếng vào video", on_change=s(cfg, "enable_tts", preview=False))
-        self.enable.pack(fill="x", pady=(8, 0))
-        hint(sec.body, "Bật để tạo giọng đọc AI hoặc dùng lại voice trộn vào video MP4.").pack(fill="x")
-
-        sec = Section(self, "Bộ đọc")
-        sec.pack(fill="x", pady=4)
-        self.provider = OptionRow(sec.body, "Dùng", TTS_PROVIDERS, labels=TTS_LABELS, on_change=self._provider_changed,
+        self.enable.pack(fill="x", pady=(0, 2))
+        self.source = OptionRow(sec.body, "Đọc từ", TTS_SOURCES, labels=TTS_SOURCE_LABELS,
+                                on_change=s(cfg, "tts_source", preview=False))
+        self.provider = OptionRow(sec.body, "Bộ đọc", TTS_PROVIDERS, labels=TTS_LABELS, on_change=self._provider_changed,
                                   info="VieNeu (khuyên dùng): giọng Việt chạy trên máy, miễn phí, không giới hạn lượt. "
-                                       "Edge TTS: cần mạng, nhiều thứ tiếng. Câu VieNeu đọc lỗi (đọc lại vẫn hỏng) "
-                                       "được đọc tạm bằng Edge thay vì để im lặng.")
-        self.source = OptionRow(sec.body, "Đọc từ", TTS_SOURCES, on_change=s(cfg, "tts_source", preview=False))
-        pack_rows(sec.body, [self.provider, self.source])
-        ButtonRow(sec.body, [("Tải danh sách giọng", lambda: self._load_voices(force=True), None)]).pack(fill="x", pady=(4, 0))
+                                       "Edge TTS: cần mạng, nhiều thứ tiếng. Câu VieNeu không đọc được (lỗi) thì đọc "
+                                       "tạm bằng Edge thay vì để im lặng; câu đọc chưa đạt thì VieNeu tự đọc lại.")
+        pack_rows(sec.body, [self.source, self.provider])
         self.provider_hint = hint(sec.body, "")
         self.provider_hint.pack(fill="x")
         self.vieneu_frame = ctk.CTkFrame(sec.body, fg_color="transparent")
@@ -79,14 +67,17 @@ class TTSModule(BaseModule):
         self.language = OptionRow(sec.body, "Ngôn ngữ", ["vi-VN"], on_change=self._language_changed, labels=LocaleLabels())
         self.voice = OptionRow(sec.body, "Giọng", ["(đang tải…)"], on_change=self._voice_changed)
         pack_rows(sec.body, [self.search, self.language, self.voice])
-        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button())]).pack(fill="x", pady=(4, 2))
+        ButtonRow(sec.body, [("▶ Nghe thử giọng", self._preview_voice, T.primary_button()),
+                             ("↻ Tải lại danh sách", lambda: self._load_voices(force=True), None)]).pack(fill="x", pady=(4, 2))
         self.voice_status = StatusLabel(sec.body, "")
         self.voice_status.pack(fill="x")
         self.speed = OptionRow(sec.body, "Tốc độ đọc", SPEED_OPTIONS, on_change=lambda v: self.set_value(cfg, "tts_speed", float(v), preview=False))
-        self.pitch = SliderRow(sec.body, "Cao độ (Edge)", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
+        self.speed.pack(fill="x", pady=3)
+        # cao độ chỉ Edge đổi được — VieNeu (mặc định) thì ẩn hẳn, không để thanh trượt bị khoá
+        self.pitch = SliderRow(sec.body, "Cao độ", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
                                on_change=s(cfg, "tts_pitch", cast=int, preview=False))
-        pack_rows(sec.body, [self.speed, self.pitch])
-        hint(sec.body, "Âm lượng lồng tiếng chỉnh ở tab «Video».").pack(fill="x")
+        self.volume_hint = hint(sec.body, "Âm lượng lồng tiếng chỉnh ở tab «Video».")
+        self.volume_hint.pack(fill="x")
 
         sec = Section(self, "Nhiều giọng theo người nói")
         sec.pack(fill="x", pady=4)
@@ -98,7 +89,7 @@ class TTSModule(BaseModule):
         self.speaker_count = OptionRow(self.multi_frame, "Số người nói", SPEAKER_COUNTS,
                                        on_change=s(cfg, "speaker_count", preview=False))
         self.speaker_count.pack(fill="x", pady=(6, 3))
-        ButtonRow(self.multi_frame, [("🎙 Nhận diện người nói", self._detect_speakers, T.primary_button()),
+        ButtonRow(self.multi_frame, [("🎙 Nhận diện người nói", self._detect_speakers, None),
                                      ("📝 Gán từng câu…", self._assign_speakers, None)]).pack(fill="x", pady=(4, 2))
         self.speaker_status = StatusLabel(self.multi_frame, "")
         self.speaker_status.pack(fill="x")
@@ -107,28 +98,53 @@ class TTSModule(BaseModule):
         self.speakers = SpeakerPanel(self.multi_frame, self)
         self.speakers.pack(fill="x", pady=(4, 0))
 
-        sec = Section(self, "Khớp thời gian", info="Giọng luôn khớp mềm với hình: câu được vào sớm một chút khi câu trước "
-                                                   "đã đọc xong, câu dài đọc nhanh dần (tối đa mức «Nén tối đa»), câu "
-                                                   "bị trễ đọc nhanh hơn để đuổi kịp hình. Câu vẫn tràn thì AI tự rút gọn "
-                                                   "bản dịch rồi đọc lại. Phụ đề dời theo đúng chỗ giọng đọc.")
+        sec = Section(self, "Giọng của video đang chọn")
+        sec.pack(fill="x", pady=4)
+        self.track_status = StatusLabel(sec.body, "")
+        self.track_status.pack(fill="x")
+        self.gen_btn = button(sec.body, "Tạo giọng cho video này", icon_name="sparkle", size="sm",
+                              command=self._generate_now,
+                              tip="Tạo giọng theo cấu hình hiện tại để nghe trước (Chuẩn bị / xuất video cũng tự tạo)")
+        self.gen_btn.pack(fill="x", pady=(4, 2))
+        hint(sec.body, "Câu không đổi lấy lại từ bộ nhớ nên tạo lại rất nhanh.").pack(fill="x")
+
+        sec = self.timing_sec = Section(self, "Khớp thời gian", collapsed=True,
+                                        info="Giọng luôn khớp mềm với hình: câu được vào sớm một chút khi câu trước "
+                                             "đã đọc xong, câu dài đọc nhanh dần (tối đa mức «Nén tối đa»), câu "
+                                             "bị trễ đọc nhanh hơn để đuổi kịp hình. Câu vẫn tràn thì AI tự rút gọn "
+                                             "bản dịch rồi đọc lại. Phụ đề dời theo đúng chỗ giọng đọc.")
         sec.pack(fill="x", pady=4)
         # trần TỔNG (tốc độ đọc × nén cho vừa khung) — quá 1,25× giọng méo, nuốt chữ (câu còn tràn: AI rút gọn bản dịch)
         self.max_tempo = SliderRow(sec.body, "Nén tối đa", from_=1.0, to=1.25, step=0.05, fmt="{:.2f}", suffix="×",
-                                   on_change=s(cfg, "max_tempo", cast=float, preview=False),
+                                   on_change=self._timing_changed("max_tempo"),
                                    info="Câu dài được đọc nhanh hơn tối đa bao nhiêu lần (tính cả tốc độ đọc). Quá 1,25× "
                                         "giọng dễ méo, nuốt chữ.")
         self.min_gap = SliderRow(sec.body, "Nghỉ giữa câu", from_=0, to=1, step=0.02, fmt="{:.2f}", suffix="s",
-                                 on_change=s(cfg, "min_gap", cast=float, preview=False),
+                                 on_change=self._timing_changed("min_gap"),
                                  info="Khoảng lặng tối thiểu giữa hai câu thoại.")
         pack_rows(sec.body, [self.max_tempo, self.min_gap])
 
-        sec = Section(self, "Dự án TTS")
+        sec = Section(self, "Giọng đã tạo", subtitle="dùng lại, không đọc lại", collapsed=True)
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("🎧 Tạo giọng cho video đang chọn", self._generate_now, T.primary_button()),
-                             ("Quản lý dự án TTS…", self._open_library, None)]).pack(fill="x", pady=2)
-        self.track_status = StatusLabel(sec.body, "")
-        self.track_status.pack(fill="x")
-        hint(sec.body, "Câu không đổi lấy lại từ bộ nhớ nên tạo lại rất nhanh.").pack(fill="x")
+        hint(sec.body, "Giữ nguyên giọng đã có của video, chỉ đổi nhạc / phụ đề / hiệu ứng: chọn một giọng đã tạo — xuất "
+                       "video sẽ dùng thẳng file đó, không tạo giọng mới.").pack(fill="x", pady=(0, 4))
+        ButtonRow(sec.body, [("Mở danh sách giọng đã tạo…", self._open_library, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("📂 Chọn file giọng…", self._pick_voice, None),
+                             ("✕ Thôi dùng", self._unpick_voice, None)]).pack(fill="x", pady=2)
+        self.lib_status = StatusLabel(sec.body, "")
+        self.lib_status.pack(fill="x", pady=(2, 0))
+
+    def _timing_changed(self, field: str):
+        setter = self.setter(self.state.tts, field, cast=float, preview=False)
+
+        def cb(v: float) -> None:
+            setter(v)
+            self._timing_summary()
+        return cb
+
+    def _timing_summary(self) -> None:
+        cfg = self.state.tts
+        self.timing_sec.set_subtitle(f"nén tối đa {min(cfg.max_tempo, 1.25):.2f}× · nghỉ {cfg.min_gap:.2f} s")
 
     # ── State → widget ────────────────────────────────────────────────────
     def refresh(self) -> None:
@@ -145,6 +161,7 @@ class TTSModule(BaseModule):
             self.pitch.set(cfg.tts_pitch)
             self.max_tempo.set(min(cfg.max_tempo, 1.25))
             self.min_gap.set(cfg.min_gap)
+            self._timing_summary()
             self.multi.set(cfg.multi_voice)
             self.speaker_count.set(cfg.speaker_count)
         finally:
@@ -163,16 +180,38 @@ class TTSModule(BaseModule):
                 and sub.translate_target != "Tiếng Việt"):
             self.voice_status.warn(f"VieNeu chỉ đọc tiếng Việt — đang dịch sang {sub.translate_target}: chọn "
                                    "«Edge TTS» + giọng đúng ngôn ngữ đó.")
+        self._show_track(item)
+
+    def _show_track(self, item) -> None:
+        """Giọng của video đang chọn: khớp cấu hình hiện tại / bản cũ (đã đổi giọng, tốc độ, lời thoại) / chưa có."""
         if item is None:
-            self.track_status.info("")
-            self.lib_status.info("Chưa chọn voice cũ — render sẽ tạo giọng mới.")
+            self.track_status.info("Chọn một video trong hàng đợi.")
+            self.lib_status.info("")
             return
-        if item.voice_path and Path(item.voice_path).exists():
-            self.track_status.ok(f"Đã có track: {Path(item.voice_path).name}")
-            self.lib_status.ok(f"Dùng voice: {Path(item.voice_path).name} — render sẽ KHÔNG gọi TTS.")
+        if item.voice_locked and item.voice_path and Path(item.voice_path).exists():
+            name = Path(item.voice_path).name
+            self.lib_status.ok(f"Đang dùng giọng có sẵn: {name} — xuất video không tạo giọng mới.")
+            self.track_status.ok(f"Dùng giọng có sẵn: {name} (đổi ở «Giọng đã tạo» bên dưới).")
+            relabel(self.gen_btn, "Tạo giọng cho video này")
+            return
+        self.lib_status.info("Chưa chọn — xuất video tự tạo giọng theo cấu hình ở trên.")
+        if not self.state.tts.enable_tts:
+            self.track_status.info("Lồng tiếng đang tắt.")
+            return
+        try:
+            path, fresh, _cut = self.window.pipeline_for(item).current_voice_track(item)
+        except Exception:                                  # noqa: BLE001 — chỉ là dòng trạng thái
+            path, fresh = None, False
+        if path is not None and fresh:
+            self.track_status.ok(f"Giọng khớp cấu hình hiện tại: {path.name}")
+            relabel(self.gen_btn, "Tạo lại giọng")
+        elif path is not None:
+            self.track_status.warn("Giọng đang nghe là bản cũ (đã đổi giọng, tốc độ hoặc lời thoại) — bấm «Tạo lại "
+                                   "giọng» để nghe bản mới. Xuất video cũng tự tạo lại.")
+            relabel(self.gen_btn, "Tạo lại giọng")
         else:
-            self.track_status.info("Chưa có track giọng cho video này.")
-            self.lib_status.info("Chưa chọn voice cũ — render sẽ tạo giọng mới.")
+            self.track_status.info("Chưa có giọng cho video này — bấm «Tạo giọng» để nghe trước, hoặc «Chuẩn bị».")
+            relabel(self.gen_btn, "Tạo giọng cho video này")
 
     def _layout_provider(self) -> None:
         p = self.state.tts.tts_provider
@@ -194,7 +233,11 @@ class TTSModule(BaseModule):
         else:
             if not self.language.winfo_ismapped():
                 self.language.pack(fill="x", pady=3, before=self.voice)
-        self.pitch.slider.configure(state="normal" if p == "Edge TTS" else "disabled")
+        if p == "Edge TTS":
+            if not self.pitch.winfo_ismapped():
+                self.pitch.pack(fill="x", pady=3, before=self.volume_hint)
+        else:
+            self.pitch.pack_forget()
 
     # ── Voices ────────────────────────────────────────────────────────────
     def _provider_changed(self, v: str) -> None:
@@ -311,7 +354,7 @@ class TTSModule(BaseModule):
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
         if not item.srt_path or not Path(item.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào mục STT bấm «Tạo phụ đề cho video đang chọn» "
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào tab Nhận diện bấm «Tạo phụ đề cho video đang chọn» "
                                                "(hoặc chọn file SRT) trước — máy dựa vào từng câu phụ đề để biết ai nói.")
             return
         if not onnx_available():
@@ -340,7 +383,7 @@ class TTSModule(BaseModule):
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
         if not item.srt_path or not Path(item.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc — nhận diện (STT) hoặc chọn file SRT trước.")
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc — nhận diện (tab Nhận diện) hoặc chọn file SRT trước.")
             return
         from app.ui.widgets.speaker_panel import SpeakerAssignDialog
 
@@ -407,12 +450,15 @@ class TTSModule(BaseModule):
         if item is None:
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
+        if not self.state.tts.enable_tts:
+            messagebox.showinfo("Edit Studio", "Bật «Thêm lồng tiếng vào video» ở đầu tab trước.")
+            return
         pipe = self.window.pipeline_for(item)
-        self.track_status.warn("Đang tạo track giọng… (xem log)")
+        self.track_status.warn("Đang tạo giọng… (xem tiến độ ở thanh dưới)")
 
         def work(cancel):
-            return pipe.generate_voice(item, progress=self.window.set_busy_progress, log=self.window.log_bg,
-                                       cancel=cancel, force=True)
+            # cùng đường với Chuẩn bị (tính cả Cắt, khớp thời lượng) → xuất video dùng lại đúng track này
+            return pipe.voice_now(item, progress=self.window.set_busy_progress, log=self.window.log_bg, cancel=cancel)
 
         def done(result, error):
             if error:
@@ -420,6 +466,8 @@ class TTSModule(BaseModule):
             else:
                 self.on_active_changed()
                 self.state.mark_dirty()
+                self.window.queue_update(item)
+                self.window.preview.schedule_refresh(0)
                 self.window.add_notification("Tạo giọng xong", f"{item.name}: {Path(str(result)).name}", "ok")
 
         self.window.run_task("Tạo giọng", work, done)
@@ -453,20 +501,22 @@ class TTSModule(BaseModule):
                         item.srt_path = srt
             except Exception:
                 pass
+        item.voice_locked = True                      # xuất video dùng thẳng file này, không tạo giọng mới
         self.state.tts.enable_tts = True
         self.state.config_changed("tts")
         self.refresh()
         self.window.queue_update(item)
-        self.window.log(f"Dùng voice: {Path(path).name}")
+        self.window.log(f"Dùng giọng có sẵn: {Path(path).name}")
 
     def _unpick_voice(self) -> None:
         item = self.state.active
         if item is None:
             return
-        item.voice_path = None
+        item.voice_path, item.voice_locked = None, False
         self.state.mark_dirty()
         self.on_active_changed()
         self.window.queue_update(item)
+        self.window.preview.schedule_refresh(0)
 
     def _open_library(self) -> None:
         from app.ui.widgets.voice_library import VoiceLibraryDialog

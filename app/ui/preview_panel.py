@@ -92,6 +92,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._clip: dict | None = None                  # đang phát bản render thử
         self._restart_id: str | None = None
         self.state.on("config_changed", self._config_changed)
+        self.state.on("videos_changed", self._update_nav)
 
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -116,6 +117,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def destroy(self) -> None:
         self.state.off("config_changed", self._config_changed)    # dựng lại giao diện (đổi theme) → gỡ listener cũ
+        self.state.off("videos_changed", self._update_nav)
         try:
             self.player.stop()
         except Exception:
@@ -207,7 +209,7 @@ class PreviewPanel(ctk.CTkFrame):
         self.full_btn = button(tools, "Rộng hết", size="sm", command=lambda: self._quick_align("full"),
                                tip="Kéo khung phụ đề rộng hết khung hình (ít xuống dòng nhất)")
         self.full_btn.pack(side="left", padx=1)
-        self.del_btn = button(tools, "Xóa", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
+        self.del_btn = button(tools, "Xoá", icon_name="trash", variant="destructive", size="sm", command=self.delete_selection,
                               tip="Xoá ô che đang chọn · đang ở khung phụ đề thì tắt phụ đề (Delete)")
         self.del_btn.pack(side="left", padx=(8, 1))
         # Sub/Blur đổi chữ (Sub ↔ Sub ẩn): lấy bề rộng của nhãn dài hơn để nút không nhảy
@@ -215,12 +217,23 @@ class PreviewPanel(ctk.CTkFrame):
                                  width=button_width(tools, "Sub ẩn", size="sm", icon=True),
                                  tip="Ẩn / hiện phụ đề trên khung xem trước (Shift+T) — không ảnh hưởng video xuất")
         self.sub_toggle.pack(side="left", padx=(8, 1))
-        self.blur_toggle = button(tools, "Blur", icon_name="eye", size="sm", command=self._toggle_blur,
-                                  width=button_width(tools, "Blur ẩn", size="sm", icon=True),
+        self.blur_toggle = button(tools, "Che mờ", icon_name="eye", size="sm", command=self._toggle_blur,
+                                  width=button_width(tools, "Che mờ ẩn", size="sm", icon=True),
                                   tip="Ẩn / hiện ô che mờ trên khung xem trước — không ảnh hưởng video xuất")
         self.blur_toggle.pack(side="left", padx=1)
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.pack(side="right")
+        nav = self._nav = ctk.CTkFrame(self, fg_color="transparent")     # đặt vào thanh phát ở _build_timeline
+        self.vid_prev = button(nav, "‹", variant="ghost", size="sm", width=28, command=lambda: self._step_video(-1),
+                               tip="Video trước trong hàng đợi")
+        self.vid_prev.configure(font=T.font(17, "bold"))
+        self.vid_prev.pack(side="left")
+        self.vid_label = ctk.CTkLabel(nav, text="", font=T.font(11), text_color=T.TEXT_DIM, width=40)
+        self.vid_label.pack(side="left")
+        self.vid_next = button(nav, "›", variant="ghost", size="sm", width=28, command=lambda: self._step_video(1),
+                               tip="Video kế trong hàng đợi")
+        self.vid_next.configure(font=T.font(17, "bold"))
+        self.vid_next.pack(side="left")
         self.meta = ctk.CTkLabel(right, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="e")
         self.meta.pack(side="left", padx=(0, 10))
         button(right, "", icon_name="fit", variant="ghost", size="sm", command=lambda: self.set_zoom(None), tip="Vừa khung (Ctrl+0)").pack(side="right", padx=1)
@@ -248,7 +261,7 @@ class PreviewPanel(ctk.CTkFrame):
         ctrl = ctk.CTkFrame(box, fg_color="transparent")
         ctrl.grid(row=2, column=0, sticky="ew", padx=4)
         self.ctrl = ctrl
-        self.play_btn = button(ctrl, "Phát", icon_name="play", variant="primary", size="sm", command=self.toggle_play,
+        self.play_btn = button(ctrl, "Phát", icon_name="play", variant="secondary", size="sm", command=self.toggle_play,
                                width=button_width(ctrl, "Dừng", size="sm", icon=True) + 12, tip="Phát / dừng xem trước (Space)")
         self.play_btn.pack(side="left")
         button(ctrl, "", icon_name="skipback", size="sm", command=lambda: self.seek(0.0), tip="Về đầu video (Home)").pack(side="left", padx=(6, 1))
@@ -269,10 +282,14 @@ class PreviewPanel(ctk.CTkFrame):
         # ít dùng → nằm trong menu ⋯ (giữ đối tượng nút để mã cũ đổi nhãn không lỗi, chỉ không hiện)
         self.ext_btn = button(ctrl, "", icon_name="export", size="sm", command=self._open_external)
         self.wave_btn = button(ctrl, "Sóng âm", icon_name="wave", size="sm", command=self.load_waveform)
-        self.clip_btn = button(ctrl, "Render thử", icon_name="film", size="sm", command=self.render_clip,
+        self.clip_btn = button(ctrl, "Xuất thử", icon_name="film", size="sm", command=self.render_clip,
                                tip=f"Xuất thử {CLIP_SECONDS} giây từ chỗ đang xem rồi phát ngay — giống hệt file sẽ xuất")
         self.clip_btn.pack(side="right", padx=(0, 4))
-        self.fx_btn = button(ctrl, "Hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx)
+        # ‹ 2/5 ›: đổi video ngay trên thanh phát, ở tab nào cũng được (khỏi quay về tab Video)
+        self._nav.pack(in_=ctrl, side="right", padx=(0, 8))
+        self._nav.lift()
+        self.fx_btn = button(ctrl, "Xem hiệu ứng", icon_name="eye", size="sm", command=self.toggle_fx,
+                             tip="Phát có / không áp màu, hiệu ứng (tắt cho mượt trên máy yếu) — không ảnh hưởng video xuất")
         for b in (self.wave_btn, self.clip_btn, self.fx_btn):
             self._full_w[b] = b.cget("width")
         # chữ của câu phụ đề xếp sau cùng: thiếu chỗ thì nó co lại, các nút không bị đẩy ra ngoài
@@ -361,14 +378,24 @@ class PreviewPanel(ctk.CTkFrame):
         elif self._top_rows == 2 and self.tools.winfo_ismapped():
             self.bar_label.pack(side="left", padx=(0, 10), before=self._bar_first())
         labels = {self.center_btn: "Căn giữa", self.full_btn: "Rộng hết",
-                  self.del_btn: "Xóa", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
-                  self.blur_toggle: "Blur" if self.show_blur else "Blur ẩn", self.wave_btn: "Sóng âm",
-                  self.clip_btn: "Render thử", self.fx_btn: "Hiệu ứng" if self.fx_play else "Hiệu ứng tắt",
+                  self.del_btn: "Xoá", self.sub_toggle: "Sub" if self.show_sub else "Sub ẩn",
+                  self.blur_toggle: "Che mờ" if self.show_blur else "Che mờ ẩn", self.wave_btn: "Sóng âm",
+                  self.clip_btn: "Xuất thử", self.fx_btn: "Xem hiệu ứng" if self.fx_play else "Không xem hiệu ứng",
                   **{b: key for key, b in self.tool_btns.items()}}
+        short = {self.center_btn: "Giữa", self.full_btn: "Rộng"}       # nút không có icon: khung hẹp vẫn còn chữ ngắn
         for b, label in labels.items():
+            if b in short:
+                relabel(b, short[b] if compact else label, width=None if compact else self._full_w[b])
+                continue
             relabel(b, "" if compact else label, width=32 if compact else self._full_w[b])
         self.time_label.configure(width=90 if compact else 150, font=T.mono(10 if compact else 11))
-        self.vol.configure(width=60 if compact else 90)
+        # khung hẹp: bỏ thanh âm lượng (còn nút tắt tiếng) + số «2/5» (còn ‹ ›) để nút đổi video không bị đè
+        if compact:
+            self.vol.pack_forget()
+            self.vid_label.pack_forget()
+        else:
+            self.vol.pack(side="left", padx=4, after=self.mute_btn)
+            self.vid_label.pack(side="left", after=self.vid_prev)
         for c in (*self.chips.values(), *self.sub_chips.values()):
             c.refresh()                                   # chip tự rộng theo chữ (không ép cỡ cố định → không cắt chữ)
         self.meta.configure(text="" if compact else self._meta_text)
@@ -381,7 +408,23 @@ class PreviewPanel(ctk.CTkFrame):
                 pass
 
     # ── Public API ───────────────────────────────────────────────────────
+    def _step_video(self, d: int) -> None:
+        vids = self.state.videos
+        if vids:
+            self.state.set_active(max(0, min(len(vids) - 1, self.state.active_index + d)))
+
+    def _update_nav(self) -> None:
+        """‹ 2/5 ›: vị trí video đang xem trong hàng đợi (rê chuột vào số để xem tên)."""
+        try:
+            n, i = len(self.state.videos), self.state.active_index
+            self.vid_label.configure(text=f"{i + 1}/{n}" if n and i >= 0 else "")
+            self.vid_prev.configure(state="normal" if n > 1 and i > 0 else "disabled")
+            self.vid_next.configure(state="normal" if n > 1 and i < n - 1 else "disabled")
+        except Exception:                            # noqa: BLE001 — giao diện đang dựng lại
+            pass
+
     def set_item(self, item: VideoItem | None) -> None:
+        self._update_nav()
         self.stop_play()
         self._clip = None
         self.item = item
@@ -523,7 +566,7 @@ class PreviewPanel(ctk.CTkFrame):
             mods = stages_mod.collect(self.state, item, info, include_blur=show_blur)
             eff = mods.info
             pipe = self.window.pipeline
-            cues = pipe.preview_sub_cues(item, pipe.current_voice_track(item, info.duration)[0])
+            cues = pipe.preview_sub_cues(item, *pipe.current_voice_track(item, info.duration)[:2])
             c = cue_at(cues, t)
             if c is not None:
                 cue_text = c.plain + (f"  ⟂ {c.meta.get('secondary')}" if c.meta.get("secondary") else "")
@@ -668,7 +711,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _toggle_blur(self) -> None:
         self.show_blur = not self.show_blur
-        self.blur_toggle.configure(text="" if self._compact else ("Blur" if self.show_blur else "Blur ẩn"),
+        self.blur_toggle.configure(text="" if self._compact else ("Che mờ" if self.show_blur else "Che mờ ẩn"),
                                    image=button_icon("eye" if self.show_blur else "hide", size="sm", with_text=not self._compact),
                                    fg_color=T.BG_ELEVATED if self.show_blur else T.DANGER_SOFT)
         self.schedule_refresh(0)
@@ -843,7 +886,7 @@ class PreviewPanel(ctk.CTkFrame):
                 active = i == self.state.blur.active_index
                 col = "#F59E0B" if active else "#FDE68A"
                 self._ov_rectangle(x0, y0, x1, y1, outline=col, width=3 if active else 1, dash=() if active else (4, 3))
-                self._ov_text(x0 + 6, y0 + 4, text=f"Blur {i + 1}", fill=col, anchor="nw", font=(T.UI_FONT, 10, "bold"))
+                self._ov_text(x0 + 6, y0 + 4, text=f"Vùng {i + 1}", fill=col, anchor="nw", font=(T.UI_FONT, 10, "bold"))
                 if active and self.tool == "B":
                     self._draw_handles(x0, y0, x1, y1, col)
                     self._draw_delete_badge("blur", i, x1, y0)
@@ -1202,7 +1245,8 @@ class PreviewPanel(ctk.CTkFrame):
         if kind == "blur":
             rs = self.state.blur.regions
             if idx is None or not (0 <= idx < len(rs)):
-                self.window.log("Chưa chọn vùng che nào để xóa — bấm vào vùng trên khung xem trước (công cụ B).")
+                self.window.log("Chưa chọn vùng che nào để xoá — bấm vào vùng trên khung xem trước (công cụ B).",
+                                notice=True)
                 return
             self._snapshot()
             del rs[idx]
@@ -1277,7 +1321,7 @@ class PreviewPanel(ctk.CTkFrame):
             return
         self._configure_spec(announce=True)
         self._play_from(self.t)
-        self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
+        self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.TEXT))
 
     def _configure_spec(self, announce: bool = False) -> None:
         """Chụp cấu hình hiện tại cho lần phát: hình qua đủ filter, tiếng = âm gốc + giọng lồng + nhạc nền."""
@@ -1285,7 +1329,7 @@ class PreviewPanel(ctk.CTkFrame):
 
         pipe = self.window.pipeline
         voice, fresh, trimmed = pipe.current_voice_track(self.item, self.info.duration)
-        cues = pipe.preview_sub_cues(self.item, voice) if self.show_sub else []
+        cues = pipe.preview_sub_cues(self.item, voice, fresh) if self.show_sub else []
         self._cues_cache = cues
         self.player.effects_failed = ""
         try:
@@ -1302,10 +1346,10 @@ class PreviewPanel(ctk.CTkFrame):
         if tts.enable_tts and not vcfg.mute:
             if voice is None:
                 self.window.progress.notice("Chưa có giọng lồng cho video này",
-                                            "bấm «Render thử» để tạo giọng cho đoạn đang xem, hoặc «Tạo giọng» ở tab TTS")
+                                            "bấm «Xuất thử» để tạo giọng cho đoạn đang xem, hoặc «Tạo giọng» ở tab Lồng tiếng")
             elif not fresh:
                 self.window.progress.notice("Đang nghe giọng lồng cũ",
-                                            "cài đặt đã đổi — bấm «Render thử» để nghe đúng bản mới")
+                                            "cài đặt đã đổi — bấm «Xuất thử» hoặc «Tạo lại giọng» (tab Lồng tiếng) để nghe đúng bản mới")
 
     def _config_changed(self, section: str = "") -> None:
         """Đổi cài đặt lúc đang phát → phát lại từ chỗ đang xem với cài đặt mới (gom các thay đổi liên tiếp).
@@ -1329,7 +1373,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def toggle_fx(self) -> None:
         self.fx_play = not self.fx_play
-        relabel(self.fx_btn, "" if self._compact else ("Hiệu ứng" if self.fx_play else "Hiệu ứng tắt"),
+        relabel(self.fx_btn, "" if self._compact else ("Xem hiệu ứng" if self.fx_play else "Không xem hiệu ứng"),
                 width=32 if self._compact else self._full_w[self.fx_btn])
         self.fx_btn.configure(image=button_icon("eye" if self.fx_play else "hide", size="sm", with_text=not self._compact))
         if self.player.playing and self._clip is None:
@@ -1340,6 +1384,9 @@ class PreviewPanel(ctk.CTkFrame):
     def render_clip(self) -> None:
         if self.item is None or self.info is None:
             return
+        srt = self.window.modules.get("srt")
+        if srt is not None and srt.editor.item is self.item and srt.editor.dirty():
+            srt.editor.save(regen=False)             # câu sửa dở → bản xuất thử dùng chữ mới
         self.stop_play()
         item, t = self.item, self.t
 
@@ -1357,10 +1404,10 @@ class PreviewPanel(ctk.CTkFrame):
             self._cues_cache = []
             self._live = None
             self._play_from(0.0)
-            self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.ON_ACCENT))
-            self.window.progress.notice("Đang phát bản render thử", "giống hệt file sẽ xuất · bấm Dừng ở thanh phát để quay lại")
+            self.play_btn.configure(text="Dừng", image=button_icon("stop", size="sm", color=T.TEXT))
+            self.window.progress.notice("Đang phát bản xuất thử", "giống hệt file sẽ xuất · bấm Dừng ở thanh phát để quay lại")
 
-        self.window.run_task("Xem thử bản render", work, done)
+        self.window.run_task("Xuất thử", work, done)
 
     def _exit_clip(self) -> None:
         clip, self._clip = self._clip, None
@@ -1389,7 +1436,7 @@ class PreviewPanel(ctk.CTkFrame):
             except Exception:
                 pass
             self._poll_id = None
-        self.play_btn.configure(text="Phát", image=button_icon("play", size="sm", color=T.ON_ACCENT))
+        self.play_btn.configure(text="Phát", image=button_icon("play", size="sm", color=T.TEXT))
         self._live = None
         if self.item is not None:
             self.schedule_refresh(0)

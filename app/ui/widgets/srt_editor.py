@@ -55,7 +55,7 @@ class SRTEditorDialog(ctk.CTkToplevel):
         self.box.grid(row=2, column=0, sticky="nsew", padx=10)
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
-        self.status = ctk.CTkLabel(foot, text="Chỉ cue đã sửa sẽ được tạo lại giọng ở lần render kế tiếp", font=T.font(11),
+        self.status = ctk.CTkLabel(foot, text="Chỉ câu đã sửa được đọc lại giọng ở lần xuất / Chuẩn bị kế tiếp", font=T.font(11),
                                    text_color=T.TEXT_MUTED, anchor="w")
         self.status.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(foot, text="Lưu  Ctrl+S", width=160, height=36, command=self._save, **T.primary_button()).pack(side="right")
@@ -74,7 +74,7 @@ class SRTEditorDialog(ctk.CTkToplevel):
         if p and Path(p).exists():
             try:
                 self.box.insert("1.0", to_srt(load_srt(p)))
-                self.status.configure(text=f"{Path(p).name} — chỉ cue đã sửa sẽ được tạo lại giọng ở lần render kế tiếp")
+                self.status.configure(text=f"{Path(p).name} — chỉ câu đã sửa được đọc lại giọng ở lần xuất / Chuẩn bị kế tiếp")
             except Exception as exc:
                 self.status.configure(text=f"Không đọc được: {exc}")
         else:
@@ -128,18 +128,18 @@ class SRTEditorDialog(ctk.CTkToplevel):
     def _save(self) -> None:
         cues = parse_srt(self.box.get("1.0", "end"))
         if not cues:
-            self.status.configure(text="Nội dung không có cue hợp lệ.")
+            self.status.configure(text="Nội dung không có câu hợp lệ.")
             return
         p = self._path()
         if not p:
             suffix = ".dich.srt" if self.target.get() == "Bản dịch" else ".srt"
-            p = str(SUBS_DIR / f"{self.item.stem}{suffix}")
+            p = str(SUBS_DIR / f"{self.window.pipeline.file_stem(self.item)}{suffix}")
             if self.target.get() == "Bản dịch":
                 self.item.srt_translated_path = p
             else:
                 self.item.srt_path = p
         save_srt(cues, p)
-        self.status.configure(text=f"Đã lưu {Path(p).name} · {len(cues)} cue")
+        self.status.configure(text=f"Đã lưu {Path(p).name} · {len(cues)} câu")
         self.window.app_state.mark_dirty()
         if self.on_saved:
             self.on_saved()
@@ -261,7 +261,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
                 for w, _kw in row["widgets"]:
                     w.grid_remove()
         if idxs:
-            self.page_label.configure(text=f"Trang {self.page + 1}/{self.pages} · cue {idxs[0] + 1}–{idxs[-1] + 1}")
+            self.page_label.configure(text=f"Trang {self.page + 1}/{self.pages} · câu {idxs[0] + 1}–{idxs[-1] + 1}")
         self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.page < self.pages - 1 else "disabled")
         try:
@@ -299,7 +299,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         self._sync_page()
         idxs = [i for i, v in enumerate(self.checked) if v]
         if not idxs:
-            messagebox.showinfo("Dịch AI", "Tick các cue cần dịch trước.")
+            messagebox.showinfo("Dịch AI", "Tick các câu cần dịch trước.")
             return
         from app.services.translate_router import retranslate
 
@@ -309,11 +309,11 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         redo = any(previous[i].strip() for i in idxs)     # đã có bản dịch → AI xem bản cũ để dịch lại
         req = self.ai_req.get().strip()
         style = cfg.translate_style
-        self.status.configure(text=f"Đang {'dịch lại' if redo else 'dịch'} {len(idxs)} cue…")
+        self.status.configure(text=f"Đang {'dịch lại' if redo else 'dịch'} {len(idxs)} câu…")
 
         def work(cancel):
             return retranslate(self.cues, previous, idxs, settings=st, target=cfg.translate_target,
-                               source_hint=cfg.translate_source, style=style, instruction=req,
+                               source_hint=cfg.source_hint, style=style, instruction=req,
                                log=self.window.log_bg, cancel=cancel)
 
         def done(result, error):
@@ -326,7 +326,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
             for i, t in result.items():
                 self.translated[i] = t
             self._show_page(self.page, sync=False)
-            self.status.configure(text=f"Đã {'dịch lại' if redo else 'dịch'} AI {len(result)} cue — kiểm tra rồi bấm Lưu.")
+            self.status.configure(text=f"Đã {'dịch lại' if redo else 'dịch'} AI {len(result)} câu — kiểm tra rồi bấm Lưu.")
 
         self.window.run_task("Dịch AI đã chọn", work, done)
 
@@ -336,7 +336,7 @@ class ManualTranslateDialog(ctk.CTkToplevel):
         for i, c in enumerate(self.cues):
             t = self.translated[i].strip() or c.text
             out.append(Cue(c.index, c.start, c.end, t, dict(c.meta)))
-        p = self.item.srt_translated_path or str(SUBS_DIR / f"{self.item.stem}.dich.srt")
+        p = self.item.srt_translated_path or str(self.window.pipeline.translated_path(self.item))
         save_srt(out, p)
         self.item.srt_translated_path = p
         self.window.app_state.mark_dirty()

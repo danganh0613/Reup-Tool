@@ -42,7 +42,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         self.window = window
         self.module = module
         self.selected: dict | None = None
-        self.title("Voice đã tạo gần đây")
+        self.title("Giọng đã tạo")
         self.geometry("1000x740")
         self.after(50, self.lift)
         self.grid_columnconfigure(0, weight=1)
@@ -50,8 +50,8 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
 
         head = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=8)
         head.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(head, text="Chọn một bản lồng tiếng đã tạo để dùng lại", font=T.font(14, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
-        ctk.CTkLabel(head, text="Render sẽ bake thẳng file này vào MP4 và KHÔNG gọi TTS — dùng để đổi nhạc, phụ đề hay hiệu ứng "
+        ctk.CTkLabel(head, text="Chọn một giọng đã tạo để dùng lại", font=T.font(14, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
+        ctk.CTkLabel(head, text="Xuất video sẽ dùng thẳng file giọng này, không đọc lại — để đổi nhạc, phụ đề hay hiệu ứng "
                                 "mà giữ nguyên giọng.", font=T.font(11), text_color=T.TEXT_DIM, anchor="w", wraplength=940,
                      justify="left").pack(fill="x", padx=12, pady=(2, 4))
         self.use_srt = ctk.BooleanVar(value=True)
@@ -67,12 +67,12 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         self.status = ctk.CTkLabel(foot, text="", font=T.font(11), text_color=T.TEXT_MUTED)
         self.status.pack(side="left")
         ctk.CTkButton(foot, text="Đóng", width=90, height=32, command=self.destroy, **T.secondary_button()).pack(side="right")
-        self.use_btn = ctk.CTkButton(foot, text="Dùng voice này", width=130, height=32, command=self._use, **T.primary_button())
+        self.use_btn = ctk.CTkButton(foot, text="Dùng giọng này", width=130, height=32, command=self._use, **T.primary_button())
         self.use_btn.pack(side="right", padx=6)
         ctk.CTkButton(foot, text="Mở thư mục", width=100, height=32, command=lambda: open_path(str(VOICE_DIR)), **T.secondary_button()).pack(side="right", padx=6)
         button(foot, "Nghe", icon_name="play", size="sm", command=self._play).pack(side="right", padx=6)
-        ctk.CTkButton(foot, text="Xóa tất cả…", width=100, height=32, command=self._delete_all, **T.danger_button()).pack(side="right", padx=6)
-        button(foot, "Xóa voice", icon_name="trash", variant="destructive", size="sm", command=self._delete).pack(side="right", padx=6)
+        ctk.CTkButton(foot, text="Xoá tất cả…", width=100, height=32, command=self._delete_all, **T.danger_button()).pack(side="right", padx=6)
+        button(foot, "Xoá giọng này", icon_name="trash", variant="destructive", size="sm", command=self._delete).pack(side="right", padx=6)
         self.refresh()
 
     def refresh(self) -> None:
@@ -82,8 +82,8 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         items = list_voices()
         self.status.configure(text=f"{len(items)} track" if items else "Lịch sử trống.")
         if not items:
-            ctk.CTkLabel(self.list, text="Chưa có bản lồng tiếng nào.\nRender một video có bật «Lồng tiếng» hoặc bấm "
-                                         "«Tạo giọng cho video đang chọn» là file voice sẽ tự xuất hiện ở đây.",
+            ctk.CTkLabel(self.list, text="Chưa có giọng nào.\nXuất / Chuẩn bị một video có bật lồng tiếng, hoặc bấm "
+                                         "«Tạo giọng cho video này» (tab Lồng tiếng) là giọng sẽ hiện ở đây.",
                          font=T.font(12), text_color=T.TEXT_DIM, justify="left").pack(pady=30)
             return
         for it in items:
@@ -113,7 +113,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
 
     def _use(self) -> None:
         if not self.selected:
-            messagebox.showinfo("Edit Studio", "Chọn một voice trong danh sách.")
+            messagebox.showinfo("Edit Studio", "Chọn một giọng trong danh sách.")
             return
         self.module.use_voice(str(self.selected["path"]), use_srt=self.use_srt.get())
         self.destroy()
@@ -129,7 +129,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
         if not self.selected:
             return
         p = self.selected["path"]
-        if messagebox.askyesno("Xóa voice", f"Xoá {p.name}?"):
+        if messagebox.askyesno("Xoá giọng", f"Xoá {p.name}?"):
             for f in (p, *(p.with_suffix(x) for x in SIDE_FILES)):
                 try:
                     f.unlink()
@@ -139,7 +139,7 @@ class VoiceLibraryDialog(ctk.CTkToplevel):
             self.refresh()
 
     def _delete_all(self) -> None:
-        if messagebox.askyesno("Xóa tất cả", "Xoá toàn bộ voice đã tạo trong output/voice?"):
+        if messagebox.askyesno("Xoá tất cả", "Xoá toàn bộ giọng đã tạo trong output/voice?"):
             for it in list_voices():
                 for f in (it["path"], *(it["path"].with_suffix(x) for x in SIDE_FILES)):
                     try:

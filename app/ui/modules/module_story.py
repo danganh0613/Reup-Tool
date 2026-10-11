@@ -43,7 +43,7 @@ class StoryModule(BaseModule):
         self.name = EntryRow(sec.body, "Tên", placeholder="Tên câu chuyện", on_change=self._name_changed)
         self.name.pack(fill="x", pady=3)
         ButtonRow(sec.body, [
-            ("＋ Mới", self._new_project, T.primary_button()),
+            ("＋ Mới", self._new_project, None),
             ("📂 Mở…", self._open_project, None),
             ("💾 Lưu", self._save_project, None),
             ("📁 Thư mục", self._open_folder, None),
@@ -51,14 +51,43 @@ class StoryModule(BaseModule):
         self.proj_status = StatusLabel(sec.body, "Chưa mở dự án.")
         self.proj_status.pack(fill="x")
 
-        # ── Ý tưởng ──────────────────────────────────────────────────────
-        sec = Section(self, "Ý tưởng & kịch bản")
+        # ── Chủ đề + chạy: việc chính ở đầu trang, cài đặt chi tiết thu gọn bên dưới ──
+        sec = Section(self, "Chủ đề")
         sec.pack(fill="x", pady=4)
-        ctk.CTkLabel(sec.body, text="Chủ đề / ý tưởng (để trống = AI tự chọn theo phong cách kênh)",
+        ctk.CTkLabel(sec.body, text="Ý tưởng câu chuyện (để trống = AI tự chọn theo phong cách kênh)",
                      font=T.font(11), text_color=T.TEXT_MUTED, anchor="w").pack(fill="x")
         self.topic = ctk.CTkTextbox(sec.body, height=90, font=T.font(12), wrap="word")
-        self.topic.pack(fill="x", pady=(2, 4))
+        self.topic.pack(fill="x", pady=(2, 6))
         self.topic.bind("<FocusOut>", lambda _e: self._topic_changed())
+        button(sec.body, "Chạy tất cả (1 → 5)", icon_name="sparkle", command=self._run_all, variant="primary",
+               tip="Viết kịch bản → giọng → ảnh → (clip AI nếu bật) → ghép video").pack(fill="x", pady=(0, 2))
+        ButtonRow(sec.body, [
+            ("📝 Trình soạn kịch bản", self.open_editor, None),
+            ("➕ Đưa vào hàng đợi", self._to_queue, None),
+        ]).pack(fill="x", pady=(2, 2))
+        self.auto_queue = SwitchRow(sec.body, "Tự đưa vào hàng đợi sau khi ghép", on_change=s(cfg, "auto_queue", preview=False))
+        self.auto_queue.pack(fill="x", pady=2)
+        self.run_status = StatusLabel(sec.body, "")
+        self.run_status.pack(fill="x")
+        hint(sec.body, "Video ghép xong vào hàng đợi kèm phụ đề — chỉnh tiếp như video thường.").pack(fill="x", pady=(2, 0))
+
+        sec = Section(self, "Từng bước", subtitle="chạy lại riêng một bước", collapsed=True)
+        sec.pack(fill="x", pady=4)
+        steps = [
+            ("1 · Viết kịch bản (AI)", self._step_script),
+            ("2 · Tạo giọng đọc", self._step_voices),
+            ("3 · Tạo ảnh (AI)", self._step_images),
+            ("4 · Tạo clip AI cho cảnh chưa có (tuỳ chọn)", self._step_videos),
+            ("5 · Ghép thành video", self._step_assemble),
+            ("6 · Tiêu đề, mô tả YouTube (AI)", self._step_metadata),
+        ]
+        for text, cmd in steps:
+            ctk.CTkButton(sec.body, text=text, command=cmd, height=32, anchor="w", **T.secondary_button()).pack(
+                fill="x", pady=2)
+
+        # ── Kịch bản ─────────────────────────────────────────────────────
+        sec = self.script_sec = Section(self, "Kịch bản", collapsed=True)
+        sec.pack(fill="x", pady=4)
         self.language = OptionRow(sec.body, "Ngôn ngữ", LANGUAGES, on_change=s(cfg, "language", preview=False))
         self.length = OptionRow(sec.body, "Độ dài", [v[0] for v in LENGTHS.values()], on_change=self._length_changed)
         self.tone = OptionRow(sec.body, "Giọng văn", TONES, on_change=s(cfg, "tone", preview=False))
@@ -67,10 +96,12 @@ class StoryModule(BaseModule):
         self.competitor = OptionRow(sec.body, "Phong cách kênh", ["(không)"], on_change=self._competitor_changed)
         self.text_model = ComboRow(sec.body, "Model viết", text_models(), on_change=s(cfg, "text_model", preview=False))
         pack_rows(sec.body, [self.language, self.length, self.tone, self.genre, self.competitor, self.text_model])
+        self.comp_note = StatusLabel(sec.body, "")        # chọn phong cách kênh → ghi rõ đã đổi những gì
+        self.comp_note.pack(fill="x")
         ButtonRow(sec.body, [("🏷 Quản lý phong cách kênh…", self._manage_competitors, None)]).pack(fill="x", pady=(4, 0))
 
         # ── Hình ảnh ─────────────────────────────────────────────────────
-        sec = Section(self, "Hình ảnh")
+        sec = self.image_sec = Section(self, "Hình ảnh", collapsed=True)
         sec.pack(fill="x", pady=4)
         self.prompt_preset = OptionRow(sec.body, "Phong cách ảnh", [v[0] for v in MASTER_PROMPTS.values()],
                                        on_change=self._prompt_preset_changed)
@@ -88,7 +119,7 @@ class StoryModule(BaseModule):
         self.prompt_preview = hint(sec.body, "")
         self.prompt_preview.pack(fill="x", pady=(2, 0))
 
-        sec = Section(self, "Video AI (Veo)", subtitle="tuỳ chọn, tốn phí API")
+        sec = Section(self, "Clip AI (Veo)", subtitle="tuỳ chọn, tốn phí API", collapsed=True)
         sec.pack(fill="x", pady=4)
         self.use_video = SwitchRow(sec.body, "Tạo clip AI thay cho ảnh tĩnh", on_change=s(cfg, "use_ai_video", preview=False))
         self.video_model = ComboRow(sec.body, "Model video", video_models(), on_change=s(cfg, "video_model", preview=False))
@@ -98,40 +129,15 @@ class StoryModule(BaseModule):
         hint(sec.body, "Clip AI làm từ ảnh của cảnh, lặp cho đủ lời kể.").pack(fill="x")
 
         # ── Giọng kể ─────────────────────────────────────────────────────
-        sec = Section(self, "Giọng kể mặc định", subtitle="nhân vật có giọng riêng: xem «Nhân vật & giọng»")
+        sec = self.voice_sec = Section(self, "Giọng kể", collapsed=True)
         sec.pack(fill="x", pady=4)
+        hint(sec.body, "Nhân vật có giọng riêng: mở «Trình soạn kịch bản» › «Nhân vật & giọng».").pack(fill="x", pady=(0, 2))
         self.voice = VoicePicker(sec.body, self.window, get=self._voice_get, set_=self._voice_set,
                                  speed=lambda: self.state.story.speed)
         self.voice.pack(fill="x")
         self.speed = SliderRow(sec.body, "Tốc độ", from_=0.5, to=2.0, step=0.05, fmt="{:.2f}", suffix="×",
                                on_change=s(cfg, "speed", cast=float, preview=False))
         self.speed.pack(fill="x", pady=3)
-
-        # ── Thực hiện ────────────────────────────────────────────────────
-        sec = Section(self, "Thực hiện")
-        sec.pack(fill="x", pady=4)
-        steps = [
-            ("1 · Viết kịch bản (AI)", self._step_script),
-            ("2 · Tạo giọng đọc", self._step_voices),
-            ("3 · Tạo ảnh (AI)", self._step_images),
-            ("3b · Tạo clip AI cho cảnh chưa có", self._step_videos),
-            ("4 · Ghép thành video", self._step_assemble),
-            ("5 · Metadata YouTube (AI)", self._step_metadata),
-        ]
-        for text, cmd in steps:
-            ctk.CTkButton(sec.body, text=text, command=cmd, height=32, anchor="w", **T.secondary_button()).pack(
-                fill="x", pady=2)
-        button(sec.body, "Chạy tất cả (1 → 4)", icon_name="sparkle", command=self._run_all, fg_color=T.SUCCESS,
-               hover_color=T.SUCCESS_HOVER, text_color="#0B1220", icon_color="#0B1220").pack(fill="x", pady=(6, 2))
-        ButtonRow(sec.body, [
-            ("📝 Trình soạn kịch bản", self.open_editor, T.primary_button()),
-            ("➕ Đưa vào hàng đợi", self._to_queue, None),
-        ]).pack(fill="x", pady=(2, 2))
-        self.auto_queue = SwitchRow(sec.body, "Tự đưa vào hàng đợi sau khi ghép", on_change=s(cfg, "auto_queue", preview=False))
-        self.auto_queue.pack(fill="x", pady=2)
-        self.run_status = StatusLabel(sec.body, "")
-        self.run_status.pack(fill="x")
-        hint(sec.body, "Video ghép xong vào hàng đợi kèm phụ đề — chỉnh tiếp như video thường.").pack(fill="x", pady=(2, 0))
 
         self._load_last_project()
 
@@ -164,6 +170,16 @@ class StoryModule(BaseModule):
             self._loading = False
         self._update_prompt_preview()
         self._refresh_project_status()
+        self._update_summaries()
+
+    def _update_summaries(self) -> None:
+        """Tiêu đề khối thu gọn ghi sẵn giá trị đang dùng — khỏi phải mở ra mới biết."""
+        cfg = self.state.story
+        length = LENGTHS.get(cfg.length, LENGTHS["medium"])[0].split(" (")[0]
+        self.script_sec.set_subtitle(f"{cfg.language} · {length}" + (f" · {cfg.competitor}" if cfg.competitor else ""))
+        style = MASTER_PROMPTS.get(cfg.master_prompt_preset, MASTER_PROMPTS["cinematic_hyperrealism"])[0]
+        self.image_sec.set_subtitle(f"{style} · {cfg.ratio}")
+        self.voice_sec.set_subtitle(f"{cfg.voice_name or cfg.voice_id or '—'} · {cfg.speed:.2f}×")
 
     def _update_prompt_preview(self) -> None:
         cfg = self.state.story
@@ -176,37 +192,49 @@ class StoryModule(BaseModule):
     def _voice_set(self, provider: str, locale: str, vid: str, name: str) -> None:
         cfg = self.state.story
         cfg.provider, cfg.voice_language, cfg.voice_id, cfg.voice_name = provider, locale, vid, name
-        self.state.config_changed("story")
+        self.state.config_changed("story", auto=getattr(getattr(self, "voice", None), "auto", False))
+        self._update_summaries()
 
     def _length_changed(self, label: str) -> None:
         self.set_value(self.state.story, "length", _LENGTH_LABELS.get(label, "medium"), preview=False)
+        self._update_summaries()
 
     def _prompt_preset_changed(self, label: str) -> None:
         self.set_value(self.state.story, "master_prompt_preset", _PROMPT_LABELS.get(label, "cinematic_hyperrealism"),
                        preview=False)
         self._update_prompt_preview()
+        self._update_summaries()
 
     def _competitor_changed(self, v: str) -> None:
         self.set_value(self.state.story, "competitor", "" if v == "(không)" else v, preview=False)
         c = load_competitors().get(v)
+        self.comp_note.info("")
         if c:
-            # gợi ý theo preset kênh
+            # gợi ý theo preset kênh — ghi rõ đã đổi những gì (trước: đổi lặng lẽ cả ngôn ngữ, ảnh, giọng)
             cfg = self.state.story
-            if c.get("language") in LANGUAGES:
+            changed = []
+            if c.get("language") in LANGUAGES and c["language"] != cfg.language:
                 cfg.language = c["language"]
-            if c.get("master_prompt_preset") in MASTER_PROMPTS:
+                changed.append(f"ngôn ngữ {cfg.language}")
+            if c.get("master_prompt_preset") in MASTER_PROMPTS and c["master_prompt_preset"] != cfg.master_prompt_preset:
                 cfg.master_prompt_preset = c["master_prompt_preset"]
-            if c.get("master_prompt_custom"):
+                changed.append("phong cách ảnh")
+            if c.get("master_prompt_custom") and c["master_prompt_custom"] != cfg.master_prompt_custom:
                 cfg.master_prompt_custom = c["master_prompt_custom"]
-            if c.get("voice_id"):
+                changed.append("prompt ảnh")
+            if c.get("voice_id") and c["voice_id"] != cfg.voice_id:
                 cfg.provider = provider_or_default(c.get("voice_provider", cfg.provider))
                 cfg.voice_id = c["voice_id"]
                 cfg.voice_language = "-".join(c["voice_id"].split("-")[:2]) if c["voice_id"].count("-") >= 2 else cfg.voice_language
-            if c.get("voice_speed"):
+                changed.append("giọng kể")
+            if c.get("voice_speed") and float(c["voice_speed"]) != cfg.speed:
                 cfg.speed = float(c["voice_speed"])
+                changed.append(f"tốc độ {cfg.speed:.2f}×")
             self.state.config_changed("story")
             self.refresh()
             self.voice.load()
+            if changed:
+                self.comp_note.ok(f"Đã áp phong cách «{v}»: đổi {', '.join(changed)}.")
 
     def _manage_competitors(self) -> None:
         from app.ui.widgets.story_dialogs import CompetitorDialog
@@ -258,8 +286,13 @@ class StoryModule(BaseModule):
         pr.ratio = cfg.ratio
 
     def _new_project(self, silent: bool = False) -> None:
-        name = self.name.get().strip() or "Câu chuyện mới"
-        pr = StoryProject(name=name)
+        """«＋ Mới»: dự án trống ở thư mục MỚI (trước: trùng tên dự án đang mở → ghi đè mất kịch bản cũ)."""
+        name = self.name.get().strip()
+        if not name or (self.project is not None and name == self.project.name):
+            name = "Câu chuyện mới"
+        if not silent:                          # bấm «Mới» → ô chủ đề trống; tự tạo khi chạy thì giữ chủ đề vừa gõ
+            self.topic.delete("1.0", "end")
+        pr = StoryProject.create(name)
         self._apply_settings_to_project(pr)
         pr.save()
         self.project = pr
@@ -333,7 +366,17 @@ class StoryModule(BaseModule):
 
         self.window.run_task(name, work, done)
 
+    def _confirm_rewrite(self) -> bool:
+        pr = self.project
+        if pr is None or not pr.scenes:
+            return True
+        return messagebox.askyesno("Edit Studio", f"Dự án đã có kịch bản {len(pr.scenes)} cảnh (có thể đã sửa tay).\n\n"
+                                                  "Viết lại sẽ thay toàn bộ — bản cũ lưu thành project.json.bak. "
+                                                  "Viết lại?")
+
     def _step_script(self) -> None:
+        if not self._confirm_rewrite():
+            return
         self._run_step("Viết kịch bản", lambda pr, c: self.engine.write_script(
             pr, on_progress=self.window.set_busy_progress, log=self.window.log_bg, cancel=c),
             on_done=lambda _r: self.open_editor())
@@ -366,9 +409,21 @@ class StoryModule(BaseModule):
                        on_done=lambda _r: self.open_editor(tab="Metadata YouTube"))
 
     def _run_all(self) -> None:
+        keep = False
+        pr = self.project
+        if pr is not None and pr.scenes:
+            # đã có kịch bản (thường đã sửa trong Trình soạn) → mặc định giữ, chỉ làm các bước còn thiếu
+            ans = messagebox.askyesnocancel("Edit Studio", f"Dự án đã có kịch bản {len(pr.scenes)} cảnh.\n\n"
+                                                           "Có = giữ kịch bản, làm tiếp giọng → ảnh → ghép\n"
+                                                           "Không = viết lại kịch bản từ đầu (bản cũ lưu .bak)")
+            if ans is None:
+                return
+            keep = bool(ans)
+
         def chain(pr, cancel):
             log = self.window.log_bg
-            self.engine.write_script(pr, on_progress=self.window.set_busy_progress, log=log, cancel=cancel)
+            if not keep:
+                self.engine.write_script(pr, on_progress=self.window.set_busy_progress, log=log, cancel=cancel)
             self.engine.generate_voices(pr, on_progress=self.window.set_busy_progress, log=log, cancel=cancel)
             self.engine.generate_images(pr, on_progress=self.window.set_busy_progress, log=log, cancel=cancel)
             if self.state.story.use_ai_video:
@@ -379,17 +434,31 @@ class StoryModule(BaseModule):
             if self.state.story.auto_queue:
                 self._to_queue()
 
-        self._run_step("Story: chạy tất cả", chain, on_done=after)
+        self._run_step("Truyện: chạy tất cả", chain, on_done=after)
 
     def _to_queue(self) -> None:
         pr = self.project
         if pr is None or not pr.assembled_path or not Path(pr.assembled_path).exists():
-            messagebox.showinfo("Edit Studio", "Chưa có video ghép — chạy bước 4 trước.")
+            messagebox.showinfo("Edit Studio", "Chưa có video ghép — bấm «Chạy tất cả» hoặc bước 5 «Ghép thành video».")
             return
+        from app.core.state import SRT_MODES
+
         added = self.state.add_videos([pr.assembled_path])
         items = added or [v for v in self.state.videos if v.path == pr.assembled_path]
         for it in items:
             it.srt_path = pr.srt_path if pr.srt_path and Path(pr.srt_path).exists() else None
+            if it in added:
+                # video truyện đã có giọng kể + phụ đề: cấu hình riêng tắt lồng tiếng, khử giọng, dịch — mẫu reup
+                # đang chọn ở trên cùng (lồng tiếng + khử giọng gốc) không được đè lên lời kể
+                self.state.make_own(it)
+                cfg = it.config
+                cfg.setdefault("tts", {})["enable_tts"] = False
+                cfg.setdefault("video", {})["demucs_enable"] = False
+                cfg["video"]["keep_original_audio"] = True
+                cfg["video"]["original_volume"] = 100.0       # giọng kể chính là âm gốc của video này
+                cfg.setdefault("subtitle", {})["translate_enable"] = False
+                cfg["subtitle"]["srt_mode"] = SRT_MODES[0]
+                it.template = "Dựng truyện"
         self.state.emit("videos_changed")
         self.state.set_active(self.state.videos.index(items[0]) if items else 0)
         self.state.emit("active_changed")

@@ -49,7 +49,12 @@ SUB_BG_STYLES = ["Không nền", "Hộp mờ bo góc", "Hộp đen", "Dải ngan
 TRIM_MODES = ["Ghép các đoạn thành 1 video", "Xuất mỗi đoạn thành 1 file"]
 COLOR_PRESETS = ["Mặc định", "Ấm áp", "Điện ảnh", "Tươi sáng", "Cổ điển", "Lạnh"]
 STT_LANGUAGES = ["auto", "vi", "en", "zh", "ja", "ko", "fr", "de", "es", "th", "id", "ru"]
+#: «Ngôn ngữ video» (mã) → tên ngôn ngữ gốc đưa cho bước dịch — trước đây là hai ô riêng ở hai tab
+SOURCE_BY_CODE = {"auto": "Tự nhận diện", "vi": "Tiếng Việt", "en": "English", "zh": "中文", "ja": "日本語", "ko": "한국어",
+                  "fr": "Français", "de": "Deutsch", "es": "Español", "th": "ไทย", "id": "Bahasa Indonesia",
+                  "ru": "Русский"}
 SRT_MODES = ["Sub gốc", "Sub đã dịch", "Song ngữ (dịch trên, gốc dưới)"]
+SRT_MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MODES[2]: "Song ngữ (dịch trên, gốc dưới)"}
 SUB_POSITIONS = ["Dưới", "Giữa", "Trên", "Tuỳ chỉnh (X/Y)"]
 TRANSLATE_TARGETS = ["Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch",
                      "Español", "ไทย", "Bahasa Indonesia", "Русский"]
@@ -78,6 +83,8 @@ def provider_or_default(provider: str) -> str:
 #: giọng VieNeu thay cho giọng Gemini cũ theo giới tính
 VIENEU_BY_GENDER = {"Female": "Trúc Ly", "Male": "Thanh Bình"}
 TTS_SOURCES = ["Sub đã dịch", "Sub gốc"]
+#: tên hiển thị (giá trị lưu giữ nguyên cho mẫu / cấu hình cũ) — cùng cách gọi «Lời gốc / Bản dịch» ở mọi tab
+TTS_SOURCE_LABELS = {TTS_SOURCES[0]: "Bản dịch", TTS_SOURCES[1]: "Lời gốc"}
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 
 
@@ -167,12 +174,18 @@ class SubtitleConfig:
     #: reveal = chữ hiện dần đúng lúc được đọc
     karaoke_mode: str = "pop"
     stt_engine: str = STT_ENGINES[0]
-    translate_source: str = "Tự nhận diện"
+    translate_source: str = "Tự nhận diện"          # cấu hình cũ; nay theo «Ngôn ngữ video» (stt_language)
 
     def migrate(self) -> None:
         """Cấu hình cũ (Whisper / Gemini / SenseVoice / Qwen3-ASR ghi bằng tên dài) → «asr»; OCR → «ocr»."""
         if self.stt_engine not in STT_ENGINES:
             self.stt_engine = "ocr" if self.stt_engine.upper().startswith("OCR") else "asr"
+
+    @property
+    def source_hint(self) -> str:
+        """Ngôn ngữ gốc cho bước dịch = «Ngôn ngữ video» ở tab Nhận diện (ô «Ngôn ngữ gốc» cũ đã bỏ khỏi giao diện —
+        giá trị cũ còn trong mẫu không được âm thầm ép ngôn ngữ nữa)."""
+        return SOURCE_BY_CODE.get(self.stt_language or "auto", "Tự nhận diện")
 
 
 @dataclass
@@ -228,7 +241,7 @@ def vieneu_for_gemini(voice: str) -> str:
 @dataclass
 class BlurConfig:
     enable: bool = False
-    #: mỗi vùng: {x, y, w, h (0..1 theo khung ra), strength, feather, opacity, style, start, end}
+    #: mỗi vùng: {x, y, w, h (0..1 theo khung video GỐC), strength, feather, opacity, style, start, end}
     regions: list = field(default_factory=list)
     active_index: int = 0
     auto_detect: bool = False          # tự dò vùng chữ cứng của từng video và che thêm vùng đó
@@ -239,7 +252,8 @@ class BGMConfig:
     enable: bool = False
     #: mỗi clip: {path, volume, start, offset, loop, fade_in, fade_out}
     clips: list = field(default_factory=list)
-    master_volume: float = 20.0
+    #: hệ số chung cũ (ẩn, 20 %) — nay luôn 100: âm lượng từng đoạn là mức thật (``_fold_bgm_master``)
+    master_volume: float = 100.0
     ducking: bool = True
     loop: bool = True
     fade_in: float = 1.5
@@ -338,9 +352,9 @@ class StoryConfig:
     use_ai_video: bool = False
     ratio: str = STORY_RATIOS[0]
     resolution: str = STORY_RESOLUTIONS[1]
-    provider: str = "Edge TTS"
+    provider: str = VIENEU                 # giọng Việt chạy trên máy, không cần mạng (như tab TTS)
     voice_language: str = "vi-VN"
-    voice_id: str = "vi-VN-HoaiMyNeural"
+    voice_id: str = VIENEU_BY_GENDER["Female"]
     voice_name: str = ""
     speed: float = 1.0
     gap: float = 0.4
@@ -409,6 +423,8 @@ class VideoItem:
     review: str = ""
     #: cấu hình riêng (các phần của mẫu) — None = dùng cấu hình chung đang mở
     config: dict | None = None
+    #: người dùng chọn «Dùng giọng có sẵn» → xuất video dùng thẳng ``voice_path``, không tạo giọng mới
+    voice_locked: bool = False
 
     @property
     def name(self) -> str:
@@ -425,6 +441,8 @@ class VideoItem:
             d["config"], d["template"] = self.config, self.template
         if self.review:
             d["review"] = self.review
+        if self.voice_locked and self.voice_path:
+            d["voice_locked"] = True
         if self.status in ("Xong", "Cần xuất lại") and self.output_path:
             d["done"], d["output_path"] = self.status, self.output_path     # mở lại app vẫn biết video đã xuất
         return d
@@ -447,6 +465,18 @@ MACHINE_FIELDS = {"video": ("use_gpu", "gpu_backend", "video_codec")}
 
 
 # ── Tiện ích chuyển đổi ──────────────────────────────────────────────────
+
+def _fold_bgm_master(cfg) -> None:
+    """Cấu hình cũ: âm lượng đoạn nhạc × hệ số chung ẩn 20 % (kéo 15 % mà thật ra chỉ 3 %) → gộp hệ số vào từng đoạn,
+    hệ số về 100: nghe y như cũ nhưng thanh «Âm lượng» hiện đúng mức thật."""
+    m = float(getattr(cfg, "master_volume", 100.0) or 0.0)
+    if abs(m - 100.0) < 1e-6:
+        return
+    for c in cfg.clips or []:
+        if isinstance(c, dict):
+            c["volume"] = round(float(c.get("volume", 100) or 0) * m / 100.0, 1)
+    cfg.master_volume = 100.0
+
 
 def _from_dict(cls, data: dict[str, Any] | None):
     """Dựng dataclass từ dict, bỏ qua khoá lạ, ép kiểu theo mặc định."""
@@ -476,6 +506,8 @@ def _from_dict(cls, data: dict[str, Any] | None):
         obj.migrate(data)             # cấu hình / mẫu / cấu hình riêng từng video còn ghi engine đã gỡ
     elif isinstance(obj, SubtitleConfig):
         obj.migrate()
+    if cls is BGMConfig:
+        _fold_bgm_master(obj)
     return obj
 
 
@@ -505,6 +537,10 @@ class AppState:
         self._settings_extra: dict[str, Any] = {}       # khoá lạ trong settings.json (tính năng đã gỡ) — ghi lại y nguyên
         self.settings_notice = ""                        # đọc settings.json gặp chuyện (vd hỏng, dùng bản sao lưu) → báo người dùng
         self.missing_videos: list[str] = []              # mở app: video trong hàng đợi cũ không còn ở ổ đĩa
+        #: dòng hàng đợi của video không còn ở ổ đĩa (ổ ngoài chưa cắm…): giữ nguyên trong file cấu hình — cắm lại / nạp
+        #: lại video là có lại cấu hình riêng, trạng thái duyệt (trước: lần lưu kế tiếp xoá mất vĩnh viễn)
+        self._missing_rows: list[dict] = []
+        self._config_backed = False
         self.videos: list[VideoItem] = []
         self.active_index: int = -1
         self.output_dir: str = str(VIDEOS_DIR)
@@ -547,6 +583,24 @@ class AppState:
             return self.videos[self.active_index]
         return None
 
+    @staticmethod
+    def _item_from_row(row: dict) -> VideoItem:
+        """Một dòng hàng đợi đã lưu → VideoItem (file phụ đề / giọng / xuất không còn thì bỏ đường dẫn đó)."""
+        has = lambda k: bool(row.get(k)) and Path(row[k]).exists()      # noqa: E731
+        it = VideoItem(path=row["path"], srt_path=row["srt_path"] if has("srt_path") else None,
+                       srt_translated_path=row["srt_translated_path"] if has("srt_translated_path") else None,
+                       voice_path=row["voice_path"] if has("voice_path") else None,
+                       config=row.get("config") if isinstance(row.get("config"), dict) else None,
+                       template=str(row.get("template") or ""), review=str(row.get("review") or ""))
+        it.voice_locked = bool(row.get("voice_locked")) and bool(it.voice_path)
+        # trạng thái hiển thị: đã xuất (file xuất còn) → «Xong» / «Cần xuất lại»; không thì theo bước duyệt
+        out = row.get("output_path")
+        if row.get("done") in ("Xong", "Cần xuất lại") and isinstance(out, str) and Path(out).exists():
+            it.status, it.output_path = row["done"], out
+        else:
+            it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review, it.status)
+        return it
+
     def add_videos(self, paths: list[str]) -> list[VideoItem]:
         added: list[VideoItem] = []
         existing = {v.path.lower() for v in self.videos}
@@ -554,7 +608,12 @@ class AppState:
             p = str(Path(p))
             if p.lower() in existing:
                 continue
-            item = VideoItem(path=p)
+            row = next((r for r in self._missing_rows if str(Path(r["path"])).lower() == p.lower()), None)
+            if row is not None:                     # video từng nằm ở ổ chưa cắm → lấy lại cấu hình riêng / duyệt
+                self._missing_rows.remove(row)
+                item = self._item_from_row(row)
+            else:
+                item = VideoItem(path=p)
             self.videos.append(item)
             existing.add(p.lower())
             added.append(item)
@@ -582,9 +641,42 @@ class AppState:
         self.emit("active_changed")
         self.mark_dirty()
 
+    def set_for(self, items: list[VideoItem], section: str, field: str, value: Any) -> None:
+        """Đặt một giá trị cấu hình cho ``items``: video chỉnh riêng → cấu hình riêng của nó; còn lại → cấu hình chung."""
+        shared = False
+        for it in items:
+            if it.config is None:
+                shared = True
+            elif it is self.active:
+                setattr(getattr(self, section), field, value)
+            else:
+                it.config.setdefault(section, {})[field] = value
+        if shared:
+            if self._shared is not None:               # đang hiện cấu hình riêng → cấu hình chung đang cất riêng
+                self._shared.setdefault(section, {})[field] = value
+            else:
+                setattr(getattr(self, section), field, value)
+        self.config_changed(section, auto=True)
+
+    def move_video(self, index: int, to: int) -> None:
+        """Đổi thứ tự hàng đợi (thứ tự = mã {stt} trong tên file xuất); video đang chọn vẫn là nó."""
+        if not (0 <= index < len(self.videos)):
+            return
+        to = max(0, min(len(self.videos) - 1, to))
+        if to == index:
+            return
+        act = self.active
+        self.videos.insert(to, self.videos.pop(index))
+        if act is not None:
+            self.active_index = self.videos.index(act)
+        self.emit("videos_changed")
+        self.emit("active_changed")
+        self.mark_dirty()
+
     def clear_videos(self) -> None:
         prev = self.active
         self.videos.clear()
+        self._missing_rows = []                        # «Xoá hết» = bỏ luôn dòng của video ở ổ chưa cắm
         self._activate(-1, prev)
         self.emit("videos_changed")
         self.emit("active_changed")
@@ -700,6 +792,10 @@ class AppState:
         a = self.active
         if not self.review_scope or self._pristine is None or a is None or a.config is not None:
             return
+        if not a.review:
+            # video chưa chuẩn bị: chỉnh lúc này là chỉnh cấu hình chung (cho cả hàng đợi) — chụp lại mốc «chưa chỉnh»
+            self._snap_pristine()
+            return
         cur = self.sections_dict()
         if cur == self._pristine:
             return
@@ -757,7 +853,7 @@ class AppState:
             **self.shared_sections(),                       # cấu hình chung (không phải của video đang chọn)
             "story": dataclasses.asdict(self.story),
             "template": self.template_name,
-            "videos": [v.persist_dict() for v in self.videos],
+            "videos": [v.persist_dict() for v in self.videos] + list(self._missing_rows),
             "active_index": self.active_index,
             "output_dir": self.output_dir,
             "ui": dict(self.ui),
@@ -786,30 +882,15 @@ class AppState:
             self.template_name = str(data.get("template") or "")
             self.videos = []
             self.missing_videos = []
+            self._missing_rows = []
             for row in data.get("videos", []) or []:
                 if not isinstance(row, dict) or not row.get("path"):
                     continue
                 if not Path(row["path"]).exists():
                     self.missing_videos.append(Path(row["path"]).name)
+                    self._missing_rows.append(row)
                     continue
-                self.videos.append(VideoItem(
-                    path=row["path"],
-                    srt_path=row.get("srt_path") if row.get("srt_path") and Path(row["srt_path"]).exists() else None,
-                    srt_translated_path=row.get("srt_translated_path")
-                    if row.get("srt_translated_path") and Path(row["srt_translated_path"]).exists() else None,
-                    voice_path=row.get("voice_path") if row.get("voice_path") and Path(row["voice_path"]).exists() else None,
-                    config=row.get("config") if isinstance(row.get("config"), dict) else None,
-                    template=str(row.get("template") or ""),
-                    review=str(row.get("review") or ""),
-                ))
-                it = self.videos[-1]
-                # trạng thái hiển thị: đã xuất (file xuất còn) → «Xong» / «Cần xuất lại»; không thì theo bước duyệt
-                out = row.get("output_path")
-                if row.get("done") in ("Xong", "Cần xuất lại") and isinstance(out, str) and Path(out).exists():
-                    it.status, it.output_path = row["done"], out
-                else:
-                    it.status = {"pending": "Chờ duyệt", "approved": "Đã duyệt", "skipped": "Bỏ qua"}.get(it.review,
-                                                                                                         it.status)
+                self.videos.append(self._item_from_row(row))
             idx = data.get("active_index", 0)
             idx = idx if isinstance(idx, int) and 0 <= idx < len(self.videos) else (0 if self.videos else -1)
             self.active_index = -1
@@ -825,6 +906,12 @@ class AppState:
         target = path or CONFIG_FILE
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
+            if not self._config_backed and path is None and target.exists():
+                # lần lưu đầu mỗi phiên: giữ bản trước khi mở app (lỡ tay xoá / ghi đè hàng đợi vẫn lấy lại được)
+                import shutil
+
+                shutil.copyfile(target, target.with_suffix(".json.bak"))
+                self._config_backed = True
             tmp = target.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.to_config_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(target)

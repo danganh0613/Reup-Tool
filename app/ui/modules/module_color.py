@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -14,6 +14,9 @@ from app.ui.widgets.common import ButtonRow, EntryRow, OptionRow, Section, Slide
 from app.core.platform import open_path
 
 ROTATIONS = ["0°", "90° (xoay phải)", "180°", "270° (xoay trái)", "Tuỳ chỉnh"]
+BLEND_LABELS = {"screen": "Làm sáng (screen) — light leak, hạt phim", "overlay": "Phủ (overlay)",
+                "softlight": "Phủ nhẹ (soft light)", "multiply": "Làm tối (multiply) — vết bẩn, viền tối",
+                "lighten": "Giữ chỗ sáng (lighten)", "addition": "Cộng sáng (addition)"}
 TEXTURE_LIB = ASSETS_DIR / "textures"
 
 
@@ -28,13 +31,15 @@ class ColorModule(BaseModule):
         s = self.setter
         rel = lambda _v: self.window.preview.schedule_refresh()  # noqa: E731
         hint(self, "Màu sắc, góc quay, hiệu ứng — xem ngay trên khung video.").pack(fill="x", pady=(0, 4))
-        ButtonRow(self, [("Reset toàn bộ", self._reset, None), ("Bật nhanh chống trùng", self._quick_dedup, T.primary_button())]).pack(fill="x", pady=(0, 4))
+        ButtonRow(self, [("Đặt lại màu & hiệu ứng", self._reset, None),
+                         ("Bật nhanh chống trùng", self._quick_dedup, T.primary_button())]).pack(fill="x", pady=(0, 4))
         self.enable = SwitchRow(self, "Bật chỉnh màu / hiệu ứng", on_change=s(cfg, "enable"))
         self.enable.pack(fill="x", pady=3)
 
-        sec = Section(self, "Chống trùng bản quyền",
+        sec = Section(self, "Khác bản gốc một chút", subtitle="giảm trùng nội dung",
                       info="Biến thể rất nhẹ, người xem không nhận ra: dịch khung vài pixel, nhiễu hạt, lệch màu 1–3%, "
-                           "phóng 2% trượt chậm, lệch cao độ âm 2% (giữ nhịp), keyframe 47. Chạy cả khi công tắc "
+                           "phóng 2% trượt chậm, lệch cao độ âm 2% (giữ nhịp), khung chính mỗi 47 hình. Giúp video "
+                           "khác bản gốc, KHÔNG đảm bảo qua được bộ dò trùng của nền tảng. Chạy cả khi công tắc "
                            "«Bật chỉnh màu / hiệu ứng» tắt.")
         sec.pack(fill="x", pady=4)
         grid = ctk.CTkFrame(sec.body, fg_color="transparent")
@@ -42,18 +47,18 @@ class ColorModule(BaseModule):
         grid.grid_columnconfigure((0, 1), weight=1)
         self.dup: dict[str, SwitchRow] = {}
         items = [("dup_shift", "Dịch khung"), ("dup_noise", "Nhiễu động"), ("dup_color", "Lệch màu"),
-                 ("dup_zoompan", "Phóng & trượt"), ("dup_audio", "Lệch nhịp âm"), ("dup_gop", "Đổi GOP")]
+                 ("dup_zoompan", "Phóng & trượt"), ("dup_audio", "Lệch cao độ âm"), ("dup_gop", "Đổi khung chính")]
         for i, (key, label) in enumerate(items):
             sw = SwitchRow(grid, label, on_change=lambda v, k=key: self._dup_set(k, bool(v)))
             sw.grid(row=i // 2, column=i % 2, sticky="w", pady=3)
             self.dup[key] = sw
-        self.dup_all = SwitchRow(sec.body, "Bật tất cả hiệu ứng chống trùng", on_change=self._dup_all)
+        self.dup_all = SwitchRow(sec.body, "Bật tất cả", on_change=self._dup_all)
         self.dup_all.pack(fill="x", pady=(6, 0))
 
         sec = Section(self, "Bộ lọc & chỉnh màu")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [(p, (lambda name=p: self._preset(name)), None) for p in COLOR_PRESETS[:4]]).pack(fill="x", pady=(0, 4))
-        self.preset = OptionRow(sec.body, "Preset", COLOR_PRESETS, on_change=self._preset)
+        # một chỗ chọn bộ lọc (trước: 4 nút + ô Preset cùng chỉnh một giá trị)
+        self.preset = OptionRow(sec.body, "Bộ lọc màu", COLOR_PRESETS, on_change=self._preset)
         self.rotation = OptionRow(sec.body, "Xoay", ROTATIONS, on_change=self._rotation_changed)
         self.rotate_custom = SliderRow(sec.body, "Góc tuỳ chỉnh", from_=-180, to=180, step=1, suffix="°",
                                        on_change=s(cfg, "rotate", cast=float, preview=False), on_release=rel)
@@ -61,9 +66,9 @@ class ColorModule(BaseModule):
                                     on_change=s(cfg, "brightness", cast=float, preview=False), on_release=rel)
         self.contrast = SliderRow(sec.body, "Tương phản", from_=0.5, to=2.0, step=0.01, fmt="{:.2f}",
                                   on_change=s(cfg, "contrast", cast=float, preview=False), on_release=rel)
-        self.saturation = SliderRow(sec.body, "Bão hòa", from_=0.0, to=2.5, step=0.01, fmt="{:.2f}",
+        self.saturation = SliderRow(sec.body, "Độ rực màu", from_=0.0, to=2.5, step=0.01, fmt="{:.2f}",
                                     on_change=s(cfg, "saturation", cast=float, preview=False), on_release=rel)
-        self.gamma = SliderRow(sec.body, "Gamma", from_=0.5, to=2.0, step=0.01, fmt="{:.2f}",
+        self.gamma = SliderRow(sec.body, "Sáng vùng tối", from_=0.5, to=2.0, step=0.01, fmt="{:.2f}",
                                on_change=s(cfg, "gamma", cast=float, preview=False), on_release=rel)
         self.temperature = SliderRow(sec.body, "Nhiệt độ màu", from_=-100, to=100, step=1, fmt="{:+.0f}",
                                      on_change=s(cfg, "temperature", cast=float, preview=False), on_release=rel)
@@ -79,8 +84,9 @@ class ColorModule(BaseModule):
                                on_change=s(cfg, "grain", cast=float, preview=False), on_release=rel)
         self.vignette = SliderRow(sec.body, "Tối góc (vignette)", from_=0, to=100, step=1,
                                   on_change=s(cfg, "vignette", cast=float, preview=False), on_release=rel)
-        self.kenburns = OptionRow(sec.body, "Chuyển động Ken Burns", KENBURNS, on_change=s(cfg, "kenburns"))
-        self.kb_amount = SliderRow(sec.body, "Mức zoom/pan", from_=2, to=40, step=1, suffix="%",
+        self.kenburns = OptionRow(sec.body, "Máy quay chuyển động", KENBURNS, on_change=s(cfg, "kenburns"),
+                                  info="Phóng / trượt chậm cả khung hình (kiểu Ken Burns) cho đỡ tĩnh.")
+        self.kb_amount = SliderRow(sec.body, "Mức chuyển động", from_=2, to=40, step=1, suffix="%",
                                    on_change=s(cfg, "kenburns_amount", cast=float, preview=False), on_release=rel)
         pack_rows(sec.body, [self.deshake, self.sharpen, self.grain, self.vignette, self.kenburns, self.kb_amount])
 
@@ -88,13 +94,13 @@ class ColorModule(BaseModule):
         sec.pack(fill="x", pady=4)
         self.tex_enable = SwitchRow(sec.body, "Phủ texture lên video", on_change=s(cfg, "texture_enable"))
         self.tex_path = EntryRow(sec.body, "File texture", placeholder="video/ảnh texture", on_change=s(cfg, "texture_path"))
-        self.tex_blend = OptionRow(sec.body, "Chế độ hoà trộn", TEXTURE_BLENDS, on_change=s(cfg, "texture_blend"))
+        self.tex_blend = OptionRow(sec.body, "Cách phủ", TEXTURE_BLENDS, labels=BLEND_LABELS,
+                                   on_change=s(cfg, "texture_blend"))
         self.tex_opacity = SliderRow(sec.body, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                      on_change=s(cfg, "texture_opacity", cast=float, preview=False), on_release=rel)
         pack_rows(sec.body, [self.tex_enable, self.tex_path, self.tex_blend, self.tex_opacity])
         ButtonRow(sec.body, [("Chọn file texture…", self._pick_texture, None), ("📁 Mở thư mục", self._open_lib, None)]).pack(fill="x", pady=(4, 0))
-        hint(sec.body, f"Bỏ file texture (mp4/mov/png) của bạn vào {TEXTURE_LIB}. Chế độ screen hợp với light leak/grain; "
-                       "multiply hợp với vết bẩn/vignette.").pack(fill="x")
+        hint(sec.body, f"Bỏ file texture (mp4/mov/png) của bạn vào {TEXTURE_LIB}.").pack(fill="x")
 
     def refresh(self) -> None:
         cfg = self.state.color
@@ -146,9 +152,7 @@ class ColorModule(BaseModule):
         if self._loading:
             return
         cfg = self.state.color
-        setattr(cfg, key, value)
-        if key == "dup_gop":
-            self.state.video.gop_size = 47 if value else 0
+        setattr(cfg, key, value)                     # «Đổi khung chính»: lúc xuất dùng GOP 47 nếu tab Video để Tự động
         self.dup_all.set(all(getattr(cfg, k, False) for k in self.dup))
         self.state.config_changed("color")
         self.window.preview.schedule_refresh()
@@ -161,7 +165,6 @@ class ColorModule(BaseModule):
             setattr(cfg, key, bool(v))
             self.dup[key].set(bool(v))
         self.dup_all.set(bool(v))
-        self.state.video.gop_size = 47 if v else 0
         self.state.config_changed("color")
         self.window.preview.schedule_refresh()
 
@@ -192,8 +195,9 @@ class ColorModule(BaseModule):
         self.window.preview.schedule_refresh(0)
 
     def _reset(self) -> None:
+        if not messagebox.askyesno("Edit Studio", "Đặt lại mọi chỉnh màu, hiệu ứng, texture và chống trùng về mặc định?"):
+            return
         self.state.color = ColorConfig(enable=self.state.color.enable)
-        self.state.video.gop_size = 0
         self.state.config_changed("color")
         self.refresh()
         self.window.preview.schedule_refresh(0)

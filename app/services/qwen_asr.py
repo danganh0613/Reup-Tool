@@ -109,9 +109,11 @@ def _pip_reason(err: str) -> str:
     return lines[-1][:160] if lines else "không rõ — xem log"
 
 
-def install(log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> bool:
+def install(log: Callable[[str], None] | None = None, cancel: threading.Event | None = None,
+            on_step: Callable[[int, int, str], None] | None = None) -> bool:
     """Tạo môi trường riêng + cài thư viện (vài phút, tải ~3,5 GB torch nếu có GPU NVIDIA). Chạy trong luồng nền.
-    Lỗi → RuntimeError kèm lý do; bấm Dừng → RenderCancelled (dừng pip ngay, cài lại sẽ làm tiếp)."""
+    Lỗi → RuntimeError kèm lý do; bấm Dừng → RenderCancelled (dừng pip ngay, cài lại sẽ làm tiếp).
+    ``on_step(k, n, tên bước)``: báo bước đang làm (thanh trạng thái)."""
     if getattr(sys, "frozen", False):
         raise RuntimeError("Bản đóng gói (.exe / .app) không cài thêm được Qwen3-ASR — chạy bản mã nguồn "
                            "(run.bat / run.command).")
@@ -122,7 +124,9 @@ def install(log: Callable[[str], None] | None = None, cancel: threading.Event | 
              ([py, "-m", "pip", "install", "--upgrade", "pip"], "cập nhật pip"),
              ([py, "-m", "pip", "install", *TORCH, "--index-url", index], f"torch 2.8 ({'GPU CUDA' if gpu else 'CPU'})"),
              ([py, "-m", "pip", "install", *PACKAGES, ZH_SPACY], "qwen-asr, transformers, spaCy tiếng Trung, Silero VAD")]
-    for cmd, what in steps:
+    for k, (cmd, what) in enumerate(steps, 1):
+        if on_step:
+            on_step(k, len(steps) + 1, what)
         if cancel is not None and cancel.is_set():
             raise RenderCancelled("Đã huỷ cài Qwen3-ASR")
         if cmd[0] != sys.executable and not Path(py).exists():
@@ -136,6 +140,8 @@ def install(log: Callable[[str], None] | None = None, cancel: threading.Event | 
             if log:
                 log(f"Cài Qwen3-ASR lỗi ở bước «{what}»: {err[-600:]}")
             raise RuntimeError(f"Cài Qwen3-ASR lỗi ở bước «{what}»: {_pip_reason(err)}")
+    if on_step:
+        on_step(len(steps) + 1, len(steps) + 1, "chạy thử")
     check = subprocess.run([py, "-c", "import torch, qwen_asr, spacy, silero_vad; spacy.load('zh_core_web_md'); "
                             "print(torch.__version__, torch.cuda.is_available())"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
@@ -189,8 +195,10 @@ def sentence_cues(words: list[dict], sentences: list[str]) -> list[Cue]:
 
 def _require() -> None:
     if not is_installed():
-        raise RuntimeError(f"{MISSING_MARK} Chưa cài bộ nghe lời thoại (Qwen3-ASR) — Cài đặt › AI trên máy › «Cài» "
-                           f"(một lần, ~{INSTALL_GB} GB), hoặc chọn «Chữ in sẵn trên video» nếu video có phụ đề in sẵn.")
+        where = ("bản .exe: chép models\\qwen_asr_env + models\\hf từ máy đã cài" if getattr(sys, "frozen", False)
+                 else f"Cài đặt › AI trên máy › «Cài» (một lần, ~{INSTALL_GB} GB)")
+        raise RuntimeError(f"{MISSING_MARK} Chưa cài bộ nghe lời thoại (Qwen3-ASR) — {where}, hoặc chọn «Chữ in sẵn "
+                           "trên video» nếu video có phụ đề in sẵn.")
 
 
 def _run(args: list[str], *, on_line: Callable[[str], None],

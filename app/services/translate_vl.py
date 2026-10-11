@@ -17,6 +17,7 @@ import logging
 import math
 import re
 import threading
+import time
 from collections.abc import Callable
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -364,15 +365,25 @@ def same_language(texts: list[str], target: str, hint: str = "") -> bool:
 
 
 def source_code(texts: list[str], hint: str = "") -> str:
-    """Mã ngôn ngữ nguồn như get_source_language() của VideoLingo (zh / ja / ko …)."""
+    """Mã ngôn ngữ nguồn (zh / ja / ko …). Đã chọn rõ «Ngôn ngữ video» → dùng luôn; «Tự nhận diện» → theo chữ chiếm
+    đa số: tiếng Nhật luôn nhiều kana, tiếng Hàn chủ yếu Hangul — vài chữ lạc không đổi được cả video."""
+    from app.services.translate_router import LANG_CODE
+
+    h = (hint or "").strip()
+    if h and h not in ("auto", "Tự nhận diện"):
+        return LANG_CODE.get(h, h)
     joined = "".join(texts)
-    if re.search(r"[぀-ヿ]", joined):
-        return "ja"
-    if re.search(r"[가-힯]", joined):
+    kana = len(re.findall(r"[぀-ヿ]", joined))
+    hangul = len(re.findall(r"[가-힯]", joined))
+    han = len(re.findall(r"[一-鿿]", joined))
+    cjk = kana + hangul + han
+    if cjk < 3:
+        return h or "auto"
+    if hangul >= 0.3 * cjk:
         return "ko"
-    if re.search(r"[一-鿿]", joined):
-        return "zh"
-    return (hint or "auto").strip() or "auto"
+    if kana >= 0.05 * cjk:
+        return "ja"
+    return "zh" if han else (h or "auto")
 
 
 def _custom_terms(glossary: str) -> list[dict]:
@@ -422,7 +433,8 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     tgt_lang = lang_name(target)
     key_style = memory_style(style, settings.glossary)
     memory = TranslationMemory()
-    ckpt = Checkpoint(srt_path, target, key_style)
+    source = hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:12]
+    ckpt = Checkpoint(srt_path, target, key_style, source)
     results: dict[int, str] = {}
     for i, s in enumerate(lines):
         if str(i) in ckpt.done:
@@ -608,15 +620,22 @@ def _mechanical_split(sentence: str, num_parts: int) -> list[str]:
     return [ln for ln in lines + [rest] if ln]
 
 
+_SPLIT_AI_DOWN = 0.0          # AI tách câu hỏng lúc nào → tới mốc này các video sau trong lô cắt ở dấu câu luôn
+
+
 def split_long_sentences(sentences: list[str], token_counts: list[int], *, settings: Settings, language: str = "zh",
                          log: Callable[[str], None] | None = None,
                          cancel: threading.Event | None = None) -> list[str]:
     """Câu > 20 token (spaCy) → AI tách thành ⌈token/20⌉ phần (chỉ lấy VỊ TRÍ cắt, giữ nguyên chữ gốc). Không gọi
     được AI (hết lượt…) → cắt máy ở dấu câu gần giữa nhất như bản gốc."""
+    global _SPLIT_AI_DOWN
     joiner = "" if language in ("zh", "ja", "yue") else " "
     out: list[str] = []
     router = None
-    use_ai = True                                       # hết lượt / chưa có key → các câu sau cắt máy luôn, khỏi chờ
+    # hết lượt / chưa có key → các câu sau cắt máy luôn, khỏi chờ; vừa hỏng ở video trước (≤ 10 phút) cũng vậy
+    use_ai = time.time() >= _SPLIT_AI_DOWN
+    if cancel is not None and cancel.is_set():
+        raise RenderCancelled("Đã huỷ")
     for s, n in zip(sentences, token_counts):
         if n <= MAX_SPLIT_TOKENS:
             out.append(s)
@@ -642,6 +661,7 @@ def split_long_sentences(sentences: list[str], token_counts: list[int], *, setti
             logger.warning("AI tách câu dài lỗi (%s) → cắt ở dấu câu", exc)
             if router is None or isinstance(exc, RuntimeError):     # hết lượt / mất mạng / key hỏng (JSON hỏng = ValueError)
                 use_ai = False
+                _SPLIT_AI_DOWN = time.time() + 600
                 if log:
                     log("Tách câu dài: không gọi được AI → cắt ở dấu câu cho các câu còn lại.")
             out.extend(_mechanical_split(s, parts_n))

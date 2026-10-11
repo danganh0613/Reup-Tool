@@ -33,16 +33,42 @@ def _must(task: Callable[[threading.Event], object], what: str) -> Callable[[thr
 
 def install_qwen(window, on_done: Done) -> bool:
     """Bộ nghe lời thoại Qwen3-ASR → models/qwen_asr_env (môi trường Python riêng, không đụng thư viện của app)."""
-    from app.services.qwen_asr import INSTALL_GB, install, is_installed
+    import shutil
+
+    from app.config.paths import MODELS_DIR
+    from app.services.qwen_asr import INSTALL_GB, _has_nvidia, install, is_installed
 
     if is_installed():
         on_done(True, None)
         return False
+    if getattr(sys, "frozen", False):            # báo ngay, không hỏi «tải 11 GB» rồi mới lỗi
+        messagebox.showinfo("Edit Studio", "Bản .exe chưa tự cài được bộ nghe lời thoại.\n\nChép thư mục "
+                                           "models\\qwen_asr_env và models\\hf từ máy đã cài sang thư mục app này, hoặc "
+                                           "chọn «Chữ in sẵn trên video» ở tab Nhận diện nếu video có phụ đề in sẵn.")
+        on_done(False, RuntimeError("Bản .exe chưa tự cài được Qwen3-ASR"))
+        return False
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        free = shutil.disk_usage(MODELS_DIR).free / 2 ** 30
+    except OSError:
+        free = INSTALL_GB + 1.0
+    if free < INSTALL_GB + 1:
+        messagebox.showwarning("Edit Studio", f"Ổ chứa app chỉ còn {free:.1f} GB — cần khoảng {INSTALL_GB + 1} GB để cài "
+                                              "bộ nghe lời thoại. Giải phóng dung lượng rồi cài lại.")
+        return False
+    cpu = "" if _has_nvidia() else ("\n\n⚠ Máy không có card NVIDIA: nhận diện chạy bằng CPU, rất chậm (video 2 phút "
+                                    "có thể mất 10–20 phút) và cần RAM ≥ 16 GB. Video có phụ đề in sẵn thì chọn «Chữ in "
+                                    "sẵn trên video» sẽ nhanh hơn nhiều.")
     if not messagebox.askyesno("Edit Studio", "Cài bộ nghe lời thoại Qwen3-ASR (chạy trên máy)?\n\n"
                                f"Tải khoảng {INSTALL_GB} GB (thư viện + model lần đầu nhận diện), mất vài chục phút. "
-                               "Thư viện của Edit Studio không bị thay đổi."):
+                               "Thư viện của Edit Studio không bị thay đổi." + cpu):
         return False
-    window.run_task("Cài Qwen3-ASR", _must(lambda cancel: install(window.log_bg, cancel), "Cài Qwen3-ASR"),
+
+    def step(k: int, n: int, what: str) -> None:            # «Đang chạy…» đứng yên cả chục phút → tên bước + tiến độ
+        window.ui_call(lambda: (window.progress.set_detail(f"Bước {k}/{n}: {what}…"),
+                                window.progress.set_progress(k / (n + 1))))
+
+    window.run_task("Cài Qwen3-ASR", _must(lambda cancel: install(window.log_bg, cancel, on_step=step), "Cài Qwen3-ASR"),
                     _finish(on_done))
     return True
 

@@ -42,7 +42,7 @@ class BrandModule(BaseModule):
         self.logo_status.pack(fill="x")
         self.logo_size = SliderRow(tb, "Cỡ logo", from_=2, to=60, step=1, suffix="%",
                                    on_change=s(cfg, "logo_size", cast=float, preview=False), on_release=rel)
-        self.logo_opacity = SliderRow(tb, "Opacity", from_=5, to=100, step=5, suffix="%",
+        self.logo_opacity = SliderRow(tb, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                       on_change=s(cfg, "logo_opacity", cast=float, preview=False), on_release=rel)
         self.logo_position = OptionRow(tb, "Vị trí", POS_LABELS, on_change=lambda v: self._pos("logo_position", v))
         self.logo_motion = OptionRow(tb, "Chuyển động", MOTIONS, on_change=s(cfg, "logo_motion"))
@@ -60,7 +60,7 @@ class BrandModule(BaseModule):
         self.text_size = SliderRow(tb, "Cỡ chữ (px)", from_=12, to=160, step=1,
                                    on_change=s(cfg, "text_size", cast=int, preview=False), on_release=rel)
         self.text_color = ColorRow(tb, "Màu chữ", on_change=s(cfg, "text_color"))
-        self.text_opacity = SliderRow(tb, "Opacity", from_=5, to=100, step=5, suffix="%",
+        self.text_opacity = SliderRow(tb, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                       on_change=s(cfg, "text_opacity", cast=float, preview=False), on_release=rel)
         self.text_bg = SwitchRow(tb, "Nền mờ sau chữ", on_change=s(cfg, "text_bg"))
         self.text_position = OptionRow(tb, "Vị trí", POS_LABELS, on_change=lambda v: self._pos("text_position", v))
@@ -79,7 +79,7 @@ class BrandModule(BaseModule):
         self.wm_size = SliderRow(tb, "Cỡ chữ (px)", from_=12, to=160, step=1,
                                  on_change=s(cfg, "watermark_size", cast=int, preview=False), on_release=rel)
         self.wm_color = ColorRow(tb, "Màu", on_change=s(cfg, "watermark_color"))
-        self.wm_opacity = SliderRow(tb, "Opacity", from_=5, to=100, step=5, suffix="%",
+        self.wm_opacity = SliderRow(tb, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                     on_change=s(cfg, "watermark_opacity", cast=float, preview=False), on_release=rel)
         self.wm_position = OptionRow(tb, "Vị trí", POS_LABELS, on_change=lambda v: self._pos("watermark_position", v))
         self.wm_motion = OptionRow(tb, "Chuyển động", MOTIONS, on_change=s(cfg, "watermark_motion"))
@@ -102,10 +102,10 @@ class BrandModule(BaseModule):
         self.frame_width = SliderRow(sec.body, "Độ dày", from_=2, to=80, step=1, suffix=" px",
                                      on_change=s(cfg, "frame_width", cast=int, preview=False), on_release=rel)
         self.frame_color = ColorRow(sec.body, "Màu viền", on_change=s(cfg, "frame_color"))
-        self.frame_opacity = SliderRow(sec.body, "Opacity", from_=5, to=100, step=5, suffix="%",
+        self.frame_opacity = SliderRow(sec.body, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                        on_change=s(cfg, "frame_opacity", cast=float, preview=False), on_release=rel)
         pack_rows(sec.body, [self.frame_enable, self.frame_width, self.frame_color, self.frame_opacity])
-        ButtonRow(tb, [("Đặt lại logo", self._reset, None)]).pack(fill="x", pady=(8, 0))
+        ButtonRow(tb, [("Đặt lại tất cả (logo, chữ, watermark, viền)", self._reset, None)]).pack(fill="x", pady=(8, 0))
         self._show_tab("Logo")
 
     def _show_tab(self, name: str) -> None:
@@ -186,6 +186,10 @@ class BrandModule(BaseModule):
             self.window.preview.schedule_refresh(0)
 
     def _reset(self) -> None:
+        from tkinter import messagebox
+
+        if not messagebox.askyesno("Edit Studio", "Đặt lại tất cả logo, chữ, watermark và khung viền về mặc định?"):
+            return
         self.state.brand = BrandConfig()
         self.state.config_changed("brand")
         self.refresh()

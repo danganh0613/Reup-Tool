@@ -52,6 +52,35 @@ def _count(path: str | None, target: str = "") -> tuple[int, str, int]:
     return len(cues), first, 0
 
 
+_LATIN = re.compile(r"(?<![A-Za-zÀ-ỹ])[A-Za-z][A-Za-z0-9]{2,}(?![A-Za-zÀ-ỹ])")
+_VI_MARK = re.compile(r"[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]", re.I)
+#: chữ Latin viết như tiếng Việt không dấu hay gặp — không tính là từ nước ngoài
+_VI_PLAIN = {"anh", "em", "con", "cho", "nhung", "va", "khi", "nha", "minh", "ban", "toi", "the", "thi", "mot", "hai",
+             "ba", "bon", "nam", "sau", "bay", "tam", "chin", "muoi", "ok", "okay", "video", "clip", "app", "web", "online",
+             "game", "live", "show", "team", "fan", "idol", "top", "hot", "like", "share"}
+
+
+def _foreign_words(path: str | None) -> list[str]:
+    """Từ Latin (tên hãng, tên người…) trong bản dịch tiếng Việt chưa có trong từ điển phát âm — giọng Việt hay đọc
+    sai các từ này."""
+    if not path or not Path(path).exists():
+        return []
+    try:
+        from app.services.tts.normalize import load_pronunciations
+
+        known, _pat = load_pronunciations()
+        text = " ".join(c.plain for c in load_srt(path))
+    except Exception:                                    # noqa: BLE001
+        return []
+    out: dict[str, None] = {}
+    for w in _LATIN.findall(_VI_MARK.sub(" ", text)):
+        low = w.lower()
+        if low in _VI_PLAIN or low in known or any(low.startswith(k) for k in known):
+            continue
+        out.setdefault(w, None)
+    return list(out)
+
+
 def _voice_issues(pipe, item: VideoItem) -> list[str]:
     """Vấn đề của track giọng: giọng cũ (đổi giọng / tốc độ / bản dịch sau khi chuẩn bị), câu bỏ trống, câu tràn khung."""
     import json
@@ -71,6 +100,10 @@ def _voice_issues(pipe, item: VideoItem) -> list[str]:
         return out
     if data.get("failed"):
         out.append(f"{data['failed']} câu không đọc được (bỏ trống)")
+    if data.get("fallback"):
+        out.append(f"{data['fallback']} câu đọc tạm bằng Edge (VieNeu lỗi)")
+    if data.get("qc_bad"):
+        out.append(f"{data['qc_bad']} câu đọc chưa đạt — nên nghe lại")
     if data.get("overflow_cues"):
         out.append(f"{len(data['overflow_cues'])} câu đọc tràn khung")
     return out
@@ -101,7 +134,7 @@ def summarize(window, item: VideoItem) -> list[Row]:
     if not uses_text:
         rows.append(Row("srt", "doc", "Lời thoại", "Không dùng (mẫu không phụ đề / lồng tiếng)", OFF))
     elif not n_orig:
-        rows.append(Row("srt", "doc", "Lời thoại", "Chưa có — bấm «Chuẩn bị» (hoặc nhận diện ở tab STT)", WARN))
+        rows.append(Row("srt", "doc", "Lời thoại", "Chưa có — bấm «Chuẩn bị» (hoặc nhận diện ở tab Nhận diện)", WARN))
     else:
         val = f"{n_orig} câu"
         level = OK
@@ -113,13 +146,21 @@ def summarize(window, item: VideoItem) -> list[Row]:
         elif need_tr:
             val += " · CHƯA DỊCH"
             level = WARN
-        rows.append(Row("srt", "doc", "Lời thoại", val, level, f"«{_clip(first_tr or first_orig)}»"))
+        detail = f"«{_clip(first_tr or first_orig)}»"
+        if t.enable_tts and t.tts_provider.startswith("VieNeu") and n_tr and s.translate_target == "Tiếng Việt":
+            foreign = _foreign_words(item.srt_translated_path)
+            if foreign:
+                detail += (f"\nTừ nước ngoài: {', '.join(foreign[:6])}{'…' if len(foreign) > 6 else ''} — đọc sai thì "
+                           "thêm cách đọc ở Cài đặt › AI trên máy › «Từ điển phát âm»")
+        rows.append(Row("srt", "doc", "Lời thoại", val, level, detail))
 
     # 3. Phụ đề trên video
     if s.enable_subtitle:
         where = "đặt đè lên chỗ chữ cứng" if s.follow_hardsub else "vị trí cố định"
+        from app.core.state import SRT_MODE_LABELS
+
         rows.append(Row("subtitle", "subtitles", "Phụ đề trên video",
-                        f"{s.srt_mode} · chữ {s.sub_size}px · {where}"))
+                        f"{SRT_MODE_LABELS.get(s.srt_mode, s.srt_mode)} · chữ {s.sub_size}px · {where}"))
     else:
         rows.append(Row("subtitle", "subtitles", "Phụ đề trên video", "Tắt — không hiện chữ", OFF))
 
@@ -200,25 +241,35 @@ def summarize(window, item: VideoItem) -> list[Row]:
     rows.append(Row("blur", "blur", "Che mờ", " · ".join(parts) if parts else "Không che", level if parts else OFF))
 
     # 7. Nhạc nền
-    clips = [Path(str(cl.get("path", ""))).name for cl in (b.clips or []) if isinstance(cl, dict) and cl.get("path")]
+    good = [cl for cl in (b.clips or []) if isinstance(cl, dict) and cl.get("path")]
+    clips = [Path(str(cl["path"])).name for cl in good]
+    gone = [Path(str(cl["path"])).name for cl in good if not Path(str(cl["path"])).exists()]
     if b.enable and clips:
+        vols = sorted({f"{float(cl.get('volume', 100)) * b.master_volume / 100:.0f}%" for cl in good})
         rows.append(Row("bgm", "music", "Nhạc nền", f"{', '.join(_clip(n, 28) for n in clips[:3])}"
-                        + (f" +{len(clips) - 3}" if len(clips) > 3 else "") + f" · {b.master_volume:.0f}%"
-                        + (" · tự hạ khi có lời" if b.ducking else "")))
+                        + (f" +{len(clips) - 3}" if len(clips) > 3 else "") + f" · {', '.join(vols[:3])}"
+                        + (" · tự hạ khi có lời" if b.ducking else "")
+                        + (f" · KHÔNG THẤY FILE: {', '.join(gone[:2])}" if gone else ""), WARN if gone else OK))
     else:
         rows.append(Row("bgm", "music", "Nhạc nền", "Không ghép nhạc", OFF))
 
     # 8. Logo & chữ
     parts = []
+    missing = []
     if br.logo_enable and br.logo_path:
         parts.append(f"logo {Path(br.logo_path).name} ({br.logo_position.lower()})")
+        if not Path(br.logo_path).exists():
+            missing.append(Path(br.logo_path).name)
     if br.text_enable and br.text.strip():
         parts.append(f"chữ «{_clip(br.text, 24)}»")
     if br.watermark_enable and br.watermark_text.strip():
         parts.append(f"watermark «{_clip(br.watermark_text, 20)}»")
     if br.frame_enable:
         parts.append("viền khung")
-    rows.append(Row("brand", "logo", "Logo & chữ", " · ".join(parts) if parts else "Không gắn", OK if parts else OFF))
+    if missing:                                          # file bị xoá / dời sau khi lưu mẫu → bản xuất thiếu logo
+        parts.append(f"KHÔNG THẤY FILE: {', '.join(missing)}")
+    rows.append(Row("brand", "logo", "Logo & chữ", " · ".join(parts) if parts else "Không gắn",
+                    WARN if missing else (OK if parts else OFF)))
 
     # 9. Cắt
     if tr.enable:
@@ -246,9 +297,11 @@ def summarize(window, item: VideoItem) -> list[Row]:
             parts.append("hạt phim")
         if c.vignette:
             parts.append("vignette")
+        tex_gone = c.texture_enable and getattr(c, "texture_path", "") and not Path(c.texture_path).exists()
         if c.texture_enable:
-            parts.append("texture")
-        rows.append(Row("color", "color", "Hiệu ứng & chống trùng", " · ".join(parts) or "Bật (chưa chỉnh gì)"))
+            parts.append("texture" + (" — KHÔNG THẤY FILE" if tex_gone else ""))
+        rows.append(Row("color", "color", "Hiệu ứng & chống trùng", " · ".join(parts) or "Bật (chưa chỉnh gì)",
+                        WARN if tex_gone else OK))
     elif dup:
         rows.append(Row("color", "color", "Hiệu ứng & chống trùng", f"chống trùng ×{dup}"))
     else:

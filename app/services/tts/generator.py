@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import threading
 import wave
 from collections.abc import Callable
@@ -88,6 +89,9 @@ class VoiceTrackResult:
     overflow_cues: list[tuple[int, float, float]] = field(default_factory=list)  # (chỉ số cue gốc, giây tràn, khung)
     report: list[dict] = field(default_factory=list)                            # từng câu: engine, tempo, số lần đọc…
     failed: int = 0                          # số câu không tổng hợp được (bỏ trống)
+    fallback: int = 0                        # số câu VieNeu lỗi → đọc tạm bằng Edge
+    qc_bad: int = 0                          # số câu đọc lại vẫn chưa đạt kiểm chất lượng (nên nghe lại)
+    noread: int = 0                          # số câu người dùng đánh dấu «không đọc»
 
 
 def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
@@ -125,7 +129,7 @@ def _check_script_matches_voice(items, cfg: TTSConfig, voice_id: str) -> None:
     if cjk >= max(3, len(items) * 0.4):
         raise RuntimeError(
             f"Phụ đề đang là chữ Trung/Nhật/Hàn ({cjk}/{len(items)} câu) nhưng giọng đọc là tiếng '{lang}' — giọng không đọc "
-            "được. Bật «Tự dịch khi chuẩn bị video» ở tab Lời thoại rồi ở tab TTS chọn «Đọc từ: Sub đã dịch», hoặc chọn "
+            "được. Bật «Tự dịch khi chuẩn bị video» ở tab Lời thoại rồi ở tab Lồng tiếng chọn «Đọc từ: Bản dịch», hoặc chọn "
             "giọng đúng ngôn ngữ của phụ đề.")
 
 
@@ -381,9 +385,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     speed = max(0.25, min(4.0, speed or 1.0))
     if abs(speed - 1.0) > 1e-3:
         cues = [Cue(c.index, c.start / speed, c.end / speed, c.text, dict(c.meta)) for c in cues]
-    items = [(i, c, c.plain) for i, c in enumerate(cues) if c.plain]
+    # câu «không đọc» (lời bài hát, câu trích…): không lồng giọng nhưng vẫn giữ phụ đề đúng mốc của nó
+    keep_subs = [c for c in cues if c.plain and c.meta.get("noread")]
+    items = [(i, c, c.plain) for i, c in enumerate(cues) if c.plain and not c.meta.get("noread")]
     if not items:
-        raise RuntimeError("Phụ đề trống — không có gì để đọc.")
+        raise RuntimeError("Mọi câu đều đánh dấu «không đọc» — không có gì để lồng tiếng." if keep_subs
+                           else "Phụ đề trống — không có gì để đọc.")
 
     # giọng cho từng câu: nhiều giọng theo người nói (meta["speaker"]), còn lại giọng chính
     spk_cfgs = speaker_configs(cfg)
@@ -401,6 +408,11 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         key = f"{vid}{f' {pitch_i:+d}Hz' if pitch_i else ''}"
         used[key] = used.get(key, 0) + 1
     _check_script_matches_voice(items, cfg, voice_id)
+    if log and cfg.tts_provider.startswith("VieNeu"):
+        han = [i + 1 for i, _c, t in items if re.search(r"[一-鿿぀-ヿ가-힯]", t)]
+        if han:                                  # giọng Việt bỏ qua chữ Hán → câu đọc thiếu, nhắc sửa bản dịch
+            log(f"⚠ {len(han)} câu còn chữ Hán / Nhật / Hàn — giọng Việt bỏ qua phần đó: câu "
+                + ", ".join(map(str, han[:10])) + ("…" if len(han) > 10 else "") + " (sửa ở tab Lời thoại)")
     qc = qc_options(settings)
     polish = polisher(settings)
 
@@ -430,9 +442,13 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     done = 0
     disk: list[OSError] = []                  # lỗi ghi file (ổ đầy / thư mục bị khoá) — không phải lỗi mạng / dịch vụ
 
+    net: list[Exception] = []                # mất mạng (Edge / Edge dự phòng) — đọc lại tuần tự cũng vô ích
+
     def note(exc: Exception) -> None:
         if isinstance(exc, OSError) and (getattr(exc, "errno", None) == 28 or isinstance(exc, PermissionError)):
             disk.append(exc)
+        elif "Mất mạng" in str(exc):
+            net.append(exc)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(synth, i, text): i for i, _, text in items}
@@ -454,6 +470,8 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     if failed and disk:
         raise RuntimeError("Không ghi được file giọng — ổ đĩa đầy hoặc thư mục cache bị khoá. Giải phóng dung lượng "
                            "(nút «Dọn dẹp» trên cùng) rồi Thử lại.")
+    if failed and net and cfg.tts_provider == FALLBACK:
+        raise RuntimeError("Mất mạng — giọng Edge cần Internet. Kiểm tra mạng rồi Thử lại (câu đã đọc được giữ lại).")
     if failed:
         # lỗi thường do dịch vụ quá tải khi gọi song song → thử lại tuần tự một lượt trước khi bỏ
         still: list[int] = []
@@ -489,14 +507,14 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         failed = [i for i in failed if i not in fallback_used]
     if failed:
         if len(failed) == len(items):
-            raise RuntimeError("Không tổng hợp được câu nào — kiểm tra mạng / dịch vụ TTS.")
+            raise RuntimeError("Không tạo được giọng câu nào — kiểm tra mạng / bộ đọc (tab Lồng tiếng).")
         if log:
             log(f"⚠ {len(failed)} câu không tổng hợp được (bỏ trống): {', '.join(str(i + 1) for i in failed[:8])}"
                 + ("…" if len(failed) > 8 else ""))
         items = [it for it in items if it[0] not in failed]
+    bad = [i for i, _c, _t in items
+           if (m := quality.read_mark(paths[i])) and int(m.get("score", 0)) >= quality.HARD]
     if log:
-        bad = [i for i, _c, _t in items
-               if (m := quality.read_mark(paths[i])) and int(m.get("score", 0)) >= quality.HARD]
         if qc.reread or bad:
             log(f"Kiểm chất lượng giọng: đã đọc lại {len(qc.reread)} câu"
                 + (f" · {len(bad)} câu vẫn chưa đạt sau khi đọc lại — nên nghe lại: câu "
@@ -670,8 +688,14 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 "video sẽ giữ khung cuối cho đủ giọng (không cắt). Nên rút gọn bản dịch.")
     overflow_cues = [(int(by_index[order[pos]].meta.get("src_idx", order[pos])), round(d, 3), round(slot_for(pos), 3))
                      for d, pos in sorted(over, key=lambda x: x[1])]
+    if keep_subs:
+        synced += [Cue(0, c.start, c.end, c.text, dict(c.meta)) for c in keep_subs]
+        synced.sort(key=lambda c: c.start)
+        for k, c in enumerate(synced):
+            c.index = k + 1
     return VoiceTrackResult(out_wav, len(items), sped_up, overflow_n, cursor, ensure_min_duration(synced, MIN_SUB),
-                            overflow_cues, report, failed=len(failed))
+                            overflow_cues, report, failed=len(failed), fallback=len(fallback_used), qc_bad=len(bad),
+                            noread=len(keep_subs))
 
 
 def preview_text(locale: str) -> str:

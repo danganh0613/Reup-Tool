@@ -68,6 +68,32 @@ def find_binary(name: str, preferred: str = "") -> str | None:
     return found
 
 
+_REASONS = [
+    (re.compile(r"no space left|disk full|errno 28", re.I), "ổ đĩa đầy — giải phóng dung lượng rồi Thử lại"),
+    (re.compile(r"permission denied|access is denied", re.I),
+     "không ghi được file (đang mở ở trình phát khác, hoặc thư mục bị khoá) — đóng trình phát rồi Thử lại"),
+    (re.compile(r"openencodesessionex|no capable devices|cannot load nvcuda|nvenc|amf|qsv|mfx|"
+                r"device creation failed|hwupload", re.I),
+     "bộ mã hoá GPU lỗi — tắt «Tăng tốc GPU» (tab Video › Nâng cao xuất file) rồi Thử lại"),
+    (re.compile(r"invalid data found|error while decoding|moov atom", re.I), "video nguồn bị hỏng một đoạn"),
+]
+
+
+def ffmpeg_reason(lines: list[str]) -> str:
+    """Lý do dễ hiểu từ stderr của ffmpeg: lỗi hay gặp → câu tiếng Việt; còn lại → dòng lỗi cuối có nghĩa."""
+    text = "\n".join(lines[-40:])
+    for pat, why in _REASONS:
+        if pat.search(text):
+            return why
+    m = re.search(r"No such file or directory", text)
+    if m:
+        miss = re.search(r"([^\s'\"]+\.\w{2,4})['\"]?:\s*No such file", text)
+        return "không tìm thấy file" + (f" {Path(miss.group(1)).name}" if miss else "")
+    useful = [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith(("Last message repeated",
+                                                                                       "frame=", "size="))]
+    return useful[-1][:200] if useful else "không rõ lý do"
+
+
 class FFmpeg:
     def __init__(self, ffmpeg_path: str = "", ffprobe_path: str = "") -> None:
         self.ffmpeg = find_binary("ffmpeg", ffmpeg_path)
@@ -214,7 +240,7 @@ class FFmpeg:
             raise RenderCancelled("Đã huỷ")
         if proc.returncode != 0:
             tail = "\n".join(stderr_lines[-12:])
-            raise RuntimeError(f"ffmpeg thoát mã {proc.returncode}:\n{tail}")
+            raise RuntimeError(f"ffmpeg lỗi: {ffmpeg_reason(stderr_lines)} (mã {proc.returncode})\n{tail}")
 
     def run_simple(self, args: list[str], timeout: float = 600, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
         self.require()

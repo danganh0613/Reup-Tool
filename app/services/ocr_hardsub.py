@@ -50,7 +50,11 @@ def _load(log: Callable[[str], None] | None = None):
         if _ocr is None:
             os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(MODELS_DIR / "paddlex"))
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            from paddleocr import PaddleOCR
+            try:
+                from paddleocr import PaddleOCR
+            except Exception as exc:                   # noqa: BLE001 — bản đóng gói thiếu PaddleOCR / thư viện hỏng
+                logger.warning("Không nạp được PaddleOCR", exc_info=True)
+                raise NoHardsub("Máy này chưa đọc được chữ in sẵn (thiếu bộ đọc chữ PaddleOCR)") from exc
 
             if log:
                 log("Nạp PaddleOCR (PP-OCRv5 mobile)… lần đầu tải model ~22 MB")
@@ -60,6 +64,16 @@ def _load(log: Callable[[str], None] | None = None):
                              use_doc_unwarping=False, use_textline_orientation=False, device="cpu",
                              enable_mkldnn=False)
         return _ocr
+
+
+def available() -> bool:
+    """Có thư viện đọc chữ (PaddleOCR) không — chỉ dò gói, không nạp (nạp mất vài giây)."""
+    from importlib.util import find_spec
+
+    try:
+        return find_spec("paddleocr") is not None and find_spec("paddle") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def to_simplified(text: str) -> str:
@@ -152,7 +166,7 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
     info = ffmpeg.probe(item.path)
     reg = hardsub.ensure_region(item, ffmpeg, duration, log=log)
     if not reg:
-        raise NoHardsub("Không thấy phụ đề in sẵn trên video — tab STT chọn «Giọng nói trong video», hoặc bấm «Dò lại» "
+        raise NoHardsub("Không thấy phụ đề in sẵn trên video — tab Nhận diện chọn «Giọng nói trong video», hoặc bấm «Dò lại» "
                         "ở tab Che mờ nếu video có chữ.")
     W, H = info.width, info.height
     pad = 0.01                                          # nới dải chữ một chút trên / dưới

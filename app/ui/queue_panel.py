@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp", ".m2ts",
-              ".mts", ".ogv"}
+              ".mts", ".ogv", ".vob"}
 _UNSET = object()
 _STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
                  "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED,
@@ -60,12 +60,17 @@ class QueueRow(ctk.CTkFrame):
         for w in (self, self.num, self.name, self.info, self.status):
             w.bind("<Button-1>", lambda _e: self.panel.state.set_active(self.index))
             w.bind("<Double-Button-1>", lambda _e: self._open_output())
+            w.bind("<Button-3>", self._menu)
+            w.bind("<Button-2>", self._menu)              # macOS: chuột phải = Button-2
         self._shown.update(num=f"{index + 1}", name=item.name)
         self.update_view()
 
     def _remove(self) -> None:
         """✕: đang chạy lượt có video này → bỏ qua video (các video sau chạy tiếp); không thì bỏ khỏi hàng đợi."""
         win, it = self.panel.window, self.item
+        if win.tasks.running and not win.runner.running:
+            messagebox.showinfo("Edit Studio", f"Đang chạy «{win.tasks.name}» — đợi xong hoặc bấm Dừng rồi bỏ video.")
+            return
         if win.runner.running and it.status in _RUNNING:
             if messagebox.askyesno("Edit Studio", f"Bỏ qua «{it.name}» trong lượt đang chạy?\n\nCác video khác vẫn chạy tiếp."):
                 win.skip_item(it)
@@ -78,6 +83,34 @@ class QueueRow(ctk.CTkFrame):
 
     def _retry(self) -> None:
         self.panel.window.retry_item(self.item)
+
+    def _menu(self, event) -> None:
+        """Chuột phải: đổi thứ tự (thứ tự = {stt} trong tên file xuất), mở file đã xuất, bỏ khỏi hàng đợi."""
+        import tkinter as tk
+
+        panel, n = self.panel, len(self.panel.state.videos)
+        busy = panel.window.runner.running
+        m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER, activeforeground=T.TEXT, bd=0)
+        move = "disabled" if busy else "normal"
+        m.add_command(label="Lên đầu hàng đợi", state=move if self.index > 0 else "disabled",
+                      command=lambda: panel.state.move_video(self.index, 0))
+        m.add_command(label="Lên trên một bậc", state=move if self.index > 0 else "disabled",
+                      command=lambda: panel.state.move_video(self.index, self.index - 1))
+        m.add_command(label="Xuống dưới một bậc", state=move if self.index < n - 1 else "disabled",
+                      command=lambda: panel.state.move_video(self.index, self.index + 1))
+        m.add_command(label="Xuống cuối hàng đợi", state=move if self.index < n - 1 else "disabled",
+                      command=lambda: panel.state.move_video(self.index, n - 1))
+        m.add_separator()
+        out = self.item.output_path if self.item.output_path and Path(self.item.output_path).exists() else None
+        m.add_command(label="Mở video đã xuất", state="normal" if out else "disabled", command=self._open_output)
+        m.add_command(label="Mở thư mục chứa video đã xuất", state="normal" if out else "disabled",
+                      command=lambda: open_path(str(Path(out).parent)) if out else None)
+        m.add_separator()
+        m.add_command(label="Bỏ khỏi hàng đợi", command=self._remove)
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
 
     def _open_output(self) -> None:
         p = self.item.output_path or self.item.path
@@ -116,6 +149,8 @@ class QueueRow(ctk.CTkFrame):
             parts.append(" · ".join(flags))
         if it.message and it.status in ("Đang xử lý", "Đang chuẩn bị"):
             parts.append(it.message)
+        elif it.status in ("Xong", "Cần xuất lại") and it.output_path:
+            parts.append("→ " + Path(it.output_path).name)      # tên file đã xuất (bấm đúp để mở)
         elif it.message and it.status == "Lỗi":
             parts.append(friendly_error(it.message, it))
         self._put("info", "  |  ".join(parts) if parts else "Chưa đọc thông tin", lambda v: self.info.configure(text=v))
@@ -206,8 +241,14 @@ class QueuePanel(ctk.CTkFrame):
             pp = Path(p)
             if pp.is_dir():
                 files = [x for x in sorted(pp.iterdir()) if x.is_file()]
-                vids.extend(str(x) for x in files if x.suffix.lower() in VIDEO_EXTS)
+                top = [str(x) for x in files if x.suffix.lower() in VIDEO_EXTS]
                 other += sum(1 for x in files if x.suffix.lower() not in VIDEO_EXTS)
+                deep = [str(x) for x in sorted(pp.rglob("*")) if x.is_file() and x.suffix.lower() in VIDEO_EXTS
+                        and x.parent != pp] if any(x.is_dir() for x in pp.iterdir()) else []
+                if deep and messagebox.askyesno("Edit Studio", f"Thư mục «{pp.name}» còn {len(deep)} video trong các thư "
+                                                               "mục con.\n\nNạp luôn các video đó?"):
+                    top += deep
+                vids.extend(top)
             elif pp.suffix.lower() in VIDEO_EXTS:
                 vids.append(str(pp))
             else:
@@ -218,7 +259,9 @@ class QueuePanel(ctk.CTkFrame):
             bits = ([f"{other} file không phải video"] if other else []) + ([f"{dup} video đã có"] if dup else [])
             msg = f"Đã thêm {len(added)} video · bỏ qua {' và '.join(bits)}"
             self.window.log(msg + ".")
-            self.window.progress.notice(msg, "Video nằm trong thư mục con không được nạp — chọn thẳng thư mục đó")
+            self.window.progress.notice(msg, "Định dạng nhận: " + " ".join(sorted(VIDEO_EXTS)))
+        elif not added:
+            self.window.progress.notice("Không thấy video nào", "Thư mục trống hoặc chỉ có file khác (ảnh, nhạc…)")
         if added:
             # tự tìm SRT cùng tên cạnh video
             for it in added:
@@ -236,7 +279,12 @@ class QueuePanel(ctk.CTkFrame):
         found = []
         for it in items:
             srt, tr = SUBS_DIR / f"{pipe.file_stem(it)}.srt", pipe.translated_path(it)
-            if srt.exists():
+            src = srt.with_suffix(".video.txt")
+            try:
+                same = not src.exists() or src.read_text(encoding="utf-8").strip().lower() == it.path.lower()
+            except OSError:
+                same = True
+            if srt.exists() and same:
                 found.append((it, srt, tr if tr.exists() else None))
         if not found:
             return
@@ -250,13 +298,16 @@ class QueuePanel(ctk.CTkFrame):
         self.window.log(f"Dùng lại phụ đề đã làm cho {len(found)} video.")
 
     def _clear(self) -> None:
-        if self.window.runner.running:
+        if self.window.runner.running or self.window.tasks.running:
             messagebox.showinfo("Edit Studio", "Đang chạy — bấm Dừng trước khi xoá hàng đợi.")
             return
         vids = self.state.videos
+        if not vids:
+            return
         if any(has_work(it) for it in vids) and not messagebox.askyesno(
-                "Edit Studio", f"Xoá hết {len(vids)} video khỏi hàng đợi?\n\nPhụ đề, bản dịch, giọng đã làm vẫn còn trong "
-                               "thư mục output — nạp lại video sẽ được hỏi dùng lại."):
+                "Edit Studio", f"Xoá hết {len(vids)} video khỏi hàng đợi?\n\nMất: trạng thái duyệt và cấu hình chỉnh riêng "
+                               "của từng video.\nGiữ: phụ đề, bản dịch, giọng, video đã xuất (nạp lại video sẽ được hỏi "
+                               "dùng lại phụ đề).", icon="warning", default="no"):
             return
         self.state.clear_videos()
 

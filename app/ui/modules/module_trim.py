@@ -1,4 +1,4 @@
-"""Module Cắt: tab «Cắt đầu / cuối» (kèm cắt nhanh) và «Render nhiều đoạn» (ghép liền hoặc xuất từng file)."""
+"""Module Cắt: tab «Cắt đầu / cuối» (kèm cắt nhanh) và «Xuất nhiều đoạn» (ghép liền hoặc xuất từng file)."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class TrimModule(BaseModule):
         s = self.setter
         self.rows: list[SegmentRow] = []
         self.tab_var = tk.StringVar(value="Cắt đầu / cuối")
-        ctk.CTkSegmentedButton(self, values=["Cắt đầu / cuối", "Render nhiều đoạn"], variable=self.tab_var,
+        ctk.CTkSegmentedButton(self, values=["Cắt đầu / cuối", "Xuất nhiều đoạn"], variable=self.tab_var,
                                command=self._show_tab, font=T.font(12)).pack(fill="x", pady=(0, 6))
         self.tab_a = ctk.CTkFrame(self, fg_color="transparent")
         self.tab_b = ctk.CTkFrame(self, fg_color="transparent")

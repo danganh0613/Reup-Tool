@@ -43,8 +43,8 @@ class BGMModule(BaseModule):
         self.clip_menu = Select(sec.body, ["Chưa có đoạn nhạc"], variable=self.clip_var, command=self._select_clip, height=34)
         self.clip_menu.pack(fill="x", pady=(2, 4))
         ButtonRow(sec.body, [("🎵 Thư viện nhạc", self._open_library, T.primary_button()), ("+ Thêm từ máy…", self._add_files, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("− Xóa đoạn", self._remove_clip, None), ("Xóa hết", self._clear, T.danger_button())]).pack(fill="x", pady=2)
-        self.status = hint(sec.body, "Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…».")
+        ButtonRow(sec.body, [("− Xoá đoạn này", self._remove_clip, None), ("Xoá hết nhạc", self._clear, None)]).pack(fill="x", pady=2)
+        self.status = hint(sec.body, "Chưa có nhạc · bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…» (nhạc phát từ đầu video).")
         self.status.pack(fill="x")
 
         sec = Section(self, "Vị trí đoạn nhạc")
@@ -55,20 +55,22 @@ class BGMModule(BaseModule):
                              pick_time=lambda: self.window.preview.t)
         self.offset = TimeEntry(sec.body, "Cắt đầu bài (s)", on_change=lambda v: self._set("offset", max(0.0, parse_hhmmss(v))))
         pack_rows(sec.body, [self.start, self.end, self.offset])
-        hint(sec.body, "Kết thúc = 0: tới hết video.").pack(fill="x")
+        hint(sec.body, "Đoạn mới phát từ đầu video. Chèn giữa chừng: tua tới chỗ cần rồi bấm «Đang xem» ở «Bắt đầu». "
+                       "Kết thúc = 0: tới hết video.").pack(fill="x")
 
         sec = Section(self, "Trộn âm")
         sec.pack(fill="x", pady=4)
         self.volume = SliderRow(sec.body, "Âm lượng", from_=0, to=100, step=1, suffix="%",
                                 on_change=lambda v: self._set("volume", float(v)))
-        self.fade_in = SliderRow(sec.body, "Fade vào (s)", from_=0, to=10, step=0.05, fmt="{:.2f}",
+        self.fade_in = SliderRow(sec.body, "Nhỏ dần vào (s)", from_=0, to=10, step=0.05, fmt="{:.2f}",
                                  on_change=lambda v: self._set("fade_in", float(v)))
-        self.fade_out = SliderRow(sec.body, "Fade ra (s)", from_=0, to=10, step=0.05, fmt="{:.2f}",
+        self.fade_out = SliderRow(sec.body, "Tắt dần (s)", from_=0, to=10, step=0.05, fmt="{:.2f}",
                                   on_change=lambda v: self._set("fade_out", float(v)))
         self.loop = SwitchRow(sec.body, "Lặp nhạc để phủ kín khoảng đã chọn", on_change=lambda v: self._set("loop", bool(v)))
         self.duck = SwitchRow(sec.body, "Tự hạ nhạc khi có tiếng nói / giọng đọc", on_change=s(cfg, "ducking", preview=False))
         pack_rows(sec.body, [self.volume, self.fade_in, self.fade_out, self.loop, self.duck])
-        hint(sec.body, "Lặp + Kết thúc = 0: lặp hết video · Fade 0.2–0.5 s cho êm.").pack(fill="x")
+        hint(sec.body, "Nhạc nền nghe vừa: 15–25 % · Lặp + Kết thúc = 0: lặp hết video · nhỏ dần / tắt dần 0,2–0,5 s "
+                       "cho êm.").pack(fill="x")
 
     # ── Trạng thái ───────────────────────────────────────────────────────
     def _clips(self) -> list[dict]:
@@ -92,13 +94,13 @@ class BGMModule(BaseModule):
                 self.start.set(f"{float(c.get('start', 0)):.2f}")
                 self.end.set(f"{float(c.get('end', 0)):.2f}")
                 self.offset.set(f"{float(c.get('offset', 0)):.2f}")
-                self.volume.set(float(c.get("volume", 15)))
+                self.volume.set(float(c.get("volume", 20)))
                 self.fade_in.set(float(c.get("fade_in", 0.35)))
                 self.fade_out.set(float(c.get("fade_out", 0.35)))
                 self.loop.set(bool(c.get("loop", True)))
                 self.status.configure(text=f"{Path(c.get('path', '')).name}")
             else:
-                self.status.configure(text="Chưa có nhạc · đưa playhead tới vị trí cần chèn rồi bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…».")
+                self.status.configure(text="Chưa có nhạc · bấm «Thư viện nhạc» hoặc «+ Thêm từ máy…» (nhạc phát từ đầu video).")
         finally:
             self._loading = False
         self._draw_timeline()
@@ -159,11 +161,18 @@ class BGMModule(BaseModule):
             self._idx = names.index(name)
             self.refresh()
 
-    def add_paths(self, paths: list[str]) -> None:
-        added = 0
+    def add_paths(self, paths: list[str]) -> int:
+        """Thêm đoạn nhạc (phát từ đầu video — trước: từ chỗ đang xem, dễ thành nhạc bắt đầu giữa chừng mà không
+        biết). Bài đã có thì không thêm lần nữa. Trả số đoạn đã thêm."""
+        added = dup = 0
+        have = {str(Path(c.get("path", ""))).lower() for c in self._clips() if isinstance(c, dict)}
         for p in paths:
             if Path(p).suffix.lower() in AUDIO_EXTS and Path(p).exists():
-                self._clips().append({"path": str(p), "volume": 15.0, "start": round(self.window.preview.t, 2), "end": 0.0,
+                if str(Path(p)).lower() in have:
+                    dup += 1
+                    continue
+                have.add(str(Path(p)).lower())
+                self._clips().append({"path": str(p), "volume": 20.0, "start": 0.0, "end": 0.0,
                                       "offset": 0.0, "loop": True, "fade_in": 0.35, "fade_out": 0.35})
                 added += 1
         if added:
@@ -171,6 +180,9 @@ class BGMModule(BaseModule):
             self._idx = len(self._clips()) - 1
             self.state.config_changed("bgm")
             self.refresh()
+        if dup:
+            self.window.log(f"{dup} bài nhạc đã có trong video — không thêm lần nữa.", notice=True)
+        return added
 
     def _add_files(self) -> None:
         paths = filedialog.askopenfilenames(title="Chọn nhạc nền",
@@ -193,6 +205,10 @@ class BGMModule(BaseModule):
             self.refresh()
 
     def _clear(self) -> None:
+        from tkinter import messagebox
+
+        if self._clips() and not messagebox.askyesno("Edit Studio", f"Xoá cả {len(self._clips())} đoạn nhạc của video?"):
+            return
         self._clips().clear()
         self._idx = 0
         self.state.config_changed("bgm")

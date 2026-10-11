@@ -354,6 +354,18 @@ if cuda:
     if free < NEED_VRAM_GB * 2 ** 30:
         say(f"⚠ GPU chỉ còn trống {free / 2 ** 30:.1f}/{total / 2 ** 30:.0f} GB (cần ~{NEED_VRAM_GB:.0f} GB) — game / "
             "ứng dụng khác đang dùng card nên nhận diện sẽ chậm hơn nhiều. Đóng bớt rồi chạy lại để nhanh hơn.")
+if not cuda:
+    try:
+        import psutil  # noqa: E402
+
+        ram = psutil.virtual_memory().available / 2 ** 30
+    except Exception:                                    # noqa: BLE001 — không có psutil thì bỏ qua bước kiểm
+        ram = None
+    if ram is not None and ram < 8:
+        say(f"⚠ Máy không có card NVIDIA và chỉ còn {ram:.1f} GB RAM trống — nhận diện trên CPU cần ~8 GB, có thể rất "
+            "chậm hoặc lỗi. Đóng bớt ứng dụng, hoặc video có phụ đề in sẵn thì chọn «Chữ in sẵn trên video».")
+    else:
+        say("Máy không có card NVIDIA — nhận diện chạy bằng CPU (chậm hơn nhiều, video 2 phút có thể mất 10–20 phút).")
 VAD = None
 
 
@@ -462,7 +474,8 @@ def align_job(k: int, aligner, pieces: list) -> None:
     for w, (a, b, lang, text) in enumerate(todo):
         phase("căn mốc từng chữ", 0.63 + 0.29 * w / len(todo), 0.63 + 0.29 * (w + 1) / len(todo),
               max(5.0, (b - a) / SR * 0.05), job=k)
-        qlang = ISO_TO_QWEN.get(lang_iso) or str(lang).split(",")[0].strip() or "Chinese"
+        own = str(lang).split(",")[0].strip()
+        qlang = own if own in QWEN_TO_ISO else (ISO_TO_QWEN.get(lang_iso) or "Chinese")
         items = [(it.text, it.start_time, it.end_time)
                  for it in aligner.align(audio=(audio[a:b], SR), text=text, language=qlang)[0]]
         words += attach_words(text, items, a / SR, limit=(b - a) / SR)
@@ -479,14 +492,43 @@ def align_job(k: int, aligner, pieces: list) -> None:
     say(f"Xong: {len(sentences)} câu")
 
 
+def cached(repo: str) -> bool:
+    """Model đã có trong thư mục HF_HOME (lần đầu phải tải vài GB → báo trước, khỏi tưởng máy treo)."""
+    home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    snap = os.path.join(home, "hub", "models--" + repo.replace("/", "--"), "snapshots")
+    return os.path.isdir(snap) and any(os.scandir(snap))
+
+
+def load_model(cls, repo: str, size: str, **kw):
+    """Nạp model; card hết bộ nhớ → thử lại trên CPU (chậm hơn nhưng chạy được); lỗi khác → báo từng video rồi dừng."""
+    global device, dtype
+    if not cached(repo):
+        say(f"Đang tải model {repo.split('/')[-1]} lần đầu (~{size}) — vài phút tới vài chục phút tuỳ mạng…")
+    try:
+        return cls.from_pretrained(repo, dtype=dtype, device_map=device, **kw)
+    except Exception as exc:                             # noqa: BLE001
+        oom = "out of memory" in str(exc).lower()
+        if cuda and oom and device != "cpu":
+            say("⚠ GPU hết bộ nhớ khi nạp model — chạy trên CPU (chậm hơn nhiều). Đóng game / ứng dụng nặng rồi chạy "
+                "lại để nhanh hơn.")
+            torch.cuda.empty_cache()
+            device, dtype = "cpu", torch.float32
+            return cls.from_pretrained(repo, dtype=dtype, device_map=device, **kw)
+        why = ("GPU hết bộ nhớ" if oom else "mất mạng khi tải model" if any(
+            k in str(exc).lower() for k in ("connection", "timed out", "getaddrinfo", "ssl")) else fail_text(exc))
+        for k in range(len(JOBS)):
+            _emit(f"FAIL {k} Không nạp được {repo.split('/')[-1]}: {why}")
+        sys.exit(3)
+
+
 # 1) nghe hết các video với MỘT lần nạp Qwen3-ASR
-phase("nạp Qwen3-ASR-1.7B", 0.05, 0.12, 25, job=0)
+phase("nạp Qwen3-ASR-1.7B", 0.05, 0.12, 25 if cached("Qwen/Qwen3-ASR-1.7B") else 600, job=0)
 from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner  # noqa: E402
 
 say(f"Nạp Qwen3-ASR-1.7B ({device})…")
 t_load = time.perf_counter()
-ASR = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=dtype, device_map=device,
-                                      max_inference_batch_size=1, max_new_tokens=MAX_NEW_TOKENS)
+ASR = load_model(Qwen3ASRModel, "Qwen/Qwen3-ASR-1.7B", "4,7 GB", max_inference_batch_size=1,
+                 max_new_tokens=MAX_NEW_TOKENS)
 say(f"Đã nạp model ({time.perf_counter() - t_load:.0f}s)")
 heard: dict[int, list] = {}
 for k in range(len(JOBS)):
@@ -503,8 +545,8 @@ if cuda:
     torch.cuda.empty_cache()
 # 2) căn mốc + tách câu từng video với MỘT lần nạp bộ căn mốc
 if heard:
-    phase("nạp bộ căn mốc", 0.6, 0.63, 10, job=min(heard))
-    aligner = Qwen3ForcedAligner.from_pretrained("Qwen/Qwen3-ForcedAligner-0.6B", dtype=dtype, device_map=device)
+    phase("nạp bộ căn mốc", 0.6, 0.63, 10 if cached("Qwen/Qwen3-ForcedAligner-0.6B") else 240, job=min(heard))
+    aligner = load_model(Qwen3ForcedAligner, "Qwen/Qwen3-ForcedAligner-0.6B", "1,2 GB")
     for k, pieces in heard.items():
         if skipped(k):
             continue
