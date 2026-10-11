@@ -204,9 +204,9 @@ class MainWindow(_Root):
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
         self._hbtn(right, "Thư mục xuất", "folder", self.open_output_dir, tip="Mở thư mục chứa video đã xuất").pack(side="left", padx=4)
-        self.mp3_btn = self._hbtn(right, "Render MP3", "music", lambda: self.start_render(list(self.app_state.videos), audio_only=True),
-                                  tip="Chỉ xuất âm thanh (lồng tiếng + nhạc) thành MP3")
-        self.mp3_btn.pack(side="left", padx=4)
+        self.clean_btn = self._hbtn(right, "Dọn dẹp", "trash", self.clean_workspace,
+                                    tip="Xoá file đang làm (phụ đề, giọng lồng, file tạm) và làm trống hàng đợi")
+        self.clean_btn.pack(side="left", padx=4)
         self.render_btn = button(right, "Render MP4", icon_name="play", variant="primary", size="lg",
                                  command=lambda: self.start_render(list(self.app_state.videos)), tip="Dựng toàn bộ hàng đợi thành MP4 (Ctrl+R)")
         self.render_btn.pack(side="left", padx=(8, 4))
@@ -429,6 +429,29 @@ class MainWindow(_Root):
             logger.exception("Không dựng sẵn được tab %s", key)
             PREWARM.remove(key)                  # lỗi thì để lúc mở tab dựng như cũ, không thử lại liên tục
         self.after(600, self._prewarm)
+
+    def clean_workspace(self, parent=None) -> None:
+        """Nút «Dọn dẹp»: xoá file đang làm + làm trống hàng đợi (hỏi trước). Video đã xuất, mẫu, cài đặt giữ nguyên."""
+        from app.services import cleanup
+
+        if self.runner.running or self.tasks.running:
+            messagebox.showinfo(APP_NAME, "Đang chạy — bấm Dừng trước khi dọn dẹp.", parent=parent or self)
+            return
+        mb = sum(cleanup.sizes().values())
+        n = len(self.app_state.videos)
+        if not messagebox.askyesno(
+                "Dọn dẹp", f"Xoá hết file đang làm ({mb:.1f} MB)?\n\n"
+                           "• Phụ đề, bản dịch, giọng lồng, file tạm\n"
+                           + (f"• {n} video trong hàng đợi\n" if n else "")
+                           + "\nGiữ lại: video đã xuất, mẫu, cài đặt, model AI.", icon="warning", default="no", parent=parent or self):
+            return
+        self.preview.stop_play()
+        self.app_state.clear_videos()
+        freed, stuck = cleanup.clean(keep=[self.app_state.output_dir or VIDEOS_DIR])
+        self.refresh_modules()
+        note = f" · {stuck} file đang mở, chưa xoá được" if stuck else ""
+        self.log(f"Đã dọn dẹp: giải phóng {freed:.1f} MB{note}.")
+        self.progress.result("ok", "Đã dọn dẹp", f"Giải phóng {freed:.1f} MB{note}")
 
     def refresh_modules(self) -> None:
         for m in self.modules.values():
@@ -903,7 +926,7 @@ class MainWindow(_Root):
     def set_running(self, running: bool) -> None:
         self._running = running
         self.render_btn.configure(state="disabled" if running else "normal")
-        self.mp3_btn.configure(state="disabled" if running else "normal")
+        self.clean_btn.configure(state="disabled" if running else "normal")
         self.stop_btn.configure(state="normal" if running else "disabled")
 
     def _build_progress(self) -> None:

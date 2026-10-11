@@ -39,7 +39,7 @@ tự đổi theo module đang xem, 3 tab Bắt đầu · Mục này · Gặp l�
 
 ## Bố cục & phím tắt
 
-Header: Cài đặt · Phím tắt · Thông báo · Thư mục xuất · Render MP3 · Render MP4 · Dừng.
+Header: Cài đặt · Phím tắt · Thông báo · Thư mục xuất · Dọn dẹp · Render MP4 · Dừng.
 Rail **Tính Năng** (F1–F11): Video · Phụ đề · STT · SRT · TTS · Che mờ · Nhạc · Logo · Cắt · Hiệu ứng · Dựng Truyện.
 Xem trước: chip **Tỉ lệ · Độ phân giải · FPS · Vừa khung** ngay trên khung (21:9 · 16:9 · 4:3 · 1:1 · 3:4 · 4:5 · 9:16,
 đồng bộ với module Video) · công cụ V (kéo) · T (khung phụ đề) · B (vẽ vùng che) · ẩn Sub/Blur · zoom · phát/tua · sóng âm ·

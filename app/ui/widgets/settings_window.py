@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -13,7 +12,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.ui.icons import EMOJI_ICONS, icon
-from app.config.paths import APP_VERSION, CACHE_DIR, JOBS_DIR, PRON_FILE, TTS_CACHE_DIR, PREVIEW_CACHE_DIR
+from app.config.paths import APP_VERSION, PRON_FILE
 from app.core.platform import exe_name
 from app.services.ffmpeg import FFmpeg
 from app.services.sysinfo import gpu_name
@@ -32,7 +31,7 @@ GUIDE = [
                            "nổi: cài một lần, miễn phí, không giới hạn lượt. Có GPU NVIDIA thì nhanh hơn nhiều."),
         ("☁ AI dùng API key", "Gemini dịch phụ đề, sửa lời thoại theo yêu cầu, rút gọn câu đọc không kịp và viết kịch "
                               "bản Dựng truyện. Hết lượt / quá tải thì máy dừng và báo để bạn chọn model khác."),
-        ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu MP4/MP3. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
+        ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu video. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
     ]),
     ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
         ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
@@ -408,15 +407,15 @@ class SettingsWindow(ctk.CTkToplevel):
 
     # ── Trang: Bộ nhớ & nâng cao ─────────────────────────────────────────
     def _build_storage(self, c, st) -> None:
-        self._page_head(c, "Bộ nhớ & nâng cao", "Dọn file tạm khi ổ đầy. Video, phụ đề, giọng đã xuất không bị xoá.")
-        b = self._card(c, "Bộ nhớ tạm")
+        self._page_head(c, "Bộ nhớ & nâng cao", "Dọn file đang làm khi ổ đầy. Video đã xuất không bị xoá.")
+        b = self._card(c, "File đang làm")
         self.cache_label = ctk.CTkLabel(b, text="", font=T.font(12), text_color=T.TEXT_DIM, anchor="w")
         self.cache_label.pack(fill="x")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
-        ctk.CTkButton(row, text="Làm mới", width=80, height=32, command=self._cache_sizes, **T.secondary_button()).pack(side="left")
-        ctk.CTkButton(row, text="Dọn cache tạm", width=110, height=32, command=self._clean_cache, **T.secondary_button()).pack(side="left", padx=6)
-        ctk.CTkButton(row, text="Xóa job & Project", width=130, height=32, command=self._clean_jobs, **T.danger_button()).pack(side="right")
+        button(row, "Làm mới", icon_name="refresh", command=self._cache_sizes).pack(side="left")
+        button(row, "Dọn dẹp…", icon_name="trash", variant="destructive", command=self._clean,
+               tip="Như nút «Dọn dẹp» trên cùng: xoá phụ đề, giọng lồng, file tạm và làm trống hàng đợi").pack(side="right")
         self._cache_sizes()
 
         b = self._card(c, "Đường dẫn ffmpeg", info="Chỉ cần khi máy không tự tìm thấy ffmpeg (để trống = dùng bản đi kèm).")
@@ -620,30 +619,16 @@ class SettingsWindow(ctk.CTkToplevel):
                 messagebox.showerror("Nhập TXT", str(exc))
 
     def _cache_sizes(self) -> None:
-        def size(p: Path) -> float:
-            try:
-                return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1_048_576
-            except Exception:
-                return 0.0
-        tts, pv, jobs = size(TTS_CACHE_DIR), size(PREVIEW_CACHE_DIR), size(JOBS_DIR)
-        self.cache_label.configure(text=f"Cache TTS {tts:.1f} MB · Xem trước {pv:.1f} MB · Job tạm {jobs:.1f} MB · "
-                                        f"Tổng: {tts + pv + jobs:.1f} MB")
+        from app.services.cleanup import sizes
 
-    def _clean_cache(self) -> None:
-        for d in (PREVIEW_CACHE_DIR, CACHE_DIR / "demucs", CACHE_DIR / "novocal"):
-            shutil.rmtree(d, ignore_errors=True)
-            d.mkdir(parents=True, exist_ok=True)
-        self._cache_sizes()
-        self.window.log("Đã dọn cache xem trước.")
+        mb = sizes()
+        self.cache_label.configure(text=f"Phụ đề & giọng {mb['work']:.1f} MB · File tạm {mb['temp']:.1f} MB · "
+                                        f"Cache {mb['cache']:.1f} MB · Tổng: {sum(mb.values()):.1f} MB")
 
-    def _clean_jobs(self) -> None:
-        if not messagebox.askyesno("Xóa job & Project", "Xoá thư mục job tạm và cache TTS? (Video/SRT/voice đã xuất vẫn giữ.)"):
-            return
-        for d in (JOBS_DIR, TTS_CACHE_DIR):
-            shutil.rmtree(d, ignore_errors=True)
-            d.mkdir(parents=True, exist_ok=True)
-        self._cache_sizes()
-        self.window.log("Đã xoá job tạm và cache TTS.")
+    def _clean(self) -> None:
+        self.window.clean_workspace(parent=self)
+        if self.winfo_exists():
+            self._cache_sizes()
 
     def _open_pron(self) -> None:
         """Mở từ điển phát âm TTS (chưa có thì tạo file mẫu — khoá bắt đầu bằng «_» là ghi chú, không áp)."""

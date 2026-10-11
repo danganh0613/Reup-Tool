@@ -87,6 +87,9 @@
     - sửa sau khi xuất: trạng thái «Cần xuất lại», ↻ «Xuất lại video này», Render bỏ qua video đã Xong;
     - video trùng tên khác thư mục không đè phụ đề / video xuất (`Pipeline.file_stem`); xuất ra file `.dang-xuat` rồi mới đổi tên;
     - Lời thoại tự nạp lại khi file phụ đề đổi; nạp lại video cũ → hỏi dùng lại phụ đề đã làm.
+20. **Nút «Dọn dẹp» thay «Render MP3» trên header** (`app/services/cleanup.py`, `MainWindow.clean_workspace`): hỏi trước,
+    xoá phụ đề / bản dịch / giọng lồng / job / cache xem trước-TTS-khử giọng và làm trống hàng đợi; giữ video đã xuất,
+    Dựng truyện, mẫu, cài đặt, model, bộ nhớ dịch. Cài đặt › Bộ nhớ dùng chung hàm này. Không còn nút xuất MP3.
 
 ## Còn tồn / để ý khi làm tiếp
 
