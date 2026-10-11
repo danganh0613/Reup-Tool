@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -189,8 +190,20 @@ def detect_region(path: str, ffmpeg: FFmpeg, duration: float) -> dict | None:
     return region
 
 
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
 def ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None) -> dict | None:
-    """Vùng chữ cứng của ``item`` (dò một lần, lưu cache)."""
+    """Vùng chữ cứng của ``item`` (dò một lần, lưu cache). Khung xem trước và bước Chuẩn bị cùng hỏi một video thì
+    lượt sau chờ lượt đang dò rồi dùng kết quả — không dò hai lần cùng lúc."""
+    with _locks_guard:
+        lock = _locks.setdefault(str(cache_path(item)), threading.Lock())
+    with lock:
+        return _ensure_region(item, ffmpeg, duration, log)
+
+
+def _ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None) -> dict | None:
     got = cached_region(item)
     if got is not False:
         return got

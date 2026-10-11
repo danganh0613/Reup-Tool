@@ -17,6 +17,7 @@ import math
 import re
 import string
 import sys
+import threading
 import time
 import unicodedata
 
@@ -33,14 +34,46 @@ QWEN_TO_ISO = {v: k for k, v in ISO_TO_QWEN.items()}
 QWEN_TO_ISO["Cantonese"] = "zh"
 _REPEATED = re.compile(r"(.{1,40}?)\1{3,}", re.S)
 T0 = time.perf_counter()
+NEED_VRAM_GB = 5.0                  # Qwen3-ASR-1.7B bf16 + bộ nhớ chạy (đo trên RTX 3060 Ti: ~4,7 GB)
+_OUT = threading.Lock()
+_STEP = {"name": "khởi động", "since": T0, "last": T0, "p0": 0.0, "p1": 0.03, "expect": 15.0}
+
+
+def _emit(line: str) -> None:
+    with _OUT:                      # luồng nhịp tim cũng in → không để hai dòng dính nhau
+        print(line, flush=True)
 
 
 def say(msg: str) -> None:
-    print(f"[{time.perf_counter() - T0:5.0f}s] {msg}", flush=True)
+    _STEP["last"] = time.perf_counter()
+    _emit(f"[{_STEP['last'] - T0:5.0f}s] {msg}")
 
 
 def progress(x: float) -> None:
-    print(f"PROGRESS {max(0.0, min(1.0, x)):.3f}", flush=True)
+    _STEP["done"] = max(_STEP.get("done", 0.0), x)     # mốc thật — nhịp tim không kéo thanh lùi xuống dưới
+    _emit(f"PROGRESS {max(0.0, min(1.0, x)):.3f}")
+
+
+def phase(name: str, p0: float, p1: float, expect: float) -> None:
+    """Bước dài (nạp model, nghe một đoạn…): thanh tiến độ tự nhích dần trong [p0, p1] theo thời gian ước lượng
+    ``expect`` giây (không vượt 90 % khoảng), 30 s không có dòng mới thì báo «… vẫn đang …» — biết máy còn chạy."""
+    _STEP.update(name=name, since=time.perf_counter(), p0=p0, p1=p1, expect=max(1.0, expect))
+    progress(p0)
+    _STEP["last"] = time.perf_counter()
+
+
+def _heartbeat() -> None:
+    while True:
+        time.sleep(3)
+        st, now = dict(_STEP), time.perf_counter()
+        t = now - st["since"]
+        guess = st["p0"] + (st["p1"] - st["p0"]) * 0.9 * (1 - math.exp(-t / st["expect"]))
+        _emit(f"PROGRESS {min(1.0, max(guess, st.get('done', 0.0))):.3f}")
+        if now - st["last"] >= 30:
+            say(f"… vẫn đang {st['name']} (đã {t:.0f}s)")
+
+
+threading.Thread(target=_heartbeat, daemon=True).start()
 
 
 def split_windows(n: int) -> list[tuple[int, int]]:
@@ -293,6 +326,13 @@ assert sr == SR, f"cần WAV {SR} Hz"
 say(f"Âm thanh {len(AUDIO) / SR:.1f}s")
 cuda = torch.cuda.is_available()
 device, dtype = ("cuda:0", torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if cuda else ("cpu", torch.float32)
+if cuda:
+    # card bị game / ứng dụng khác chiếm → model tràn sang RAM thường, chậm gấp nhiều lần: báo ngay từ đầu
+    free, total = torch.cuda.mem_get_info()
+    if free < NEED_VRAM_GB * 2 ** 30:
+        say(f"⚠ GPU chỉ còn trống {free / 2 ** 30:.1f}/{total / 2 ** 30:.0f} GB (cần ~{NEED_VRAM_GB:.0f} GB) — game / "
+            "ứng dụng khác đang dùng card nên nhận diện sẽ chậm hơn nhiều. Đóng bớt rồi chạy lại để nhanh hơn.")
+phase("dò đoạn có tiếng", 0.03, 0.05, 10)
 windows = split_windows(len(AUDIO))
 # Silero VAD chỉ cắt biên ngoài mỗi cửa sổ, đệm 1 s (cửa sổ không thấy tiếng thì giữ nguyên)
 threads = torch.get_num_threads()
@@ -309,12 +349,14 @@ for a, b in windows:
     sp = [r for r in regions if r["end"] > a and r["start"] < b]
     trimmed.append((max(a, sp[0]["start"] - SR), min(b, sp[-1]["end"] + SR)) if sp else (a, b))
 windows = trimmed
-progress(0.05)
+phase("nạp Qwen3-ASR-1.7B", 0.05, 0.12, 25)
 from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner  # noqa: E402
 
 say(f"Nạp Qwen3-ASR-1.7B ({device})…")
+t_load = time.perf_counter()
 ASR = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=dtype, device_map=device,
                                       max_inference_batch_size=1, max_new_tokens=MAX_NEW_TOKENS)
+say(f"Đã nạp model ({time.perf_counter() - t_load:.0f}s)")
 forced = ISO_TO_QWEN.get(args.language) if args.language not in ("", "auto") else None
 
 
@@ -327,6 +369,10 @@ def listen(a: int, b: int):
 
 pieces = []
 for k, (a, b) in enumerate(windows):
+    p0, p1 = 0.12 + 0.48 * k / len(windows), 0.12 + 0.48 * (k + 1) / len(windows)
+    part = f"đoạn {k + 1}/{len(windows)} " if len(windows) > 1 else ""
+    phase(f"nghe {part or 'lời thoại '}({a / SR:.0f}–{b / SR:.0f}s)", p0, p1, max(8.0, (b - a) / SR * 0.15))
+    say(f"Nghe {part}{a / SR:.0f}–{b / SR:.0f}s…")
     lang, text = listen(a, b)
     if degenerate(text) and b - a > 20 * SR:          # đọc lặp → chia đôi đọc lại một lần
         say(f"Cửa sổ {a / SR:.0f}–{b / SR:.0f}s đọc lặp → chia đôi đọc lại")
@@ -335,7 +381,7 @@ for k, (a, b) in enumerate(windows):
             pieces.append((x, y, *listen(x, y)))
     else:
         pieces.append((a, b, lang, text))
-    progress(0.05 + 0.55 * (k + 1) / len(windows))
+    progress(p1)
 ASR = None                                           # giải phóng VRAM trước khi nạp bộ căn mốc
 if cuda:
     torch.cuda.empty_cache()
@@ -346,19 +392,22 @@ for a, b, lang, text in pieces:
         votes[iso] = votes.get(iso, 0) + (b - a)
 lang_iso = args.language if args.language not in ("", "auto") else (max(votes, key=votes.get) if votes else "zh")
 say(f"Nhận diện xong ({lang_iso}) — căn mốc từng chữ…")
+phase("nạp bộ căn mốc", 0.6, 0.63, 10)
 aligner = Qwen3ForcedAligner.from_pretrained("Qwen/Qwen3-ForcedAligner-0.6B", dtype=dtype, device_map=device)
 words: list[dict] = []
 todo = [p for p in pieces if p[3]]
 for k, (a, b, lang, text) in enumerate(todo):
+    phase("căn mốc từng chữ", 0.63 + 0.29 * k / len(todo), 0.63 + 0.29 * (k + 1) / len(todo), max(5.0, (b - a) / SR * 0.05))
     qlang = ISO_TO_QWEN.get(lang_iso) or str(lang).split(",")[0].strip() or "Chinese"
     items = [(it.text, it.start_time, it.end_time) for it in aligner.align(audio=(AUDIO[a:b], SR), text=text, language=qlang)[0]]
     words += attach_words(text, items, a / SR, limit=(b - a) / SR)
-    progress(0.6 + 0.3 * (k + 1) / len(todo))
+    progress(0.63 + 0.29 * (k + 1) / len(todo))
 del aligner
 words = [w for w in words if len(w["word"]) <= 30]
 fixed = repair_collapsed(words)
 if fixed:
     say(f"Sửa {fixed} vùng căn mốc sụp")
+phase("tách câu", 0.92, 1.0, 10)
 sentences = segment(words, lang_iso)
 progress(1.0)
 json.dump({"language": lang_iso, "text": "".join(p[3] for p in pieces), "words": words, "sentences": sentences,

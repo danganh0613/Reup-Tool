@@ -92,6 +92,10 @@
     Dựng truyện, mẫu, cài đặt, model, bộ nhớ dịch. Cài đặt › Bộ nhớ dùng chung hàm này. Không còn nút xuất MP3.
 21. **Kiểm tra trước khi chạy** (`MainWindow._preflight`, `Pipeline.needs`): cần dịch mà chưa có key Gemini / cần nghe
     lời thoại mà chưa cài Qwen3-ASR → báo ngay + «Mở Cài đặt?»; lưu key xong nút thành «Chạy tiếp». Mục Dịch nhắc chưa có key.
+22. **Qwen3-ASR báo rõ khi chậm** (`qwen_asr_worker.py`): card còn trống < 5 GB (game / app khác chiếm) → dòng «⚠ GPU chỉ
+    còn …»; `phase()` + luồng nhịp tim: thanh tiến độ nhích trong từng bước, 30 s im lặng thì log «… vẫn đang …»; log thời
+    gian nạp model. Dò chữ cứng có khoá theo video (`hardsub.ensure_region`) — xem trước + Chuẩn bị không dò hai lần.
+    Test: `audit_out/qa/test_worker_heartbeat.py`.
 
 ## Còn tồn / để ý khi làm tiếp
 
