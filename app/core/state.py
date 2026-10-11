@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import shutil
 import sys
 import threading
 from collections.abc import Callable
@@ -267,12 +268,12 @@ class BrandConfig:
     text_motion_speed: float = 40.0
     text_delay: float = 0.0
     watermark_enable: bool = False
-    watermark_text: str = "@kenh_cua_ban"
+    watermark_text: str = ""
     watermark_font: str = "Arial"
     watermark_size: int = 30
     watermark_color: str = "#FFFFFF"
     watermark_opacity: float = 45.0
-    watermark_motion: str = MOTIONS[3]
+    watermark_motion: str = MOTIONS[0]
     watermark_position: str = POSITIONS[4]
     watermark_motion_speed: float = 35.0
     watermark_delay: float = 0.0
@@ -502,6 +503,8 @@ class AppState:
         self.story = StoryConfig()
         self.settings = Settings()
         self._settings_extra: dict[str, Any] = {}       # khoá lạ trong settings.json (tính năng đã gỡ) — ghi lại y nguyên
+        self.settings_notice = ""                        # đọc settings.json gặp chuyện (vd hỏng, dùng bản sao lưu) → báo người dùng
+        self.missing_videos: list[str] = []              # mở app: video trong hàng đợi cũ không còn ở ổ đĩa
         self.videos: list[VideoItem] = []
         self.active_index: int = -1
         self.output_dir: str = str(VIDEOS_DIR)
@@ -724,6 +727,7 @@ class AppState:
             if self._pristine is not None:
                 self._snap_pristine()
         else:
+            self.ui["edited"] = True                   # người dùng đã tự chỉnh (áp mẫu thì về False)
             self._scope_edit()
         self.emit("config_changed", section)
         self.mark_dirty()
@@ -781,10 +785,12 @@ class AppState:
             self._shared = None
             self.template_name = str(data.get("template") or "")
             self.videos = []
+            self.missing_videos = []
             for row in data.get("videos", []) or []:
                 if not isinstance(row, dict) or not row.get("path"):
                     continue
                 if not Path(row["path"]).exists():
+                    self.missing_videos.append(Path(row["path"]).name)
                     continue
                 self.videos.append(VideoItem(
                     path=row["path"],
@@ -841,9 +847,18 @@ class AppState:
 
     # ── Settings máy ──────────────────────────────────────────────────────
     def load_settings(self) -> None:
+        self.settings_notice = ""
         if SETTINGS_FILE.exists():
             try:
-                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                try:
+                    data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                except ValueError:
+                    # file bị cắt dở (mất điện lúc ghi) → giữ lại bản hỏng, dùng bản sao lưu lần lưu trước (còn key)
+                    bak = SETTINGS_FILE.with_suffix(".json.bak")
+                    data = json.loads(bak.read_text(encoding="utf-8"))
+                    SETTINGS_FILE.replace(SETTINGS_FILE.with_suffix(".json.hong"))
+                    self.settings_notice = "settings.json bị hỏng — đã dùng bản sao lưu lần lưu trước."
+                    logger.warning(self.settings_notice)
                 self.settings = _from_dict(Settings, data)
                 if isinstance(data, dict):
                     # key / cài đặt của tính năng đã gỡ (Groq, ElevenLabs…) giữ nguyên trong file, không xoá
@@ -859,9 +874,17 @@ class AppState:
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
 
-    def save_settings(self) -> None:
+    def save_settings(self) -> bool:
+        """Ghi settings.json (có API key) qua file tạm rồi đổi tên — mất điện giữa chừng không làm hỏng file; bản cũ
+        giữ ở settings.json.bak. False = không ghi được (ổ đầy, file bị khoá…)."""
         try:
             data = {**self._settings_extra, **dataclasses.asdict(self.settings)}
-            SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            if SETTINGS_FILE.exists():
+                shutil.copyfile(SETTINGS_FILE, SETTINGS_FILE.with_suffix(".json.bak"))
+            tmp.replace(SETTINGS_FILE)
+            return True
         except Exception:
             logger.exception("Không lưu được settings.json")
+            return False

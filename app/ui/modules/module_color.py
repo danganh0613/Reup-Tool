@@ -92,7 +92,7 @@ class ColorModule(BaseModule):
         self.tex_opacity = SliderRow(sec.body, "Độ đậm", from_=5, to=100, step=5, suffix="%",
                                      on_change=s(cfg, "texture_opacity", cast=float, preview=False), on_release=rel)
         pack_rows(sec.body, [self.tex_enable, self.tex_path, self.tex_blend, self.tex_opacity])
-        ButtonRow(sec.body, [("📚 Thư viện texture", self._pick_texture, None), ("📁 Mở thư mục", self._open_lib, None)]).pack(fill="x", pady=(4, 0))
+        ButtonRow(sec.body, [("Chọn file texture…", self._pick_texture, None), ("📁 Mở thư mục", self._open_lib, None)]).pack(fill="x", pady=(4, 0))
         hint(sec.body, f"Bỏ file texture (mp4/mov/png) của bạn vào {TEXTURE_LIB}. Chế độ screen hợp với light leak/grain; "
                        "multiply hợp với vết bẩn/vignette.").pack(fill="x")
 

@@ -90,6 +90,28 @@ def selftest_cli() -> int:
     return 0
 
 
+_MUTEX = None
+
+
+def _single_instance() -> bool:
+    """Windows: khoá tên theo thư mục app (named mutex) — bấm đúp exe hai lần chỉ mở một cửa sổ."""
+    global _MUTEX
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        import hashlib
+
+        from app.config.paths import ROOT
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        name = "EditStudio_" + hashlib.sha1(str(ROOT).lower().encode("utf-8")).hexdigest()[:16]
+        _MUTEX = k32.CreateMutexW(None, False, name)          # giữ handle tới lúc thoát app
+        return ctypes.get_last_error() != 183                  # ERROR_ALREADY_EXISTS
+    except Exception:                                          # noqa: BLE001 — không khoá được thì cứ mở
+        return True
+
+
 def main() -> int:
     if "--selftest" in sys.argv[1:]:
         return selftest_cli()
@@ -102,6 +124,15 @@ def main() -> int:
     from app.core.logging_setup import setup_logging
     setup_logging()
     logger = logging.getLogger("main")
+    if not _single_instance():
+        logger.info("%s đang chạy — không mở thêm cửa sổ", APP_NAME)
+        try:
+            from tkinter import messagebox
+            messagebox.showinfo(APP_NAME, f"{APP_NAME} đang mở rồi — dùng cửa sổ đang mở (xem thanh tác vụ).\n\n"
+                                          "Mở hai cửa sổ cùng lúc sẽ ghi đè hàng đợi và cài đặt của nhau.")
+        except Exception:
+            pass
+        return 0
     logger.info("Khởi động %s…", APP_NAME)
 
     from app.services.sysinfo import prewarm_gpu_name

@@ -143,7 +143,7 @@ class TTSModule(BaseModule):
                 sp = min(SPEED_OPTIONS, key=lambda v: abs(float(v) - cfg.tts_speed))
             self.speed.set(sp)
             self.pitch.set(cfg.tts_pitch)
-            self.max_tempo.set(cfg.max_tempo)
+            self.max_tempo.set(min(cfg.max_tempo, 1.25))
             self.min_gap.set(cfg.min_gap)
             self.multi.set(cfg.multi_voice)
             self.speaker_count.set(cfg.speaker_count)
@@ -158,6 +158,11 @@ class TTSModule(BaseModule):
         item = self.state.active
         if self.state.tts.multi_voice:
             self.speakers.refresh()
+        sub = self.state.subtitle
+        if (self.state.tts.tts_provider.startswith("VieNeu") and sub.translate_enable
+                and sub.translate_target != "Tiếng Việt"):
+            self.voice_status.warn(f"VieNeu chỉ đọc tiếng Việt — đang dịch sang {sub.translate_target}: chọn "
+                                   "«Edge TTS» + giọng đúng ngôn ngữ đó.")
         if item is None:
             self.track_status.info("")
             self.lib_status.info("Chưa chọn voice cũ — render sẽ tạo giọng mới.")
@@ -310,7 +315,7 @@ class TTSModule(BaseModule):
                                                "(hoặc chọn file SRT) trước — máy dựa vào từng câu phụ đề để biết ai nói.")
             return
         if not onnx_available():
-            self.speaker_status.error("Thiếu thư viện onnxruntime — chạy: pip install onnxruntime  (hoặc dùng «Gán từng câu…»)")
+            self.speaker_status.error("Thiếu thư viện onnxruntime (bản mã nguồn: pip install onnxruntime) — tạm dùng «Gán từng câu…»")
             return
         pipe = self.window.pipeline_for(item)
         self.speaker_status.warn("Đang nhận diện người nói… (xem log)")
@@ -380,8 +385,8 @@ class TTSModule(BaseModule):
         engine = self._engine
         if engine is None:
             return
-        vid = voice_id_for(cfg)
         v = self._voice_by_label.get(self.voice.get())
+        vid = getattr(v, "id", None) or voice_id_for(cfg)
         text = preview_text(v.locale if v else cfg.edge_language)
         self.voice_status.info("Đang tạo mẫu…")
 

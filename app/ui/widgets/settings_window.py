@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -284,7 +285,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def _build_cloud(self, c, st) -> None:
         self._page_head(c, "AI dùng API key", "Cần mạng. Gói miễn phí có giới hạn lượt mỗi ngày.")
         b = self._card(c, "Gemini", info="Dùng để: dịch phụ đề (2 bước, sát nghĩa rồi tự nhiên), tách câu nhận diện quá "
-                                         "dài, «Nhờ AI sửa», rút gọn câu đọc không kịp, viết kịch bản Dựng truyện. "
+                                         "dài, «Nhờ AI sửa», rút gọn câu đọc không kịp (Dựng truyện chọn model riêng ở tab Truyện). "
                                          "Gói miễn phí: Google có thể dùng chữ bạn gửi để cải thiện sản phẩm — đừng gửi "
                                          "nội dung nhạy cảm.")
         r = ctk.CTkFrame(b, fg_color="transparent")
@@ -523,6 +524,9 @@ class SettingsWindow(ctk.CTkToplevel):
             self.qwen_btn.pack(side="right")
         if vieneu_ok():
             self.vieneu_status.ok("✓ Đã cài.")
+        elif getattr(sys, "frozen", False):
+            self.vieneu_status.warn("Bản .exe này chưa kèm VieNeu — đang dùng Edge (cần mạng). Muốn VieNeu: cài bản mới "
+                                    "có VieNeu hoặc chạy bản mã nguồn.")
         else:
             self.vieneu_status.warn("Chưa cài — đang dùng Edge (cần mạng) thay thế.")
             self.vieneu_btn.pack(side="right")
@@ -582,7 +586,7 @@ class SettingsWindow(ctk.CTkToplevel):
         """Đổi theme ngay: lưu cài đặt, dựng lại giao diện chính, mở lại cửa sổ Cài đặt."""
         if key == T.THEME_NAME:
             return
-        self._save(close=False, silent=True)
+        self._save(close=False, silent=self._values() == self._initial)
         self.window.apply_theme_live(key)
 
     def _refresh_models(self) -> None:
@@ -664,9 +668,13 @@ class SettingsWindow(ctk.CTkToplevel):
         st.gemini_api_keys = "\n".join(st.split_keys(self._key_text()))
         st.glossary = self.glossary.get("1.0", "end").strip()
         out = self.out_var.get().strip()
-        if out:
+        if out and out != self.app_state.output_dir:
             self.app_state.output_dir = out
-        self.app_state.save_settings()
+            self.app_state.mark_dirty()                # thư mục xuất nằm trong cấu hình làm việc → tự lưu
+        if not self.app_state.save_settings():
+            messagebox.showerror("Cài đặt", "Không lưu được Cài đặt (ổ đĩa đầy hoặc file settings.json đang bị khoá — "
+                                            "OneDrive / phần mềm diệt virus?). Thử lại sau.", parent=self)
+            return
         self._initial = self._values()             # đã lưu → đóng không hỏi nữa
         self._badge("cloud", "" if st.gemini_keys() else "!")
         if silent:

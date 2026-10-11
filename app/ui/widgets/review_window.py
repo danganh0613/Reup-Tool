@@ -217,6 +217,11 @@ class ReviewPanel(ctk.CTkFrame):
         state = "normal" if it is not None else "disabled"
         for b in (self.approve_btn, self.skip_btn, self.more_btn):
             b.configure(state=state)
+        if it is not None and not self._ready(it):
+            # đang chạy / lỗi / chưa chuẩn bị: Duyệt lúc này xoá nhãn Lỗi hoặc bị lượt chạy ghi đè → khoá
+            self.approve_btn.configure(state="disabled")
+            if it.status in ("Đang chuẩn bị", "Đang xử lý"):
+                self.skip_btn.configure(state="disabled")
         if it is None:
             self.info_lbl.configure(text="Nạp video vào hàng đợi rồi bấm «Chuẩn bị» trên cùng.", text_color=T.TEXT_DIM)
             self._fill_summary()
@@ -230,7 +235,9 @@ class ReviewPanel(ctk.CTkFrame):
         elif self.app_state.template_name:
             bits.append(f"mẫu «{self.app_state.template_name}»")
         if it.status == "Lỗi" and it.message:
-            bits.append("Lỗi: " + it.message)
+            bits.append("Lỗi: " + friendly_error(it.message, it))
+        if not self._ready(it) and it.status not in ("Đang chuẩn bị", "Đang xử lý"):
+            bits.append("chưa duyệt được — bấm ⋯ › «Chuẩn bị lại video này»")
         self.info_lbl.configure(text="  ·  ".join(bits), text_color=color if it.status == "Lỗi" else T.TEXT_DIM)
         self._fill_summary()
 
@@ -334,6 +341,11 @@ class ReviewPanel(ctk.CTkFrame):
         ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
         self.status.ok(f"Đã duyệt hết — bấm «Xuất ({ready})» trên cùng để render." if ready else "Đã duyệt hết.")
 
+    @staticmethod
+    def _ready(it: VideoItem) -> bool:
+        """Video đã chuẩn bị xong (chờ duyệt / đã duyệt / đã xuất) — mới duyệt được."""
+        return it.status in ("Chờ duyệt", "Đã duyệt", "Bỏ qua", "Xong", "Cần xuất lại")
+
     def approve(self) -> None:
         """Ctrl+Enter ở bất kỳ tab nào khi đang duyệt."""
         self._approve()
@@ -341,6 +353,9 @@ class ReviewPanel(ctk.CTkFrame):
     def _approve(self) -> None:
         it = self.item
         if it is None:
+            return
+        if not self._ready(it):
+            self.status.warn("Video này chưa chuẩn bị xong (đang chạy hoặc bị lỗi) — chưa duyệt được.")
             return
         self._set_review(it, "approved")
         m = self.window.modules.get("srt")

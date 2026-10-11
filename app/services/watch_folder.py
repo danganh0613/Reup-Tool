@@ -8,7 +8,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp", ".m2ts",
+              ".mts", ".ogv"}
 WATCH_ACTIONS = ["Chỉ thêm vào hàng đợi", "Thêm & tự chuẩn bị (chờ duyệt)", "Thêm & tự xuất luôn"]
 SHARED = "— Dùng mẫu chung —"
 

@@ -55,6 +55,15 @@ def _has_nvidia() -> bool:
         return False
 
 
+_ACTIVE: set[subprocess.Popen] = set()
+
+
+def kill_all() -> None:
+    """Đóng app: tắt mọi tiến trình Qwen3-ASR / pip đang chạy."""
+    for proc in list(_ACTIVE):
+        _kill_tree(proc)
+
+
 def _kill_tree(proc: subprocess.Popen) -> None:
     """Dừng pip cùng các tiến trình con của nó (Windows: taskkill /T)."""
     try:
@@ -71,15 +80,19 @@ def _step(cmd: list[str], cancel: threading.Event | None) -> tuple[int | None, s
     """Chạy một bước cài; bấm Dừng → dừng ngay (không chờ pip tải xong 3,5 GB). Trả (mã thoát | None nếu bị dừng, lỗi)."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
                             errors="replace", creationflags=_NO_WINDOW)
-    while True:
-        try:
-            out, err = proc.communicate(timeout=0.5)
-            return proc.returncode, (err or out or "")
-        except subprocess.TimeoutExpired:
-            if cancel is not None and cancel.is_set():
-                _kill_tree(proc)
-                proc.communicate()
-                return None, ""
+    _ACTIVE.add(proc)
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=0.5)
+                return proc.returncode, (err or out or "")
+            except subprocess.TimeoutExpired:
+                if cancel is not None and cancel.is_set():
+                    _kill_tree(proc)
+                    proc.communicate()
+                    return None, ""
+    finally:
+        _ACTIVE.discard(proc)
 
 
 def _pip_reason(err: str) -> str:
@@ -191,9 +204,10 @@ def _run(args: list[str], *, on_line: Callable[[str], None],
                             creationflags=_NO_WINDOW)
     tail: list[str] = []
     stop, killed = threading.Event(), threading.Event()
+    _ACTIVE.add(proc)
 
     def watch() -> None:
-        while not stop.wait(0.5):
+        while not stop.wait(0.25):
             if should_stop():
                 killed.set()
                 proc.terminate()
@@ -209,6 +223,7 @@ def _run(args: list[str], *, on_line: Callable[[str], None],
         proc.wait()
     finally:
         stop.set()
+        _ACTIVE.discard(proc)
     return proc.returncode, tail, killed.is_set()
 
 
@@ -218,12 +233,28 @@ def _progress(line: str) -> tuple[int, float]:
     return (int(parts[1]), float(parts[2])) if len(parts) >= 3 else (0, float(parts[1]))
 
 
+_MADE_UP = re.compile(r"(请|记得|欢迎).{0,4}(点赞|订阅)|点赞.{0,4}(订阅|关注|转发)|订阅.{0,6}频道|一键三连|"
+                      r"(谢谢|感谢)(大家)?的?(观看|收看|收听)|字幕(由|提供|志愿者|组)|明镜与点点|"
+                      r"thank(s| you) for watching|please subscribe|like and subscribe", re.I)
+
+
+def _made_up(text: str) -> bool:
+    """Câu ngắn (≤ 20 chữ) chỉ gồm lời «kết video» mà model hay tự bịa khi nghe đoạn chỉ có nhạc nền."""
+    t = re.sub(r"[\W_]+", "", text)
+    return 0 < len(t) <= 20 and bool(_MADE_UP.search(text))
+
+
 def _finish(data: dict, *, settings: Settings, log: Callable[[str], None] | None,
             cancel: threading.Event | None, name: str = ""):
     """Kết quả của worker → câu có mốc: AI tách câu dài, mốc câu theo mốc từng chữ."""
     from app.services.translate_vl import split_long_sentences
     from app.services.whisper_stt import STTResult
 
+    sents = [s for s in data["sentences"] if not _made_up(s["text"])]
+    dropped = len(data["sentences"]) - len(sents)
+    if dropped and log:
+        log(f"Qwen3-ASR: bỏ {dropped} câu bịa (kiểu «请订阅», «谢谢观看») ở đoạn chỉ có nhạc")
+    data = {**data, "sentences": sents}
     sents = [s["text"] for s in data["sentences"]]
     sents = split_long_sentences(sents, [int(s["tokens"]) for s in data["sentences"]], settings=settings,
                                  language=data.get("language", "zh"), log=log, cancel=cancel)

@@ -412,8 +412,14 @@ class TimeEntry(ctk.CTkFrame):
             button(self, "Đang xem", icon_name="clock", size="sm", command=self._pick, width=100).grid(row=0, column=2, padx=(6, 0))
 
     def _changed(self, _e=None) -> None:
+        from app.services.ffmpeg import parse_time
+
         v = self.var.get().strip()
         if v == self._last:
+            return
+        bad = parse_time(v) is None             # «5 giay», «abc»… → viền đỏ, không áp (trước: lặng lẽ thành 0)
+        self.entry.configure(border_color=T.DANGER if bad else T.BORDER)
+        if bad:
             return
         self._last = v
         if self.on_change:

@@ -91,13 +91,11 @@ class BrandModule(BaseModule):
 
         # ── Chuyển động ──────────────────────────────────────────────────
         tb = self.tabs["Chuyển động"]
-        self.cycle = SliderRow(tb, "Chu kỳ gốc", from_=2, to=30, step=1, suffix=" giây",
-                               on_change=s(cfg, "motion_cycle", cast=float, preview=False), on_release=rel)
         self.margin = SliderRow(tb, "Lề an toàn", from_=0, to=200, step=2, suffix=" px",
                                 on_change=s(cfg, "safe_margin", cast=int, preview=False), on_release=rel)
         self.zone = OptionRow(tb, "Vùng chạy", SAFE_ZONES, on_change=s(cfg, "safe_zone"))
-        pack_rows(tb, [self.cycle, self.margin, self.zone])
-        hint(tb, "Chu kỳ lớn = chuyển động chậm · Lề an toàn: tránh sát viền.").pack(fill="x")
+        pack_rows(tb, [self.margin, self.zone])
+        hint(tb, "Nhanh / chậm chỉnh ở «Tốc độ chạy» trong từng thẻ · Lề an toàn: tránh sát viền.").pack(fill="x")
         sec = Section(tb, "Khung viền trang trí")
         sec.pack(fill="x", pady=(8, 4))
         self.frame_enable = SwitchRow(sec.body, "Bật khung viền", on_change=s(cfg, "frame_enable"))
@@ -150,7 +148,6 @@ class BrandModule(BaseModule):
             self.wm_motion.set(cfg.watermark_motion)
             self.wm_speed.set(self._speed_pct(cfg.watermark_motion_speed))
             self.wm_delay.set(f"{cfg.watermark_delay:.2f}")
-            self.cycle.set(cfg.motion_cycle)
             self.margin.set(cfg.safe_margin)
             self.zone.set(cfg.safe_zone)
             self.frame_enable.set(cfg.frame_enable)

@@ -337,7 +337,7 @@ def diarize(media: str | Path, cues: list[Cue], ffmpeg: FFmpeg, *, n_speakers: i
     import numpy as np
 
     if not onnx_available():
-        raise RuntimeError("Thiếu thư viện onnxruntime — chạy: pip install onnxruntime")
+        raise RuntimeError("Thiếu thư viện onnxruntime — bản mã nguồn: chạy «pip install onnxruntime»; bản .exe: cài lại bản mới.")
     if not cues:
         raise RuntimeError("Chưa có phụ đề — nhận diện giọng nói (STT) hoặc chọn SRT trước.")
 

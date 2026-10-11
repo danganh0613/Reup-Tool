@@ -75,9 +75,12 @@ class TrimModule(BaseModule):
         self.tail.pack(fill="x", padx=8, pady=(2, 8))
         sec = Section(ta, "Cắt nhanh")
         sec.pack(fill="x", pady=4)
-        ButtonRow(sec.body, [("3s - 2s", lambda: self._quick(3, 2), None), ("5s - 5s", lambda: self._quick(5, 5), None),
-                             ("1s - 1s", lambda: self._quick(1, 1), None), ("Đặt lại 0s", lambda: self._quick(0, 0), None)]).pack(fill="x")
-        hint(sec.body, "Mẹo: tua tới chỗ muốn cắt rồi bấm «⌖ Đang xem» (hoặc phím I / O).").pack(fill="x", pady=(4, 0))
+        ButtonRow(sec.body, [("Bỏ 3s đầu · 2s cuối", lambda: self._quick(3, 2), None),
+                             ("Bỏ 5s đầu · 5s cuối", lambda: self._quick(5, 5), None)]).pack(fill="x")
+        ButtonRow(sec.body, [("Bỏ 1s đầu · 1s cuối", lambda: self._quick(1, 1), None),
+                             ("Không cắt", lambda: self._quick(0, 0), None)]).pack(fill="x", pady=(4, 0))
+        hint(sec.body, "Mẹo: tua tới chỗ muốn cắt rồi bấm «Đang xem» (hoặc phím I / O). Gõ được 90 · 1:30 · 5s · 1p30.").pack(
+            fill="x", pady=(4, 0))
 
         # ── Nhiều đoạn ───────────────────────────────────────────────────
         tb = self.tab_b

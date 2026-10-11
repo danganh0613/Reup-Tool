@@ -211,7 +211,9 @@ def _ensure_region(item: VideoItem, ffmpeg: FFmpeg, duration: float, log=None) -
         region = detect_region(item.path, ffmpeg, duration)
     except Exception:
         logger.warning("Dò chữ cứng lỗi: %s", item.path, exc_info=True)
-        region = None
+        if log:
+            log(f"{item.name}: dò chữ cứng lỗi — lần sau sẽ dò lại (hoặc bấm «Dò lại» ở tab Che mờ).")
+        return None
     try:
         SUBS_DIR.mkdir(parents=True, exist_ok=True)
         cache_path(item).write_text(json.dumps({"region": region, "mtime": int(Path(item.path).stat().st_mtime)},

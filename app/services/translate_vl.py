@@ -316,6 +316,12 @@ def _ask(router: Router, prompt: str, valid: Callable[[dict], bool] | None = Non
 _CODE_NAME = {"zh": "Chinese", "ja": "Japanese", "ko": "Korean", "en": "English", "vi": "Vietnamese"}
 
 
+def memory_style(style: str, glossary: str) -> str:
+    """Khoá «phong cách» của bộ nhớ dịch: lời dặn + cách dịch + từ điển (đổi từ điển → không dùng lại bản dịch cũ)."""
+    gloss = " ".join((glossary or "").split())
+    return (style or "") + STYLE_TAG + (f"|g{hashlib.sha1(gloss.encode('utf-8')).hexdigest()[:8]}" if gloss else "")
+
+
 def lang_name(value: str) -> str:
     """Tên tiếng Anh cho lời nhắc: «Tiếng Việt» → Vietnamese, «zh» → Chinese, «Tự nhận diện» → the original language."""
     v = (value or "").strip()
@@ -414,9 +420,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     total = len(lines)
     src_lang = source_name(lines, source_hint)
     tgt_lang = lang_name(target)
-    # từ điển thuật ngữ đổi → không dùng lại bản dịch theo từ điển cũ
-    gloss = " ".join((settings.glossary or "").split())
-    key_style = (style or "") + STYLE_TAG + (f"|g{hashlib.sha1(gloss.encode('utf-8')).hexdigest()[:8]}" if gloss else "")
+    key_style = memory_style(style, settings.glossary)
     memory = TranslationMemory()
     ckpt = Checkpoint(srt_path, target, key_style)
     results: dict[int, str] = {}

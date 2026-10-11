@@ -98,7 +98,7 @@ class StoryModule(BaseModule):
         hint(sec.body, "Clip AI làm từ ảnh của cảnh, lặp cho đủ lời kể.").pack(fill="x")
 
         # ── Giọng kể ─────────────────────────────────────────────────────
-        sec = Section(self, "Giọng kể mặc định", subtitle="nhân vật có giọng riêng: xem Phân vai")
+        sec = Section(self, "Giọng kể mặc định", subtitle="nhân vật có giọng riêng: xem «Nhân vật & giọng»")
         sec.pack(fill="x", pady=4)
         self.voice = VoicePicker(sec.body, self.window, get=self._voice_get, set_=self._voice_set,
                                  speed=lambda: self.state.story.speed)

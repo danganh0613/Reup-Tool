@@ -280,7 +280,7 @@ class FFmpeg:
         af = []
         if abs(tempo - 1.0) > 0.005:
             af.append(atempo_chain(tempo))
-        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path)]
+        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path), "-map", "0:a:0"]
         if af:
             cmd += ["-af", ",".join(af)]
         cmd += ["-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(sample_rate), "-"]
@@ -291,7 +291,7 @@ class FFmpeg:
 
     def extract_audio_wav(self, src: str | Path, dst: str | Path, *, sample_rate: int = 16000, channels: int = 1) -> Path:
         """Tách audio ra WAV (mặc định mono — dùng cho Whisper)."""
-        res = self.run_simple(["-i", str(src), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
+        res = self.run_simple(["-i", str(src), "-map", "0:a:0", "-vn", "-ac", str(channels), "-ar", str(sample_rate),
                                "-acodec", "pcm_s16le", str(dst)])
         if res.returncode != 0:
             raise RuntimeError(res.stderr.decode("utf-8", "replace")[-300:])
@@ -363,7 +363,12 @@ def ffescape_path(p: str | Path) -> str:
 _TIME_RE = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$")   # h:mm:ss(.ms) hoặc m:ss(.ms)
 
 
-def parse_hhmmss(s: str) -> float:
+_HUMAN_RE = re.compile(r"^(?:(\d+)\s*(?:h|giờ)\s*)?(?:(\d+)\s*(?:m|p|ph|phút)\s*)?(?:(\d+(?:[.,]\d+)?)\s*(?:s|giây)?)?$",
+                       re.I)
+
+
+def parse_time(s: str) -> float | None:
+    """Mốc thời gian người dùng gõ → giây; None nếu không đọc được. Nhận: 90 · 1:30 · 0:01:30.5 · 5s · 1p30 · 1m30s."""
     s = (s or "").strip()
     if not s:
         return 0.0
@@ -371,7 +376,13 @@ def parse_hhmmss(s: str) -> float:
     if m:
         h, mi, se, ms = m.groups()
         return int(h or 0) * 3600 + int(mi) * 60 + int(se) + (int(ms.ljust(3, "0")) / 1000 if ms else 0)
-    try:
-        return float(s.replace(",", "."))
-    except ValueError:
-        return 0.0
+    m = _HUMAN_RE.match(s)
+    if m and any(m.groups()):
+        h, mi, se = m.groups()
+        return int(h or 0) * 3600 + int(mi or 0) * 60 + float((se or "0").replace(",", "."))
+    return None
+
+
+def parse_hhmmss(s: str) -> float:
+    t = parse_time(s)
+    return 0.0 if t is None else t

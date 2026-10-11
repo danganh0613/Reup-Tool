@@ -11,11 +11,19 @@ CÀI ĐẶT
 
 MÁY CẦN GÌ?
   • Không cần cài Python hay FFmpeg — đã có sẵn trong thư mục (bin\ffmpeg.exe, bin\ffprobe.exe).
-  • Bản zip này là bản gọn (không kèm CUDA): Whisper nhận dạng giọng nói chạy bằng CPU.
-    Máy có card NVIDIA vẫn dùng GPU để RENDER video (NVENC). Muốn Whisper chạy GPU: trong module STT
-    bấm «Tải CUDA runtime cho Whisper GPU» (một lần, ~1.3 GB).
-  • Internet: cần khi tải model Whisper lần đầu, khi dịch AI / giọng cloud.
-  • API key (Gemini, ElevenLabs, Google…): nhập trong Cài đặt, lưu ở settings.json cạnh EditStudio.exe.
+  • Video tiếng nước ngoài cần 2 thứ (thiếu thì app báo ngay khi bấm chạy, kèm nút mở đúng chỗ):
+      - Nghe lời thoại: bộ Qwen3-ASR (Cài đặt › AI trên máy, ~11 GB, chạy trên máy). Bản .exe chưa tự cài được —
+        chép thư mục models\qwen_asr_env + models\hf từ máy đã cài, hoặc video có phụ đề in sẵn thì chọn
+        «Chữ in sẵn trên video» ở tab STT (không cần Qwen).
+      - Dịch: API key Gemini (miễn phí tại aistudio.google.com) — Cài đặt › AI dùng API key. Lưu xong app tự gọi
+        thử key (không tốn lượt). Key lưu ở settings.json cạnh EditStudio.exe — đừng gửi file này cho người khác.
+  • Máy có card NVIDIA: render bằng GPU (NVENC); nhận diện nhanh hơn nhiều. Đang chơi game / mở app nặng thì
+    nhận diện rất chậm (card thiếu bộ nhớ) — app có báo.
+  • Internet: cần khi dịch (Gemini), giọng Edge, tải model lần đầu.
+
+CÁCH LÀM NHANH
+  Nạp video → chọn mẫu ở ô «Mẫu» trên cùng (vd «Review phim dọc 9:16») → bấm nút chính trên cùng bên phải.
+  Xem thêm: nút «Hướng dẫn» trong app.
 
 CẬP NHẬT
   Giải nén bản mới đè lên thư mục cũ. settings.json, output\, models\ được giữ nguyên.

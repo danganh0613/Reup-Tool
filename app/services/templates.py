@@ -337,6 +337,7 @@ def apply_shared(state: AppState, t: Template) -> None:
         state.apply_sections(resolve(t, state.sections_dict()))
     state.template_name = t.name
     state.emit("config_loaded")
+    state.ui["edited"] = False
     state.mark_dirty()
 
 

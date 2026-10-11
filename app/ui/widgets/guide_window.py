@@ -73,6 +73,14 @@ def render_blocks(parent, blocks: list, wrap: int, *, big: bool = True) -> None:
                                  text_color=T.TEXT_DIM).grid(row=i, column=1, sticky="ew", padx=(0, 12))
 
 
+def _fold(text: str) -> str:
+    """Bỏ dấu tiếng Việt + chữ thường: «Che mờ» → «che mo» (gõ không dấu vẫn tìm ra)."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFD", text.replace("đ", "d").replace("Đ", "D"))
+    return "".join(c for c in text if not unicodedata.combining(c)).lower()
+
+
 def _text_of(t: dict) -> str:
     parts: list[str] = []
     for _kind, data in t["blocks"]:
@@ -107,7 +115,7 @@ class HelpPane(ctk.CTkFrame):
         self.title.grid(row=0, column=0, sticky="ew")
         button(head, "", icon_name="fullscreen", variant="ghost", size="sm", command=self._open_full,
                tip="Mở hướng dẫn đầy đủ (cửa sổ riêng, có tìm kiếm)").grid(row=0, column=1, padx=(4, 0))
-        button(head, "", icon_name="close", variant="ghost", size="sm", command=self.window.toggle_help,
+        button(head, "", icon_name="close", variant="ghost", size="sm", command=self.window.close_help,
                tip="Đóng bảng hướng dẫn (Ctrl+H)").grid(row=0, column=2, padx=(2, 0))
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=2, pady=(0, 4))
@@ -196,8 +204,10 @@ class GuideWindow(ctk.CTkToplevel):
                      font=T.font(15, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *_a: self._rebuild_list())
-        ctk.CTkEntry(side, textvariable=self.search_var, placeholder_text="Gõ để tìm…", height=36,
-                     corner_radius=T.RADIUS).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        self.search = ctk.CTkEntry(side, textvariable=self.search_var, placeholder_text="Gõ để tìm (có / không dấu)…",
+                                   height=36, corner_radius=T.RADIUS)
+        self.search.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        self.after(120, self.search.focus_set)
         self.list = ctk.CTkScrollableFrame(side, fg_color="transparent")
         self.list.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
         self.list.grid_columnconfigure(0, weight=1)
@@ -218,10 +228,10 @@ class GuideWindow(ctk.CTkToplevel):
         for w in self.list.winfo_children():
             w.destroy()
         self._buttons.clear()
-        q = self.search_var.get().strip().lower()
+        q = _fold(self.search_var.get().strip())
         row = 0
         for group in GROUPS:
-            items = [t for t in TOPICS if t["group"] == group and (not q or q in t["title"].lower() or q in _text_of(t).lower())]
+            items = [t for t in TOPICS if t["group"] == group and (not q or q in _fold(t["title"]) or q in _fold(_text_of(t)))]
             if not items:
                 continue
             ctk.CTkLabel(self.list, text=group.upper(), font=T.font(10, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(
@@ -234,6 +244,10 @@ class GuideWindow(ctk.CTkToplevel):
                 b.grid(row=row, column=0, sticky="ew", padx=4, pady=1)
                 self._buttons[t["key"]] = b
                 row += 1
+        if not row:
+            ctk.CTkLabel(self.list, text="Không có kết quả — thử từ khác (vd «phu de», «giong», «cat»).",
+                         font=T.font(12), text_color=T.TEXT_MUTED, anchor="w", justify="left", wraplength=280).grid(
+                row=0, column=0, sticky="ew", padx=8, pady=8)
         self._highlight()
 
     def _highlight(self) -> None:

@@ -38,8 +38,8 @@ class STTModule(BaseModule):
                                 info=ENGINE_INFO)
         self.lang = OptionRow(sec.body, "Ngôn ngữ", STT_LANGUAGES, on_change=s(cfg, "stt_language", preview=False),
                               labels={c: language_label(c) for c in STT_LANGUAGES},
-                              info="Ngôn ngữ người nói trong video. «Tự nhận diện» thường đúng; chọn hẳn khi video lẫn "
-                                   "nhiều thứ tiếng.")
+                              info="Ngôn ngữ người nói trong video. Lẫn hai thứ tiếng (vd Trung + Anh) thì để «Tự nhận "
+                                   "diện»; chỉ chọn hẳn khi cả video một thứ tiếng mà máy nhận sai.")
         self.auto = SwitchRow(sec.body, "Tự nhận diện khi chuẩn bị video", on_change=self._auto_changed,
                               info="Video chưa có phụ đề thì bước «Chuẩn bị» tự nhận diện. Tắt khi bạn luôn dùng file SRT "
                                    "có sẵn.")
@@ -141,6 +141,7 @@ class STTModule(BaseModule):
                 self.status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
                 self.on_active_changed()
+                self.status.ok(f"Xong {len(result)} câu — tiếp: tab Lời thoại › «Dịch phụ đề» (hoặc bấm Chuẩn bị / Render).")
                 self.window.queue_update(item)
                 self.window.preview.schedule_refresh(0)
                 self.state.mark_dirty()

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.config import theme as T
+from app.services.watch_folder import WATCH_ACTIONS
 from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIO_VALUES, RATIOS, RESOLUTIONS, VIDEO_CODECS
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
@@ -49,7 +52,7 @@ class VideoModule(BaseModule):
         sec.pack(fill="x", pady=4)
         self.watch = SwitchRow(sec.body, "Theo dõi thư mục", on_change=self._watch_toggled)
         self.watch_dir = EntryRow(sec.body, "Thư mục", browse="dir", placeholder="chép video vào đây là tự vào hàng đợi",
-                                  on_change=lambda v: self._watch_set("watch_dir", v.strip()))
+                                  on_change=lambda v: self._watch_set("watch_dir", v.strip().strip('"').strip("'").strip()))
         self.watch_tpl = OptionRow(sec.body, "Áp mẫu", [SHARED], on_change=lambda v: self._watch_set("watch_template", v))
         self.watch_action = OptionRow(sec.body, "Sau khi nạp", WATCH_ACTIONS,
                                       on_change=lambda v: self._watch_set("watch_action", v))
@@ -217,6 +220,8 @@ class VideoModule(BaseModule):
             self.watch_status.info("")
         elif not ui.get("watch_dir"):
             self.watch_status.warn("Chọn thư mục để theo dõi.")
+        elif not Path(ui["watch_dir"]).is_dir():
+            self.watch_status.warn(f"Không thấy thư mục «{ui['watch_dir']}» — ổ ngoài đã rút hoặc gõ sai đường dẫn?")
         else:
             n = ui.get("watch_added", 0)
             self.watch_status.ok(f"Đang theo dõi «{ui['watch_dir']}» · đã tự nạp {n} video.")
@@ -228,6 +233,10 @@ class VideoModule(BaseModule):
         self.state.mark_dirty()
         if key == "watch_dir" and self.state.ui.get("watch_enable"):
             self.window.watch_started()
+        if key == "watch_action" and value == WATCH_ACTIONS[1] and not self.state.ui.get("review_mode"):
+            self.review.set(True)
+            self._review_toggled(True)
+            self.window.log("Đã bật «Duyệt trước khi xuất» — video tự chuẩn bị sẽ chờ bạn duyệt ở tab Duyệt.")
         self.update_watch_status()
 
     def _watch_toggled(self, on: bool) -> None:
@@ -392,6 +401,8 @@ class VideoModule(BaseModule):
         if not self.state.video.demucs_enable:
             text = ("Tắt: giữ nguyên âm gốc (cả giọng nói). Bật khi lồng tiếng: AI bỏ giọng Trung / Anh… của video gốc, "
                     "giữ nhạc nền & tiếng động. Chạy trên máy, ~1 phút cho mỗi phút video, làm một lần ở bước Chuẩn bị.")
+        elif not self.state.video.keep_original_audio or self.state.video.mute:
+            text = "Đang tắt âm gốc (hoặc tắt toàn bộ âm thanh) nên không cần khử giọng — bước này sẽ được bỏ qua."
         else:
             it = self.state.active
             if it is not None and cached_no_vocals(it.path) is not None:

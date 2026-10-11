@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tkinter.font as tkfont
 from pathlib import Path
@@ -22,12 +23,16 @@ else:
                   Path.home() / ".fonts"]
 
 
+_SYMBOL = re.compile(r"wingdings|webdings|symbol|marlett|mt extra|font ?awesome|mdl2|fluent icons|material icons|"
+                     r"icomoon|dingbat|emoji|bookshelf", re.I)
+
+
 def list_fonts(root=None) -> list[str]:
     global _cache
     if _cache is not None:
         return _cache
     try:
-        fams = sorted({f for f in tkfont.families(root) if f and not f.startswith("@")})
+        fams = sorted({f for f in tkfont.families(root) if f and not f.startswith("@") and not _SYMBOL.search(f)})
     except Exception:
         fams = []
     preferred = [f for f in _PREFERRED if f in fams]

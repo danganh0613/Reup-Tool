@@ -52,6 +52,30 @@ def _count(path: str | None, target: str = "") -> tuple[int, str, int]:
     return len(cues), first, 0
 
 
+def _voice_issues(pipe, item: VideoItem) -> list[str]:
+    """Vấn đề của track giọng: giọng cũ (đổi giọng / tốc độ / bản dịch sau khi chuẩn bị), câu bỏ trống, câu tràn khung."""
+    import json
+
+    out = []
+    try:
+        voice, fresh, _trim = pipe.current_voice_track(item)
+    except Exception:                                    # noqa: BLE001
+        return out
+    if voice is None:
+        return out
+    if not fresh:
+        out.append("giọng cũ — cấu hình đã đổi, Chuẩn bị lại để tạo giọng mới")
+    try:
+        data = json.loads(Path(voice).with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return out
+    if data.get("failed"):
+        out.append(f"{data['failed']} câu không đọc được (bỏ trống)")
+    if data.get("overflow_cues"):
+        out.append(f"{len(data['overflow_cues'])} câu đọc tràn khung")
+    return out
+
+
 def summarize(window, item: VideoItem) -> list[Row]:
     st = window.app_state.state_for(item)
     pipe = window.pipeline_for(item)
@@ -131,6 +155,10 @@ def summarize(window, item: VideoItem) -> list[Row]:
             rows.append(Row("tts", "speaker", "Người nói & lồng tiếng",
                             f"1 giọng đọc: {_short_voice(voice_id_for(t))} ({prov}) · tốc độ ×{t.tts_speed:g}"
                             + ("" if has_voice else " · chưa tạo giọng"), OK if has_voice else WARN))
+        issues = _voice_issues(pipe, item) if has_voice else []
+        if issues:                                       # ghép vào dòng vừa thêm: nói rõ giọng đang có vấn đề gì
+            last = rows[-1]
+            rows[-1] = Row(last.module, last.icon, last.title, last.value + " · " + " · ".join(issues), WARN, last.detail)
     else:
         rows.append(Row("tts", "speaker", "Người nói & lồng tiếng", "Không lồng tiếng", OFF))
 

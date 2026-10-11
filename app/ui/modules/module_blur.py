@@ -26,7 +26,7 @@ class BlurModule(BaseModule):
 
     def build(self) -> None:
         cfg = self.state.blur
-        self.enable = SwitchRow(self, "Bật che chữ", on_change=self.setter(cfg, "enable"))
+        self.enable = SwitchRow(self, "Bật che mờ (vùng vẽ tay + tự dò)", on_change=self.setter(cfg, "enable"))
         self.enable.pack(fill="x", pady=(0, 2))
         hint(self, "Làm mờ chữ in sẵn, logo… trên video gốc.").pack(fill="x", pady=(0, 6))
 

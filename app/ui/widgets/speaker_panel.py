@@ -32,7 +32,7 @@ def play_segment(window, item: VideoItem, start: float, end: float, on_error: Ca
         if not out.exists():
             CLIP_DIR.mkdir(parents=True, exist_ok=True)
             res = window.ffmpeg.run_simple(["-ss", f"{max(0.0, start):.3f}", "-t", f"{max(0.3, end - start):.3f}",
-                                            "-i", item.path, "-vn", "-ac", "1", "-ar", "24000", str(out)], timeout=60)
+                                            "-i", item.path, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "24000", str(out)], timeout=60)
             if res.returncode != 0 or not out.exists():
                 raise RuntimeError(res.stderr.decode("utf-8", "replace")[-200:] or "không cắt được audio")
         return out

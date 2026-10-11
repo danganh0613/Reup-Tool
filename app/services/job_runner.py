@@ -42,6 +42,11 @@ def select_sub_cues(scfg, orig: list[Cue], translated: list[Cue] | None) -> list
     return shift(cues, scfg.sub_delay)
 
 
+_LANG_NAMES = {"zh": "tiếng Trung", "yue": "tiếng Quảng Đông", "en": "tiếng Anh", "ja": "tiếng Nhật", "ko": "tiếng Hàn",
+               "vi": "tiếng Việt", "th": "tiếng Thái", "id": "tiếng Indonesia", "fr": "tiếng Pháp", "de": "tiếng Đức",
+               "es": "tiếng Tây Ban Nha", "ru": "tiếng Nga", "pt": "tiếng Bồ Đào Nha", "it": "tiếng Ý"}
+
+
 def _safe_stem(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_ ." else "_" for c in name).strip() or "video"
 
@@ -91,12 +96,21 @@ class Pipeline:
                    cancel: threading.Event | None = None, source_path: str | None = None) -> list[Cue]:
         cfg = self.state.subtitle
         src = source_path or item.path
+        res = None
         if cfg.stt_engine == "ocr":
+            from app.services.ocr_hardsub import NoHardsub
             from app.services.ocr_hardsub import transcribe as ocr_transcribe
+            from app.services.qwen_asr import is_installed
 
-            res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
-                                 log=log, cancel=cancel)
-        else:
+            try:
+                res = ocr_transcribe(item, self.ffmpeg, duration=self.ffmpeg.duration_of(src), on_progress=progress,
+                                     log=log, cancel=cancel)
+            except NoHardsub:
+                if not is_installed() or self.silent(src):
+                    raise
+                if log:
+                    log(f"{item.name}: không thấy phụ đề in sẵn → nghe giọng nói (Qwen3-ASR).")
+        if res is None:
             # Qwen3-ASR (chạy trên máy) + mốc từng chữ + tách câu theo nghĩa
             from app.services.qwen_asr import transcribe as qwen_transcribe
 
@@ -129,8 +143,8 @@ class Pipeline:
         except OSError:
             pass
         if log:
-            log(f"Nhận diện xong: {len(res.cues)} cue · ngôn ngữ {res.language} "
-                f"({res.language_probability:.0%}) → {out.name}")
+            lang = _LANG_NAMES.get(res.language, res.language or "chưa rõ")
+            log(f"Nhận diện xong: {len(res.cues)} câu · nhận ra {lang} → {out.name}")
         return res.cues
 
     def translate(self, item: VideoItem, cues: list[Cue] | None = None, *, progress: ProgressCb | None = None,
@@ -314,7 +328,8 @@ class Pipeline:
                 "voice": voice_id_for(self.state.tts), "speed": self.state.tts.tts_speed,
                 "duration": res.duration, "cues": res.cue_count, "created": time.time(),
                 "synced_srt": str(synced) if res.synced_cues else "", "timeline_speed": vspeed,
-                "overflow_cues": res.overflow_cues}, ensure_ascii=False, indent=2), encoding="utf-8")
+                "overflow_cues": res.overflow_cues, "failed": res.failed}, ensure_ascii=False, indent=2),
+                encoding="utf-8")
         except Exception:
             logger.exception("Không ghi được ghi chú track giọng")
         if res.report:                             # báo cáo từng câu: engine, tempo, số lần đọc, lỗi kiểm tra…
@@ -639,6 +654,9 @@ class Pipeline:
         voice_path: Path | None = None
         if tts_on:
             use_tr = tcfg.tts_source == TTS_SOURCES[0] and bool(cues_tr)
+            if use_tr and tcfg.tts_provider.startswith("VieNeu") and scfg.translate_target != "Tiếng Việt":
+                log(f"⚠ VieNeu chỉ đọc tiếng Việt mà bản dịch là {scfg.translate_target} — chọn Edge TTS + giọng đúng "
+                    "ngôn ngữ ở tab TTS.")
 
             cut_idx: set[int] = set()      # câu bị Cắt / Bỏ đầu cắt mất một phần (chữ vẫn cả câu) → không nhờ AI rút gọn
 
@@ -799,6 +817,9 @@ class Pipeline:
                               loudness=st.settings.loudness_target)
         log(f"Render thử → {out_path.name}" if preview_out else f"Render → {out_path.name}")
         rp.run_plan(plan, self.ffmpeg, on_progress=stage("Render", 0.65, 0.35), cancel=cancel)
+        for tmp in (plan.mix_path, plan.master_path):    # WAV tạm lớn, chỉ dùng cho lần xuất này
+            if tmp is not None:
+                Path(tmp).unlink(missing_ok=True)
         m = plan.master_info
         if m.get("output_i") is not None:
             log((f"Âm thanh: {m['input_i']:.1f} → {m['output_i']:.1f} LUFS (đích {plan.loudness:.0f})"
@@ -814,11 +835,16 @@ class Pipeline:
         return out_path
 
 
-def error_line(exc: BaseException, limit: int = 160) -> str:
-    """Dòng đầu của câu lỗi cho người dùng — lỗi không có chữ (MemoryError, TimeoutError…) thì ghi tên loại lỗi."""
+def error_line(exc: BaseException, limit: int = 260) -> str:
+    """Dòng đầu của câu lỗi cho người dùng — lỗi không có chữ (MemoryError, TimeoutError…) thì ghi tên loại lỗi.
+    Dài quá thì cắt ở dấu cách gần nhất + «…» (không cắt giữa chữ)."""
     lines = str(exc).strip().splitlines()
     names = {"MemoryError": "Hết bộ nhớ RAM (video quá dài?)", "TimeoutError": "Quá thời gian chờ"}
-    return (lines[0] if lines else names.get(type(exc).__name__, type(exc).__name__))[:limit]
+    text = lines[0] if lines else names.get(type(exc).__name__, type(exc).__name__)
+    if len(text) <= limit:
+        return text
+    cut = text.rfind(" ", 0, limit - 1)
+    return text[:cut if cut > limit // 2 else limit - 1].rstrip(" ,.;:—-") + "…"
 
 
 class JobRunner:
@@ -870,10 +896,17 @@ class JobRunner:
             ok = fail = 0
             try:
                 self._listen_first(jobs, base, mode, _ui_update, _ui_log)
+                blocked = ""                               # câu báo model hết lượt / bị gỡ (gặp ở video trước)
                 for it, st in jobs:
                     if self.cancel.is_set() or id(it) in self._skipped:
                         it.status, it.message = ("Đã huỷ", "") if self.cancel.is_set() else ("Đã bỏ qua", "")
                         _ui_update(it)
+                        continue
+                    if blocked and "gemini" in Pipeline(st, base.ffmpeg).needs(it):
+                        it.status, it.message = "Lỗi", blocked
+                        _ui_update(it)
+                        _ui_log(f"⏭ {it.name}: chưa chạy — model Gemini không dùng được (đổi model rồi Thử lại).")
+                        fail += 1
                         continue
                     self._item_cancel = ev = threading.Event()        # cờ riêng video này (Dừng tất cả cũng bật cờ)
                     self.current = it
@@ -897,6 +930,10 @@ class JobRunner:
                             _ui_log(f"⏭ Bỏ qua {it.name} — chạy tiếp video sau.")
                     except Exception as exc:
                         logger.exception("Lỗi xử lý %s", it.name)
+                        from app.services.translate_router import ModelUnavailable
+
+                        if isinstance(exc, ModelUnavailable):
+                            blocked = error_line(exc)
                         it.status, it.message = "Lỗi", error_line(exc)
                         _ui_update(it)
                         _ui_log(f"✖ {it.name}: {error_line(exc, 400)}")

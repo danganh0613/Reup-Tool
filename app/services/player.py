@@ -128,7 +128,7 @@ class Player:
                     return None
                 cwd = spec.work
             else:
-                args = ["-ss", f"{start:.3f}", "-t", f"{dur:.1f}", "-i", path, "-vn",
+                args = ["-ss", f"{start:.3f}", "-t", f"{dur:.1f}", "-i", path, "-map", "0:a:0", "-vn",
                         "-af", f"volume={self.volume:.2f}", "-ac", "2", "-ar", "44100", "-acodec", "pcm_s16le", str(wav)]
                 cwd = None
             res = self.ffmpeg.run_simple(args, timeout=90, cwd=cwd)

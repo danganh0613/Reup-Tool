@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 import threading
 import time
@@ -16,7 +17,7 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.ui import ctk_patches
 from app.ui.icons import MODULE_ICONS, icon
-from app.config.paths import APP_NAME, APP_VERSION, ASSETS_DIR, VIDEOS_DIR
+from app.config.paths import APP_NAME, APP_VERSION, ASSETS_DIR, JOBS_DIR, VIDEOS_DIR
 from app.core.logging_setup import add_ui_sink
 from app.core.state import AppState, VideoItem
 from app.services.audio_player import AudioPlayer
@@ -99,6 +100,7 @@ class MainWindow(_Root):
         self._render_started = 0.0
         self.log_lines: list[str] = []
         self.notifications: list[dict] = []
+        self._unread = 0                                 # thông báo chưa đọc (mở Trung tâm thông báo → 0)
         self._log_win: LogWindow | None = None
         self._notif_win: NotificationCenter | None = None
 
@@ -135,7 +137,8 @@ class MainWindow(_Root):
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
         self.after(400, self._apply_layout)
-        if _HAS_DND and getattr(self, "TkdndVersion", None):
+        self.dnd_enabled = bool(_HAS_DND and getattr(self, "TkdndVersion", None))
+        if self.dnd_enabled:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
 
@@ -149,6 +152,15 @@ class MainWindow(_Root):
         elif self.app_state.ui.get("help_open"):
             self.after(600, lambda: self.open_guide())
         self._active_changed()
+        if self.app_state.missing_videos:            # video bị dời / xoá / ổ ngoài chưa cắm
+            names = self.app_state.missing_videos
+            self.after(700, lambda: self.progress.notice(
+                f"{len(names)} video không còn ở ổ đĩa — đã bỏ khỏi hàng đợi",
+                ", ".join(names[:3]) + ("…" if len(names) > 3 else "") + " · ổ ngoài chưa cắm? cắm lại rồi nạp lại"))
+        if self.app_state.settings_notice:           # settings.json hỏng → đã dùng bản sao lưu
+            self.after(900, lambda: self.progress.result(
+                "stopped", "Cài đặt đã khôi phục từ bản sao lưu", self.app_state.settings_notice,
+                ("Mở Cài đặt", self.open_settings, "settings", False)))
         if not self.ffmpeg.available:
             self.after(300, lambda: messagebox.showwarning(
                 APP_NAME, f"Không tìm thấy ffmpeg/ffprobe.\nĐặt {exe_name('ffmpeg')} + {exe_name('ffprobe')} vào thư mục bin/ "
@@ -222,6 +234,14 @@ class MainWindow(_Root):
         self.header_btns.append([b, text, b.cget("width")])
         return b
 
+    def _compact_text(self, b: ctk.CTkButton) -> str:
+        """Header gọn chỉ còn icon — riêng nút Thông báo vẫn hiện số chưa đọc."""
+        return str(self._unread) if b is self.notif_btn and self._unread else ""
+
+    def _compact_width(self, b: ctk.CTkButton) -> int:
+        text = self._compact_text(b)
+        return button_width(b.master, text, icon=True) if text else 36
+
     def _set_header_label(self, b: ctk.CTkButton, text: str) -> None:
         """Đổi nhãn một nút header (vd. số thông báo) và đo lại bề rộng; tôn trọng chế độ header gọn."""
         for entry in self.header_btns:
@@ -229,6 +249,8 @@ class MainWindow(_Root):
                 entry[1], entry[2] = text, button_width(b.master, text, icon=True)
                 if not self._compact_header:
                     relabel(b, text, width=entry[2])
+                else:                                # header gọn: còn icon + số thông báo chưa đọc
+                    relabel(b, self._compact_text(b), width=self._compact_width(b))
                 return
 
     def _build_body(self) -> None:
@@ -297,7 +319,8 @@ class MainWindow(_Root):
             for b, label, width in self.header_btns:
                 if b is self.render_btn:
                     continue
-                relabel(b, "" if compact_header else label, width=36 if compact_header else width)
+                relabel(b, self._compact_text(b) if compact_header else label,
+                        width=self._compact_width(b) if compact_header else width)
             self.version_label.configure(text="" if compact_header else f"v{APP_VERSION}")
         compact_rail = h < 800
         if compact_rail != self._compact_rail:
@@ -609,7 +632,13 @@ class MainWindow(_Root):
         self.after(50, self._apply_layout)
 
     def open_shortcuts(self) -> None:
-        ShortcutsWindow(self)
+        win = getattr(self, "_shortcuts_win", None)
+        if win is not None and win.winfo_exists():       # đã mở → đưa lên trước, không mở thêm bản nữa
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+            return
+        self._shortcuts_win = ShortcutsWindow(self)
 
     def open_guide(self, key: str | None = None) -> None:
         """Hiện bảng hướng dẫn cạnh bảng tính năng, đúng chủ đề (mặc định: module đang xem)."""
@@ -630,17 +659,30 @@ class MainWindow(_Root):
         """Nút Hướng dẫn: đang mở đúng chủ đề này thì đóng, còn lại thì mở."""
         key = key or self.current_module_key() or "start"
         if self._help_open and self.help.key == key:
-            self.help.grid_forget()
-            self._help_open = False
-            self._help_wanted = False
-            self.app_state.ui["help_open"] = False
-            self.app_state.mark_dirty()
-            self._apply_layout()
-            if self.app_state.settings.show_guide_on_start:      # đã tự đóng một lần → lần sau không tự bật nữa
-                self.app_state.settings.show_guide_on_start = False
-                self.app_state.save_settings()
+            self.close_help()
             return
         self.open_guide(key)
+
+    def help_hotkey(self) -> None:
+        """Ctrl+H: đang mở thì đóng (bất kể chủ đề), đang đóng thì mở đúng chủ đề tab đang xem."""
+        if self._help_open:
+            self.close_help()
+        else:
+            self.open_guide()
+
+    def close_help(self) -> None:
+        """Nút ✕ của bảng hướng dẫn: luôn đóng."""
+        if not self._help_open:
+            return
+        self.help.grid_forget()
+        self._help_open = False
+        self._help_wanted = False
+        self.app_state.ui["help_open"] = False
+        self.app_state.mark_dirty()
+        self._apply_layout()
+        if self.app_state.settings.show_guide_on_start:      # đã tự đóng một lần → lần sau không tự bật nữa
+            self.app_state.settings.show_guide_on_start = False
+            self.app_state.save_settings()
 
     def open_guide_window(self, key: str | None = None) -> None:
         from app.ui.widgets.guide_window import open_guide
@@ -653,6 +695,7 @@ class MainWindow(_Root):
         else:
             self._notif_win.refresh()
             self._notif_win.lift()
+        self._unread = 0
         self._set_header_label(self.notif_btn, "Thông báo")
 
     def open_selfcheck(self) -> None:
@@ -799,19 +842,20 @@ class MainWindow(_Root):
         if self._failed_key is not None and self._last_retry is not None and keys and keys != self._failed_key:
             self._failed_key = None
             label, detail = self._resume
-            self.progress.result("error", "Đã lưu key", detail, (label, self._last_retry, "refresh", True))
+            self.progress.result("ok", "Đã lưu key", detail, (label, self._last_retry, "refresh", True))
             return
         model = self.app_state.settings.translate_model
         if self._failed_model is None or self._last_retry is None or model == self._failed_model:
             return
         self._failed_model = None
-        self.progress.result("error", "Đã đổi model", f"Dùng «{model}» — bấm «Thử lại» để chạy tiếp phần lỗi",
+        self.progress.result("ok", "Đã đổi model", f"Dùng «{model}» — bấm «Thử lại» để chạy tiếp phần lỗi",
                              ("Thử lại", self._last_retry, "refresh", True))
 
     def add_notification(self, title: str, body: str, kind: str = "info") -> None:
         self.notifications.append({"title": title, "body": body, "kind": kind, "time": now_str()})
         del self.notifications[:-100]
-        self._set_header_label(self.notif_btn, f"{len(self.notifications)} Thông báo")
+        self._unread += 1
+        self._set_header_label(self.notif_btn, f"{self._unread} Thông báo")
         if self._notif_win is not None and self._notif_win.winfo_exists():
             self._notif_win.refresh()
 
@@ -826,8 +870,8 @@ class MainWindow(_Root):
             "y": lambda e: self._if_free(e, self.preview.redo),
             "Shift-Z": lambda e: self._if_free(e, self.preview.redo),
             "e": lambda e: self._if_free(e, self._open_srt_editor),
-            "h": lambda e: self._if_free(e, lambda: self.toggle_help()),
-            "slash": lambda e: self._if_free(e, lambda: self.toggle_help()),
+            "h": lambda e: self._if_free(e, self.help_hotkey),
+            "slash": lambda e: self._if_free(e, self.help_hotkey),
             "plus": lambda _e: self.preview.zoom_step(1),
             "equal": lambda _e: self.preview.zoom_step(1),
             "minus": lambda _e: self.preview.zoom_step(-1),
@@ -862,8 +906,8 @@ class MainWindow(_Root):
             "<b>": lambda: self.preview.set_tool("B"), "<Shift-T>": self.preview._toggle_sub,
             "<i>": lambda: self._trim_mark("head"), "<o>": lambda: self._trim_mark("tail"),
             "<bracketleft>": lambda: self._trim_mark("head"), "<bracketright>": lambda: self._trim_mark("tail"),
-            "<Delete>": self.preview.delete_selection,
-            "<BackSpace>": self.preview.delete_selection,
+            "<Delete>": self.preview.delete_key,
+            "<BackSpace>": self.preview.delete_key,
         }
         for seq, fn in keys.items():
             self.bind(seq, lambda e, f=fn: self._if_free(e, f))
@@ -1016,7 +1060,7 @@ class MainWindow(_Root):
         skipped = sum(1 for it in items if it.status == "Đã bỏ qua")
         skip_note = f" · bỏ qua {skipped}" if skipped else ""
         if fail:
-            first = next(it for it in items if it.status == "Lỗi")
+            first = next((it for it in items if it.status == "Lỗi"), items[0])
             self.progress.result("error", f"{fail} video lỗi" + (f" · {ok} xong" if ok else "") + skip_note,
                                  f"{first.name}: {friendly_error(first.message, first)}",
                                  self._error_action(first.message, self.retry_failed))
@@ -1038,6 +1082,9 @@ class MainWindow(_Root):
     def retry_failed(self) -> None:
         """Nút «Thử lại» ở thanh trạng thái: chạy lại mọi video lỗi (chưa duyệt → chuẩn bị lại, đã duyệt → xuất lại)."""
         failed = [it for it in self.app_state.videos if it.status == "Lỗi"]
+        if not failed:
+            self.progress.result("ok", "Không còn video lỗi", "Video lỗi đã được xoá hoặc đã chạy lại")
+            return
         prep = [it for it in failed if self.review_mode and it.review != "approved"]
         ren = [it for it in failed if it not in prep]
         for it in prep:
@@ -1092,11 +1139,26 @@ class MainWindow(_Root):
             items = todo
         if self.review_mode and not force:
             todo = [it for it in items if not it.review]
-            if todo:
+            ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
+            if todo and ready:
+                # có video mới chưa chuẩn bị lẫn video đã duyệt → cho chọn, không ép chuẩn bị trước
+                ans = messagebox.askyesnocancel(APP_NAME, f"Có {len(ready)} video đã duyệt và {len(todo)} video mới chưa "
+                                                          f"chuẩn bị.\n\nCó = Xuất {len(ready)} video đã duyệt\n"
+                                                          f"Không = Chuẩn bị {len(todo)} video mới")
+                if ans is None:
+                    return
+                if not ans:
+                    self._run_queue(todo, mode="prepare")
+                    return
+            elif todo:
                 self._run_queue(todo, mode="prepare")
                 return
-            ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
             if not ready:
+                self.open_review()
+                return
+            pending = sum(1 for it in items if it.review == "pending")
+            if pending and not messagebox.askyesno(APP_NAME, f"Còn {pending} video chờ duyệt (chưa xuất). "
+                                                             f"Vẫn xuất {len(ready)} video đã duyệt?"):
                 self.open_review()
                 return
             items = ready
@@ -1121,6 +1183,18 @@ class MainWindow(_Root):
             messagebox.showerror(APP_NAME, f"Không tạo được thư mục xuất:\n{out_dir}\n\nỔ đĩa đã rút hoặc đường dẫn sai — "
                                            "chọn lại ở Cài đặt › Xuất video.")
             return
+        low = []
+        for d in {out_dir, JOBS_DIR}:
+            try:
+                free = shutil.disk_usage(d).free / 2 ** 30
+            except OSError:
+                continue
+            if free < 3:
+                low.append(f"{d.anchor or d} còn {free:.1f} GB")
+        if low and not messagebox.askyesno(APP_NAME, "Ổ đĩa sắp đầy: " + ", ".join(sorted(set(low))) + ".\n\n"
+                                           "Mỗi giờ video cần khoảng 3–4 GB file tạm khi xuất — có thể lỗi giữa chừng. "
+                                           "Bấm «Dọn dẹp» trên cùng để giải phóng. Vẫn chạy?"):
+            return
         srt = self.modules.get("srt")
         if srt is not None and srt.editor.item in items and srt.editor.dirty():
             srt.editor.save(regen=False)        # câu sửa dở ở Lời thoại → lưu trước (giọng tạo lại trong lượt chạy)
@@ -1140,6 +1214,8 @@ class MainWindow(_Root):
                 pos = next((i for i, x in enumerate(items) if x is it), 0) + 1
                 overall = sum(1.0 if x.status in finished else x.progress for x in items) / total
                 self.progress.update_item(it, pos, total, overall)
+            elif it.status in finished:
+                self.app_state.mark_dirty()          # mỗi video xong lưu ngay — máy sập giữa lô không mất phụ đề / duyệt
 
         def on_done(ok: int, fail: int) -> None:
             stopped = self.runner.cancel.is_set()
@@ -1164,8 +1240,11 @@ class MainWindow(_Root):
                     self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
                     notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
                 self.app_state.save_config()
-                if ok:
+                if ok and (self._current_module in (None, "video", "review")):
                     self.open_review()
+                elif ok:                             # đang làm ở tab khác → không giật tab, chỉ báo
+                    self.progress.result("ok", f"Chuẩn bị xong {ok} video", "Mở tab Duyệt khi sẵn sàng",
+                                         ("Mở Duyệt", self.open_review, "check", True))
                 return
             msg = f"Hoàn tất: {ok} xong, {fail} lỗi{skip_note} · {elapsed / 60:.1f} phút"
             self.log(msg)
@@ -1375,7 +1454,7 @@ class MainWindow(_Root):
         else:
             todo = sum(1 for it in vids if not it.review)
             ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
-            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else ("Duyệt" if vids else "Chuẩn bị"))
+            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else ("Mở Duyệt" if vids else "Chuẩn bị"))
         if getattr(self, "_render_label", None) != text:
             self._render_label = text
             relabel(self.render_btn, text)
@@ -1387,6 +1466,7 @@ class MainWindow(_Root):
         if self._waiting:
             self.log(f"Đã huỷ {len(self._waiting)} việc trong hàng chờ.")
             self._waiting.clear()
+            self._show_waiting()
         busy = self.runner.running or self.tasks.running
         self.runner.stop()
         self.tasks.stop()
@@ -1417,6 +1497,12 @@ class MainWindow(_Root):
         focus = self.focus_get()
         if isinstance(focus, (tk.Entry, tk.Text)):
             return
+        now = time.monotonic()
+        if now - getattr(self, "_esc_at", 0.0) > 3.0:
+            self._esc_at = now
+            self.progress.flash("Bấm Esc lần nữa (trong 3 giây) để dừng tất cả")
+            return
+        self._esc_at = 0.0
         self.stop_all()
 
     def destroy(self) -> None:
@@ -1434,4 +1520,7 @@ class MainWindow(_Root):
         self.preview.stop_play()
         self.app_state.save_config()
         self.player.stop()
+        from app.services import qwen_asr
+
+        qwen_asr.kill_all()                         # tiến trình nhận diện / cài đặt không chạy mồ côi sau khi đóng app
         self.destroy()

@@ -14,11 +14,13 @@ from app.ui.widgets.ui import Tooltip, button
 from app.core.state import VideoItem
 from app.services.srt_utils import format_ts
 from app.core.platform import open_path
+from app.ui.progress_panel import friendly_error
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
 
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp", ".m2ts",
+              ".mts", ".ogv"}
 _UNSET = object()
 _STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
                  "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED,
@@ -112,8 +114,10 @@ class QueueRow(ctk.CTkFrame):
             flags.append("✎ Riêng")
         if flags:
             parts.append(" · ".join(flags))
-        if it.message and it.status in ("Đang xử lý", "Lỗi"):
+        if it.message and it.status in ("Đang xử lý", "Đang chuẩn bị"):
             parts.append(it.message)
+        elif it.message and it.status == "Lỗi":
+            parts.append(friendly_error(it.message, it))
         self._put("info", "  |  ".join(parts) if parts else "Chưa đọc thông tin", lambda v: self.info.configure(text=v))
         self._put("status", it.status, lambda v: self.status.configure(text=v, text_color=_STATUS_COLOR.get(v, T.TEXT)))
         # ↻: video lỗi / huỷ / bỏ qua → thử lại; đã xong → xuất lại riêng video này
@@ -127,7 +131,8 @@ class QueueRow(ctk.CTkFrame):
         if it.status == "Lỗi" and it.message:
             import textwrap
 
-            self.err_tip.set_text("\n".join(textwrap.wrap(f"Lỗi: {it.message}", 70)[:8]) + "\n\nBấm ↻ để thử lại.")
+            self.err_tip.set_text("\n".join(textwrap.wrap(f"Lỗi: {friendly_error(it.message, it)}", 70)[:8])
+                                  + "\n\nBấm ↻ để thử lại.")
         else:
             self.err_tip.set_text("")
         self._put("progress", round(max(0.0, min(1.0, it.progress)), 3), self.bar.set)
@@ -192,17 +197,28 @@ class QueuePanel(ctk.CTkFrame):
     def _add_folder(self) -> None:
         d = filedialog.askdirectory(title="Chọn thư mục chứa video")
         if d:
-            self.add_paths([str(p) for p in sorted(Path(d).iterdir()) if p.suffix.lower() in VIDEO_EXTS])
+            self.add_paths([d])
 
     def add_paths(self, paths: list[str]) -> None:
         vids: list[str] = []
+        other = 0                                   # file không phải video (ảnh, nhạc lạ…)
         for p in paths:
             pp = Path(p)
             if pp.is_dir():
-                vids.extend(str(x) for x in sorted(pp.iterdir()) if x.suffix.lower() in VIDEO_EXTS)
+                files = [x for x in sorted(pp.iterdir()) if x.is_file()]
+                vids.extend(str(x) for x in files if x.suffix.lower() in VIDEO_EXTS)
+                other += sum(1 for x in files if x.suffix.lower() not in VIDEO_EXTS)
             elif pp.suffix.lower() in VIDEO_EXTS:
                 vids.append(str(pp))
+            else:
+                other += 1
         added = self.state.add_videos(vids)
+        dup = len(vids) - len(added)
+        if other or dup:
+            bits = ([f"{other} file không phải video"] if other else []) + ([f"{dup} video đã có"] if dup else [])
+            msg = f"Đã thêm {len(added)} video · bỏ qua {' và '.join(bits)}"
+            self.window.log(msg + ".")
+            self.window.progress.notice(msg, "Video nằm trong thư mục con không được nạp — chọn thẳng thư mục đó")
         if added:
             # tự tìm SRT cùng tên cạnh video
             for it in added:

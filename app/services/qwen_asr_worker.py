@@ -382,7 +382,10 @@ def speech_windows(audio) -> list[tuple[int, int]]:
     trimmed = []
     for a, b in windows:
         sp = [r for r in regions if r["end"] > a and r["start"] < b]
-        trimmed.append((max(a, sp[0]["start"] - SR), min(b, sp[-1]["end"] + SR)) if sp else (a, b))
+        if sp:                                           # cửa sổ không thấy tiếng nói nào (chỉ nhạc / im) → bỏ
+            trimmed.append((max(a, sp[0]["start"] - SR), min(b, sp[-1]["end"] + SR)))
+    if len(trimmed) < len(windows):
+        say(f"Bỏ {len(windows) - len(trimmed)} đoạn không có tiếng nói")
     return trimmed
 
 

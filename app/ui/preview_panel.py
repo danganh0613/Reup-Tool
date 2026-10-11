@@ -409,7 +409,14 @@ class PreviewPanel(ctk.CTkFrame):
         if item is not None and item is not self.item:
             return                      # đã chuyển sang video khác trong lúc đọc thông tin → bỏ kết quả cũ
         if error or info is None or self.item is None:
-            self._draw_message(f"Không đọc được video: {error}")
+            from app.services.job_runner import error_line
+            from app.ui.progress_panel import friendly_error
+
+            it = self.item
+            self._draw_message(f"Không đọc được video: {friendly_error(str(error or ''), it)}")
+            if it is not None and error is not None and it.status in ("Chờ", "Lỗi"):
+                it.status, it.message = "Lỗi", error_line(error)
+                self.window.queue_update(it)
             return
         self.info = info
         it = self.item
@@ -721,8 +728,11 @@ class PreviewPanel(ctk.CTkFrame):
                 k = float(ctk.ScalingTracker.get_widget_scaling(self))
             except Exception:
                 k = 1.0
-            self._empty_art = EmptyStateArt(self.canvas, scale=k, title="Kéo thả video vào đây",
-                                            description="hoặc bấm để chọn file · MP4, MOV, MKV, WebM…", buttons=self._empty_btns)
+            dnd = getattr(self.window, "dnd_enabled", True)   # máy không nạp được thư viện kéo thả → chỉ bấm chọn
+            self._empty_art = EmptyStateArt(self.canvas, scale=k,
+                                            title="Kéo thả video vào đây" if dnd else "Bấm để chọn video",
+                                            description=("hoặc bấm để chọn file · " if dnd else "")
+                                            + "MP4, MOV, MKV, WebM…", buttons=self._empty_btns)
             self._empty_art.on_hover = lambda on: self.canvas.configure(cursor="hand2" if on else "arrow")
         self._empty_art.draw(cw, ch)
 
@@ -1039,6 +1049,9 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _empty_add(self) -> None:
         m = self.window.modules.get("video")
+        if m is None:                             # tab Video chưa dựng (mở app ở tab khác) → dựng rồi mới mở hộp chọn
+            self.window.show_module("video")
+            m = self.window.modules.get("video")
         if m is not None:
             m.queue.add_files()
 
@@ -1167,6 +1180,14 @@ class PreviewPanel(ctk.CTkFrame):
             self.canvas.configure(cursor=cur)
 
     # ── Xóa vùng chọn ─────────────────────────────────────────────────────
+    def delete_key(self) -> None:
+        """Phím Delete / Backspace: chỉ xoá khi đang chọn một vùng trên khung (không chọn gì thì không làm gì — trước
+        đây lỡ tay bấm là tắt luôn phụ đề)."""
+        if self.selected is None:
+            self.window.progress.flash("Chưa chọn vùng nào — bấm vào vùng che / khung phụ đề rồi bấm Delete")
+            return
+        self.delete_selection()
+
     def delete_selection(self, kind: str | None = None, idx: int | None = None) -> None:
         """Phím Delete / nút Xóa / nút ✕: xóa vùng che đang chọn, hoặc tắt phụ đề khi đang chọn khung phụ đề."""
         if kind is None:

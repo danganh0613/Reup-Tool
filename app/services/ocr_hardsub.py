@@ -140,6 +140,10 @@ def retime(cues: list[Cue], tokens: list[tuple[str, float, float]], tail: float 
     return out, moved
 
 
+class NoHardsub(RuntimeError):
+    """Video không thấy phụ đề in sẵn — bước nhận diện tự chuyển sang nghe giọng nói nếu đã cài Qwen3-ASR."""
+
+
 def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timing: bool = True,
                on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
                cancel: threading.Event | None = None) -> STTResult:
@@ -148,7 +152,8 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
     info = ffmpeg.probe(item.path)
     reg = hardsub.ensure_region(item, ffmpeg, duration, log=log)
     if not reg:
-        raise RuntimeError("Không thấy phụ đề in sẵn trên video — tab STT chọn «Giọng nói trong video» để nhận diện lời nói.")
+        raise NoHardsub("Không thấy phụ đề in sẵn trên video — tab STT chọn «Giọng nói trong video», hoặc bấm «Dò lại» "
+                        "ở tab Che mờ nếu video có chữ.")
     W, H = info.width, info.height
     pad = 0.01                                          # nới dải chữ một chút trên / dưới
     y0 = max(0, int((reg["y"] - pad) * H))
@@ -197,7 +202,8 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
     cues = segments_to_cues(merge(frames, 1.0 / FPS))
     if log:
         log(f"OCR phụ đề in sẵn: {len(cues)} câu · {calls} lượt OCR / {i} khung")
-    if speech_timing and cues:
+    han = any(re.search(r"[一-鿿]", c.text) for c in cues)
+    if speech_timing and cues and han:
         try:
             from app.services.asr_funasr import recognize_tokens
 
@@ -211,4 +217,4 @@ def transcribe(item: VideoItem, ffmpeg: FFmpeg, *, duration: float, speech_timin
             logger.warning("Không lấy được mốc tiếng nói cho OCR: %s", exc)
     if on_progress:
         on_progress(1.0)
-    return STTResult(cues=cues, language="zh", language_probability=1.0)
+    return STTResult(cues=cues, language="zh" if han else "", language_probability=1.0)

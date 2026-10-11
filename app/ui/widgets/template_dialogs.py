@@ -18,6 +18,20 @@ from app.ui.widgets.ui import Select, button
 APP = "Edit Studio"
 
 
+
+def _approved_shared(state) -> list:
+    """Video đã duyệt (chưa xuất) đang theo cấu hình chung — áp mẫu khác thì kết quả xuất đổi mà chưa xem lại."""
+    return [it for it in state.videos if it.config is None and it.review == "approved"
+            and it.status not in ("Xong", "Cần xuất lại")]
+
+
+def _reset_approved(window, items: list) -> None:
+    for it in items:
+        it.review, it.status = "pending", "Chờ duyệt"
+        window.queue_update(it)
+    if items:
+        window.log(f"{len(items)} video đã duyệt chuyển về «Chờ duyệt» vì cấu hình đổi — xem lại ở tab Duyệt.")
+
 class TemplateBar(ctk.CTkFrame):
     """[icon] Mẫu: [chọn mẫu ▾] • đã chỉnh  [Lưu mẫu] [Quản lý] — đặt giữa thanh trên cùng."""
 
@@ -94,13 +108,24 @@ class TemplateBar(ctk.CTkFrame):
         if t is None:
             return
         cur = TP.get_template(self.state.template_name) if self.state.template_name else None
-        unsaved = cur is None or TP.differs(self.state, cur)
-        if unsaved and not messagebox.askyesno(
-                APP, f"Áp mẫu «{t.name}»?\n\nThiết lập đang chỉnh (chưa lưu thành mẫu) sẽ bị thay ở các phần: "
-                     f"{t.parts_label()}.\nMuốn giữ lại thì bấm «Không» rồi «Lưu mẫu» trước.", parent=self.window):
+        # chưa dùng mẫu nào: chỉ hỏi khi người dùng đã tự chỉnh (cấu hình mặc định thì áp luôn)
+        unsaved = TP.differs(self.state, cur) if cur is not None else bool(self.state.ui.get("edited"))
+        act = self.state.active
+        own = act is not None and act.config is not None
+        approved = _approved_shared(self.state)
+        note = (f"\n\n{len(approved)} video đã duyệt (theo cấu hình chung) sẽ về «Chờ duyệt» để xem lại."
+                if approved else "")
+        if own:
+            note += "\n\nVideo đang xem có cấu hình riêng — giữ nguyên, mẫu chỉ áp cho các video còn lại."
+        if (unsaved or approved or own) and not messagebox.askyesno(
+                APP, f"Áp mẫu «{t.name}»?"
+                     + (f"\n\nThiết lập đang chỉnh (chưa lưu thành mẫu) sẽ bị thay ở các phần: {t.parts_label()}.\n"
+                        "Muốn giữ lại thì bấm «Không» rồi «Lưu mẫu» trước." if unsaved else "") + note,
+                parent=self.window):
             self.select.set(self.state.template_name or TP.NO_TEMPLATE)
             return
         TP.apply_shared(self.state, t)
+        _reset_approved(self.window, approved)
         self.window.log(f"Đã áp mẫu «{t.name}» cho các video chưa chỉnh riêng.")
         self.window.preview.schedule_refresh(0)
 
@@ -145,7 +170,8 @@ class SaveTemplateDialog(ctk.CTkToplevel):
             ctk.CTkCheckBox(grid, text=label, variable=var, font=T.font(12)).grid(row=i // 2, column=i % 2, sticky="w",
                                                                                 padx=(0, 12), pady=3)
             self.parts[k] = var
-        hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối.").pack(fill="x", padx=14, pady=(4, 0))
+        hint(body, "Phần bỏ tick sẽ giữ nguyên khi áp mẫu. Mẫu chỉ lưu cắt đầu / cuối (không lưu nhiều đoạn), và không "
+                   "lưu cách lấy lời (Giọng nói / Chữ in sẵn — chọn ở tab STT).").pack(fill="x", padx=14, pady=(4, 0))
         self._order_voices()
         tts = self.app_state.sections_dict().get("tts", {})
         if "tts" in self.parts and tts.get("enable_tts"):
@@ -284,7 +310,16 @@ class TemplateManager(ctk.CTkToplevel):
         self.fill()
 
     def _apply_all(self, t: TP.Template) -> None:
+        approved = _approved_shared(self.app_state)
+        if (self.app_state.ui.get("edited") or approved) and not messagebox.askyesno(
+                APP, f"Áp mẫu «{t.name}» cho mọi video chưa chỉnh riêng?"
+                     + ("\n\nThiết lập đang chỉnh (chưa lưu thành mẫu) sẽ bị thay." if self.app_state.ui.get("edited")
+                        else "")
+                     + (f"\n\n{len(approved)} video đã duyệt sẽ về «Chờ duyệt» để xem lại." if approved else ""),
+                parent=self):
+            return
         TP.apply_shared(self.app_state, t)
+        _reset_approved(self.window, approved)
         self.window.log(f"Đã áp mẫu «{t.name}» cho các video chưa chỉnh riêng.")
         self.window.preview.schedule_refresh(0)
         self._changed()

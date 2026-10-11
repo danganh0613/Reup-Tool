@@ -87,6 +87,7 @@ class VoiceTrackResult:
     synced_cues: list[Cue] | None = None     # cue đã dời theo vị trí thật của giọng
     overflow_cues: list[tuple[int, float, float]] = field(default_factory=list)  # (chỉ số cue gốc, giây tràn, khung)
     report: list[dict] = field(default_factory=list)                            # từng câu: engine, tempo, số lần đọc…
+    failed: int = 0                          # số câu không tổng hợp được (bỏ trống)
 
 
 def make_engine(cfg: TTSConfig, settings: Settings) -> TTSEngine:
@@ -124,7 +125,8 @@ def _check_script_matches_voice(items, cfg: TTSConfig, voice_id: str) -> None:
     if cjk >= max(3, len(items) * 0.4):
         raise RuntimeError(
             f"Phụ đề đang là chữ Trung/Nhật/Hàn ({cjk}/{len(items)} câu) nhưng giọng đọc là tiếng '{lang}' — giọng không đọc "
-            "được. Bật «Dịch AI» ở mục SRT rồi ở mục TTS chọn «Sub đã dịch», hoặc chọn giọng đúng ngôn ngữ của phụ đề.")
+            "được. Bật «Tự dịch khi chuẩn bị video» ở tab Lời thoại rồi ở tab TTS chọn «Đọc từ: Sub đã dịch», hoặc chọn "
+            "giọng đúng ngôn ngữ của phụ đề.")
 
 
 def voice_id_for(cfg: TTSConfig) -> str:
@@ -426,6 +428,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     base = 0.3 if prefill_batches([(*plan[i], text) for i, _c, text in items], settings, qc, log=log, check=_check,
                                   on_progress=on_progress) else 0.0
     done = 0
+    disk: list[OSError] = []                  # lỗi ghi file (ổ đầy / thư mục bị khoá) — không phải lỗi mạng / dịch vụ
+
+    def note(exc: Exception) -> None:
+        if isinstance(exc, OSError) and (getattr(exc, "errno", None) == 28 or isinstance(exc, PermissionError)):
+            disk.append(exc)
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(synth, i, text): i for i, _, text in items}
         failed: list[int] = []
@@ -438,10 +446,14 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
                 paths[i] = fut.result()
             except Exception as exc:          # 1 câu lỗi (mạng/dịch vụ) → thử lại / engine dự phòng bên dưới, không hỏng cả job
                 failed.append(i)
+                note(exc)
                 logger.warning("TTS cue %d lỗi: %s", i + 1, exc)
             done += 1
             if on_progress:
                 on_progress(base + (0.65 - base) * done / len(items))
+    if failed and disk:
+        raise RuntimeError("Không ghi được file giọng — ổ đĩa đầy hoặc thư mục cache bị khoá. Giải phóng dung lượng "
+                           "(nút «Dọn dẹp» trên cùng) rồi Thử lại.")
     if failed:
         # lỗi thường do dịch vụ quá tải khi gọi song song → thử lại tuần tự một lượt trước khi bỏ
         still: list[int] = []
@@ -659,7 +671,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     overflow_cues = [(int(by_index[order[pos]].meta.get("src_idx", order[pos])), round(d, 3), round(slot_for(pos), 3))
                      for d, pos in sorted(over, key=lambda x: x[1])]
     return VoiceTrackResult(out_wav, len(items), sped_up, overflow_n, cursor, ensure_min_duration(synced, MIN_SUB),
-                            overflow_cues, report)
+                            overflow_cues, report, failed=len(failed))
 
 
 def preview_text(locale: str) -> str:

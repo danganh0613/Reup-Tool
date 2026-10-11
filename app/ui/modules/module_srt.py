@@ -90,7 +90,8 @@ class SRTModule(BaseModule):
         self.file_section = sec
         ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
         ButtonRow(sec.body, [("Sửa thời gian…", self.open_editor, None), ("Dán bản dịch ngoài…", self._manual_translate, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None), ("Xóa cache SRT", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None),
+                             ("Xoá phụ đề & giọng của video…", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
         self.file_status = StatusLabel(sec.body, "")
         self.file_status.pack(fill="x", pady=(4, 0))
 
@@ -313,15 +314,18 @@ class SRTModule(BaseModule):
             self.window.log(f"Đã xuất {p}")
 
     def _open_srt(self) -> None:
+        """Mở file đang sửa: bản dịch nếu có (cùng file với «Xuất SRT»), không thì lời gốc."""
         it = self.state.active
-        if it and it.srt_path and Path(it.srt_path).exists():
-            open_path(it.srt_path)
+        for p in ((it.srt_translated_path, it.srt_path) if it else ()):
+            if p and Path(p).exists():
+                open_path(p)
+                return
 
     def _clear_cache(self) -> None:
         it = self._need_item()
         if it is None:
             return
-        if not messagebox.askyesno("Xóa cache SRT", "Xoá SRT đã nhận diện/dịch và track giọng của video này "
+        if not messagebox.askyesno("Xoá phụ đề & giọng", "Xoá lời thoại, bản dịch (cả chỗ đã sửa tay) và giọng lồng của video này "
                                                    "(trong output/subs, output/voice)?"):
             return
         removed = 0

@@ -104,8 +104,7 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Điều khiển timeline & dựng video", [
         ("Space", "Phát / Dừng video xem trước"),
         ("J / K / L", "Tua lùi 3s · Dừng · Tua tới 3s"),
-        ("I / O", "Đặt điểm cắt đầu (In) · cắt đuôi (Out) tại con trỏ"),
-        ("[ / ]", "Cắt đầu / cắt đuôi ngay tại thời điểm đang xem"),
+        ("I / O  hoặc  [ / ]", "Cắt bỏ phần trước / sau chỗ đang xem (đặt điểm đầu · điểm cuối)"),
         (", / .", "Lùi / tiến 1 khung hình"),
         ("← / →", "Tua lùi / tiến 3 giây"),
         ("M", "Bật / tắt âm thanh xem trước"),
@@ -118,16 +117,20 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
         ("T", "Công cụ khung phụ đề (kéo, đổi cỡ)"),
         ("Shift + T", "Bật / tắt hiển thị phụ đề trên xem trước"),
         ("B", "Công cụ che mờ (vẽ / kéo vùng)"),
-        ("Del / Backspace", "Xoá vùng che đang chọn · đang ở khung phụ đề thì tắt phụ đề (Ctrl+Z hoàn tác)"),
+        ("Del / Backspace", "Xoá vùng đang chọn trên khung (vùng che, khung phụ đề) · Ctrl+Z hoàn tác"),
         ("Ctrl + E", "Mở trình sửa SRT"),
-        ("Ctrl + H", "Mở Hướng dẫn sử dụng (đúng chủ đề module đang xem)"),
+        ("Ctrl + H", "Mở / đóng bảng Hướng dẫn (đúng chủ đề tab đang xem)"),
     ]),
     ("Lịch sử & xuất bản", [
         ("Ctrl + Z", "Hoàn tác (vùng che / khung phụ đề / xóa)"),
         ("Ctrl + Shift + Z / Ctrl + Y", "Làm lại"),
-        ("Ctrl + S", "Lưu cấu hình"),
-        ("Ctrl + R", "Render MP4 (bắt đầu hàng đợi)"),
-        ("Esc", "Dừng xử lý"),
+        ("Ctrl + S", "Lưu cấu hình ngay (app vẫn tự lưu)"),
+        ("Ctrl + R", "Nút chính trên cùng: Render MP4 · bật Duyệt thì Chuẩn bị / Xuất"),
+        ("Esc ×2", "Dừng tất cả (bấm 2 lần trong 3 giây — tránh lỡ tay)"),
+    ]),
+    ("Duyệt trước khi xuất", [
+        ("Ctrl + Enter", "Duyệt video đang xem, sang video chờ duyệt kế tiếp"),
+        ("Ctrl + ↑ / ↓", "Video trước / sau"),
     ]),
     ("Chuyển module nhanh", [
         ("F1 – F4", "Video · STT · Lời thoại · TTS"),
@@ -145,6 +148,7 @@ class ShortcutsWindow(ctk.CTkToplevel):
         self.title("Phím tắt — Edit Studio")
         self.geometry("980x720")
         self.after(50, self.lift)
+        self.bind("<Escape>", lambda _e: self.destroy())
         self.grid_columnconfigure((0, 1), weight=1)
         body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=10, pady=10)

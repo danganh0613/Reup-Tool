@@ -342,15 +342,19 @@ class CueEditor(ctk.CTkFrame):
             return
         self._sync()
         changed = 0
-        for c, new, old in zip(self.cues, self.texts, self._orig_texts):
+        edited: list[int] = []
+        for k, (c, new, old) in enumerate(zip(self.cues, self.texts, self._orig_texts)):
             if new.strip() != old.strip():
                 c.text = wrap_lines(new.strip())
                 changed += 1
+                edited.append(k)
         if not changed:
             self.status.info("Không có câu nào thay đổi.")
             return
         save_srt(self.cues, self.edit_path)
         self._src_sig = self._file_sig(it)
+        if self.is_translation:
+            self._remember(it, edited)
         self._orig_texts = list(self.texts)
         if it.status == "Xong":                        # đã xuất rồi mới sửa → bản xuất cũ: tính vào «Xuất (n)» / Render
             it.status = "Cần xuất lại"
@@ -370,6 +374,22 @@ class CueEditor(ctk.CTkFrame):
         if self.on_saved:
             self.on_saved(it)
 
+    def _remember(self, it: VideoItem, idxs: list[int]) -> None:
+        """Câu dịch sửa tay → bộ nhớ dịch (cùng khoá với bước dịch), lần «Dịch phụ đề» sau không trả lại bản AI cũ."""
+        from app.services.translate_router import TranslationMemory
+        from app.services.translate_vl import memory_style
+
+        try:
+            cfg = self.app_state.state_for(it).subtitle
+            mem, key = TranslationMemory(), memory_style(cfg.translate_style, self.app_state.settings.glossary)
+            for k in idxs:
+                if k < len(self.ref) and self.ref[k].plain.strip() and self.cues[k].plain.strip():
+                    mem.put(cfg.translate_target, self.ref[k].plain.replace("\n", " ").strip(),
+                            self.cues[k].plain.replace("\n", " ").strip(), key)
+            mem.save()
+        except Exception:                            # noqa: BLE001 — bộ nhớ dịch là phụ, không làm hỏng việc lưu
+            pass
+
     def _regenerate(self, it: VideoItem) -> None:
         pipe = self.window.pipeline_for(it)
         win = self.window
@@ -378,7 +398,7 @@ class CueEditor(ctk.CTkFrame):
 
         def work(cancel):
             pipe.prepare(it, on_update=lambda x: win.ui_call(lambda: win.queue_update(x)), log=win.log_bg, cancel=cancel)
-            if keep[0] in ("approved", "skipped"):
+            if keep[0] in ("approved", "skipped") or not win.review_mode:
                 it.review, it.status = keep
 
         def done(_r, error):

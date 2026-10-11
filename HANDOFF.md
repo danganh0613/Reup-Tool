@@ -113,6 +113,12 @@
     → đọc thử cp1258, cp1252, EUC-KR, GB18030, Big5, Shift-JIS: chữ có dấu ghép thành âm tiết tiếng Việt (≥ 80 %) → cp1258
     (trả NFC); không thì chọn bảng mã CJK ra nhiều chữ thông dụng nhất (GB2312 cấp 1 / Big5 thường dụng, Hangul; hoà
     điểm → Hàn); còn lại cp1252. Test: `audit_out/qa/test_encoding.py` (8 loại × 200 file).
+27. **Lượt P3 của báo cáo QA** (danh sách đầy đủ + mục để lại: `audit_out/qa/BAO_CAO_QA.md`, test `test_qa_p3.py`):
+    settings.json ghi tạm + .bak + khôi phục · khoá một cửa sổ (`main._single_instance`) · `qwen_asr.kill_all` khi đóng
+    app · bỏ cửa sổ không tiếng + lọc câu bịa (`_made_up`) · `-map 0:a:0` mọi chỗ trích âm · OCR → ASR khi không có chữ ·
+    `friendly_error` regex + đường dẫn · `error_line` cắt ở dấu cách · Esc ×2, Delete chỉ khi có vùng chọn · ✕ hướng dẫn
+    (`close_help`) · tìm không dấu · `parse_time` (5s / 1p30) · `Pipeline.needs` chặn video cần Gemini khi model hết
+    lượt · Duyệt khoá video chưa sẵn sàng, báo giọng cũ / câu bỏ trống / tràn khung (`_voice_issues`) · thông báo chưa đọc.
 
 ## Còn tồn / để ý khi làm tiếp
 

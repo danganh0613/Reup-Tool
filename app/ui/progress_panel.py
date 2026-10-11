@@ -11,6 +11,7 @@ video đó (bỏ bước không cần: đã có SRT, không lồng tiếng…), 
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -90,6 +91,9 @@ def _clock(sec: float) -> str:
     return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
 
 
+_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|/(?:Users|home|Volumes|tmp)/)[^\s:'\"«»]+")
+
+
 def friendly_error(message: str, item: VideoItem | None = None) -> str:
     """Câu lỗi cho người dùng: bỏ đường dẫn dài, dịch các lỗi kỹ thuật hay gặp sang lời dễ hiểu."""
     m = " ".join((message or "").splitlines()[:1])
@@ -101,18 +105,20 @@ def friendly_error(message: str, item: VideoItem | None = None) -> str:
     for mark in (UNAVAILABLE_MARK, MISSING_MARK):   # câu báo đã dễ hiểu, kèm nút «Chọn model…» / «Cài…»
         if mark in m:
             return m.replace(mark, "").strip()
+    # đường dẫn dài → chỉ tên file (số trong tên file kiểu VID_20240403 không bị hiểu nhầm là mã lỗi 403)
+    m = _PATH.sub(lambda mt: Path(mt.group(0)).name, m)
     low = m.lower()
     if "ffprobe" in low or "invalid data" in low or "moov atom" in low:
         return "file hỏng hoặc không phải video — mở thử bằng trình phát khác"
-    if "503" in low or "overloaded" in low or "quá tải" in low:
+    if re.search(r"\b(503|529)\b", low) or "overloaded" in low or "quá tải" in low:
         return "máy chủ AI đang quá tải — đợi một lát rồi bấm Thử lại"
     if "chưa có gemini api key" in low:
         return "chưa nhập API key Gemini (Cài đặt › AI dùng API key)"
     if "kết nối" in low and "gemini" in low:
         return "không kết nối được tới Gemini — kiểm tra mạng rồi bấm Thử lại"
-    if "api key" in low or " 401" in low or " 403" in low:
+    if "api key" in low or re.search(r"\b(401|403)\b", low):
         return "API key chưa đúng hoặc hết hạn — kiểm tra ở Cài đặt › AI dùng API key"
-    if "no space" in low or "đầy" in low:
+    if re.search(r"no space left|errno 28|disk full|not enough space|ổ đĩa đầy|ổ đầy", low):
         return "ổ đĩa đầy — giải phóng dung lượng rồi thử lại"
     return m or "không rõ lý do — xem log"
 
@@ -303,9 +309,17 @@ class ProgressPanel(ctk.CTkFrame):
         """Ghi chú nhẹ (xem trước, giọng cũ…) — không đè lên việc đang chạy."""
         if self._mode == "running":
             return
+        if self.action_btn is not None and self._mode in ("error", "stopped"):
+            return                                     # đang có lỗi + nút (Thử lại, Chọn model…) → giữ nguyên
         self._show("notice", "i", T.INFO, title, detail)
         self._meter(False)
         self._action(None)
+
+    def flash(self, text: str, ms: int = 3000) -> None:
+        """Nhắc ngắn ở dòng chi tiết (vd «Bấm Esc lần nữa…») rồi trả lại chữ cũ."""
+        old = self.detail.cget("text")
+        self.detail.configure(text=text)
+        self.after(ms, lambda: self.detail.cget("text") == text and self.detail.configure(text=old))
 
     def set_status(self, text: str) -> None:
         self.notice(text)

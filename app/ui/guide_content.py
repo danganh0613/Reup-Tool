@@ -15,16 +15,22 @@ TOPICS: list[dict] = [
     {"key": "start", "title": "Bắt đầu: làm video đầu tiên", "group": "Bắt đầu", "blocks": [
         ("p", "Phần mềm này giúp bạn làm video mà không cần biết dựng phim. Bạn chỉ cần đưa video vào, bật thứ mình muốn, "
               "rồi bấm một nút. Máy tự làm phần còn lại."),
-        ("h", "Làm theo 3 bước"),
+        ("h", "Làm theo 4 bước"),
         ("steps", [
-            "Đưa video vào: kéo file video thả vào ô đen to ở giữa màn hình. Hoặc bấm nút xanh «＋ Nạp video» ở góc trên bên trái.",
-            "Chọn thứ bạn muốn làm ở cột bên trái (Phụ đề, Lồng tiếng, Che mờ, Nhạc…). Bật cái nào thì màn hình giữa hiện ngay cái đó.",
-            "Bấm nút xanh «Render MP4» ở góc trên bên phải. Thanh trạng thái dưới cùng cho biết đang làm bước nào, bao nhiêu % và còn bao lâu. Xong thì bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
+            "Đưa video vào: kéo file video thả vào khung xem trước (bên phải). Hoặc mục Video bấm «＋ Nạp video».",
+            "Chọn mẫu ở ô «Mẫu» trên cùng, vd «Review phim dọc 9:16» (dịch sang tiếng Việt + lồng tiếng + phụ đề TikTok). "
+            "Không chọn mẫu thì video giữ nguyên tiếng gốc.",
+            "Cần chỉnh thêm thì bấm từng mục ở thanh bên trái (Lời thoại, TTS, Che mờ, Nhạc…) — khung xem trước đổi theo ngay.",
+            "Bấm nút chính trên cùng bên phải («Render MP4», hoặc «Chuẩn bị» khi bật Duyệt). Thanh trạng thái dưới cùng "
+            "cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
         ]),
-        ("h", "Mấy nút trên màn hình giữa"),
+        ("warn", f"Video tiếng nước ngoài cần 2 thứ (cài một lần): bộ nghe lời thoại Qwen3-ASR (Cài đặt › AI trên máy, "
+                 f"~{INSTALL_GB} GB — hoặc chọn «Chữ in sẵn trên video» nếu video có phụ đề in sẵn) và API key Gemini "
+                 "để dịch (Cài đặt › AI dùng API key). Thiếu thì máy báo ngay khi bấm chạy."),
+        ("h", "Mấy nút trên khung xem trước"),
         ("kv", [
             ("Các ô nhỏ 16:9 · Gốc · Gốc · Cắt vừa khung", "Bấm vào để chọn khung video: 16:9 là video ngang (YouTube), 9:16 là video dọc (TikTok)."),
-            ("V · T · B", "V: kéo hình đi. T: kéo ô chữ phụ đề. B: vẽ ô che mờ."),
+            ("V · T · B", "V: kéo hình đi. T: kéo ô chữ phụ đề. B: vẽ ô che mờ (hiện ở tab Lời thoại và Che mờ)."),
             ("Sub · Blur", "Tạm giấu chữ / ô che để nhìn hình cho rõ. Không ảnh hưởng video xuất ra."),
             ("Phát", "Xem thử giống video xuất: đủ khung hình, màu, che mờ, logo, chữ, phụ đề; tiếng gồm âm gốc + giọng lồng "
                      "+ nhạc nền; bỏ qua đoạn đã cắt, đúng tốc độ. Đang phát mà chỉnh gì thì hình/tiếng đổi theo ngay."),
@@ -45,15 +51,16 @@ TOPICS: list[dict] = [
             "Video nào cần khác (vd. chữ cứng nằm chỗ khác): chọn video đó, ở mục Video bật «Chỉnh riêng cho video này» "
             "hoặc «Áp mẫu riêng». Video đó có nhãn «✎ Riêng» trong hàng đợi.",
             "Bấm «Render MP4»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó.",
-            "Nút ☰ cạnh «Lưu mẫu»: xem tất cả mẫu, áp cho tất cả / chỉ video đang chọn, xuất file mẫu gửi máy khác, nhập mẫu.",
+            "Nút ≡ cạnh «Lưu mẫu» (Quản lý mẫu): xem tất cả mẫu, áp cho tất cả / chỉ video đang chọn, xuất file mẫu gửi "
+            "máy khác, nhập mẫu.",
         ]),
         ("h", "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)"),
         ("steps", [
             "Mục Video bật «Duyệt trước khi xuất». Nút Render trên cùng đổi thành «Chuẩn bị (n)».",
             "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa render). "
             "Xong tự mở tab «Duyệt» (thanh bên trái) — khung xem trước vẫn ở ngay cạnh.",
-            "Tab Duyệt: ‹ › hoặc ô chọn để đổi video. Bấm vào ô câu nào thì khung xem trước nhảy tới câu đó; ▶ phát đúng "
-            "câu đó có giọng lồng; đang phát thì câu đang đọc sáng lên. Sửa câu sai → «Lưu & tạo lại giọng» (câu không đổi dùng lại, rất nhanh).",
+            "Tab Duyệt: ‹ › hoặc ô chọn để đổi video, ▶ Phát để xem. Thấy câu sai: bấm «Sửa ›» ở dòng «Lời thoại» → sửa ở "
+            "tab Lời thoại → «Lưu & tạo lại giọng» (câu không đổi dùng lại, rất nhanh) → «‹ Về Duyệt».",
             "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video chờ kế), không dùng thì «Bỏ qua».",
             "Bấm «Xuất (n)» trên cùng: chỉ render video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị.",
         ]),
@@ -88,7 +95,7 @@ TOPICS: list[dict] = [
     {"key": "flow_short", "title": "Video ngang → video dọc TikTok", "group": "Bắt đầu", "blocks": [
         ("steps", [
             "Đưa video vào.",
-            "Trên màn hình giữa, bấm ô đầu tiên (đang ghi 16:9 hoặc Gốc) → chọn «9:16 (Dọc)».",
+            "Trên khung xem trước, bấm ô đầu tiên (đang ghi 16:9 hoặc Gốc) → chọn «9:16 (Dọc)».",
             "Bấm ô «Cắt vừa khung» → chọn «Nền mờ (blur)». Video sẽ nằm giữa, trên dưới là hình mờ. (Chọn «Cắt vừa khung» nếu muốn phóng to cắt hai bên.)",
             "Muốn cắt thành nhiều clip ngắn: mục Cắt → «＋ Thêm đoạn», gõ giây bắt đầu và kết thúc, chọn «Xuất mỗi đoạn thành 1 file».",
             "Bấm «Render MP4».",
@@ -227,7 +234,7 @@ TOPICS: list[dict] = [
         ("p", "Làm mờ hoặc che một vùng trên video, ví dụ dòng chữ tiếng Trung dính sẵn ở dưới, logo kênh khác, mặt người."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Trên màn hình giữa bấm nút B.",
+            "Trên khung xem trước bấm nút B.",
             "Đặt chuột vào góc trên bên trái chỗ cần che, giữ chuột kéo tới góc dưới bên phải, thả ra. Một ô màu cam xuất hiện.",
             "Kéo ô để dời, kéo mấy chấm ở cạnh để đổi to nhỏ.",
             "Chọn kiểu che: «Mờ (Gaussian)» tự nhiên nhất · «Ô vuông» kiểu pixel · «Che kín» màu đen. Kéo «Độ mờ» cho vừa mắt.",
@@ -272,7 +279,7 @@ TOPICS: list[dict] = [
         ("p", "Bỏ phần thừa ở đầu hoặc cuối video. Hoặc cắt video dài thành nhiều clip ngắn."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Cách nhanh: xem video trên màn hình giữa tới chỗ muốn bắt đầu, bấm phím I. Xem tới chỗ muốn kết thúc, bấm phím O.",
+            "Cách nhanh: xem video trên khung xem trước tới chỗ muốn bắt đầu, bấm phím I. Xem tới chỗ muốn kết thúc, bấm phím O.",
             "Cách gõ số: bật «Bật cắt đầu / cuối», gõ «Bỏ đầu» và «Bỏ cuối» (giây, hoặc kiểu 1:30 = 1 phút 30 giây).",
             "Cắt nhiều đoạn: bấm «＋ Thêm đoạn», gõ bắt đầu – kết thúc cho từng đoạn.",
             "Chọn «Ghép các đoạn thành 1 video» hoặc «Xuất mỗi đoạn thành 1 file» (ra nhiều file _p1, _p2…).",
@@ -285,7 +292,7 @@ TOPICS: list[dict] = [
         ("h", "Làm thế nào?"),
         ("steps", [
             "Bấm một nút màu sẵn hoặc chỉnh ô bất kỳ — công tắc «Bật chỉnh màu / hiệu ứng» tự bật.",
-            "Bấm một nút màu sẵn: Ấm áp, Điện ảnh, Tươi sáng… Nhìn màn hình giữa thấy đổi ngay. Kéo Sáng / Tương phản nếu muốn chỉnh thêm.",
+            "Bấm một nút màu sẵn: Ấm áp, Điện ảnh, Tươi sáng… Nhìn khung xem trước thấy đổi ngay. Kéo Sáng / Tương phản nếu muốn chỉnh thêm.",
             "Video bị nằm ngang / ngược? Chọn «Xoay» 90° hoặc 180°.",
             "Cảnh tĩnh, ít chuyển động? Chọn «Chuyển động Ken Burns» = Zoom vào để hình từ từ phóng to cho đỡ chán.",
             "Đăng lại video của chính bạn lên kênh khác: bấm «Bật nhanh chống trùng» ở trên cùng.",
@@ -301,7 +308,7 @@ TOPICS: list[dict] = [
         ("p", "Bạn gõ một ý tưởng, AI viết thành câu chuyện nhiều cảnh, đọc thành giọng, vẽ ảnh cho từng cảnh, rồi ghép thành video có phụ đề."),
         ("h", "Làm thế nào?"),
         ("steps", [
-            "Cần API key Gemini trong Cài đặt (như mục SRT). Viết truyện thì miễn phí; vẽ ảnh AI cần tài khoản có bật thanh toán — chưa có thì máy dùng ảnh tạm (chữ trên nền màu).",
+            "Cần API key Gemini (Cài đặt › AI dùng API key; model viết / ảnh chọn ở tab Truyện). Viết truyện thì miễn phí; vẽ ảnh AI cần tài khoản có bật thanh toán — chưa có thì máy dùng ảnh tạm (chữ trên nền màu).",
             "Gõ ý tưởng vào ô «Chủ đề», chọn độ dài, giọng văn, khung video (ngang/dọc). Bấm «Viết kịch bản». Chờ 1–2 phút.",
             "Bấm «Trình soạn kịch bản» để đọc lại từng cảnh. Sửa lời kể, thêm bớt cảnh, chọn giọng cho nhân vật.",
             "Bấm «Tạo giọng» → «Tạo ảnh» (nếu có quota) → «Ghép video».",
