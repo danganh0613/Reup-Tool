@@ -553,6 +553,24 @@ class Pipeline:
             return outs[-1]
         return self._render_one(item, info, trim, on_update=on_update, log=log, cancel=cancel)
 
+    def needs(self, item: VideoItem) -> set[str]:
+        """Trước khi chạy: video này sẽ cần gì mà máy có thể thiếu — «gemini» (phải dịch, chưa có bản dịch) ·
+        «qwen» (phải nghe lời thoại). Cùng điều kiện với ``_prepare_assets``."""
+        scfg, tcfg = self.state.subtitle, self.state.tts
+        sub_on, tts_on = scfg.enable_subtitle, tcfg.enable_tts
+        if not (sub_on or tts_on):
+            return set()
+        out = set()
+        if (not (item.srt_path and Path(item.srt_path).exists()) and scfg.srt_source == SRT_SOURCES[0]
+                and scfg.stt_engine != "ocr"):
+            out.add("qwen")
+        want_tr = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
+                  (tts_on and tcfg.tts_source == TTS_SOURCES[0])
+        has_tr = bool(item.srt_translated_path and Path(item.srt_translated_path).exists())
+        if want_tr and not has_tr and scfg.translate_enable:
+            out.add("gemini")
+        return out
+
     def _prepare_assets(self, item: VideoItem, info, trim, *, vcfg, stage, log, cancel, on_update,
                         preview_out: Path | None = None) -> tuple[list[Cue], list[Cue] | None, Path | None]:
         """Phần «chuẩn bị» của một video: phụ đề (nhận diện / file SRT), bản dịch, người nói, track giọng lồng.

@@ -28,6 +28,7 @@ MODE_LABELS = {SRT_MODES[0]: "Lời gốc", SRT_MODES[1]: "Bản dịch", SRT_MO
 SOURCE_LANGS = ["Tự nhận diện", "Tiếng Việt", "English", "中文", "日本語", "한국어", "Français", "Deutsch", "Español",
                 "ไทย", "Bahasa Indonesia", "Русский"]
 TAB_TEXT, TAB_SUB = "Lời thoại", "Phụ đề"
+NO_KEY = "Chưa có API key Gemini — nhập ở Cài đặt › AI dùng API key."
 
 
 class SRTModule(BaseModule):
@@ -230,10 +231,14 @@ class SRTModule(BaseModule):
             self.style_panel.follow_status()
         has_tr = bool(it and it.srt_translated_path and Path(it.srt_translated_path).exists())
         set_variant(self.tr_btn, "secondary" if has_tr else "primary")     # đã dịch → nút chính là «Lưu» ở trên
+        no_key = not self.state.settings.gemini_keys()
         if it is None:
             self.file_status.info("Chưa có video được chọn.")
             self.file_section.set_subtitle("")
-            self.tr_status.info("")
+            if no_key:
+                self.tr_status.warn(NO_KEY)
+            else:
+                self.tr_status.info("")
             return
         if it.srt_path and Path(it.srt_path).exists():
             try:
@@ -247,6 +252,8 @@ class SRTModule(BaseModule):
             self.file_section.set_subtitle("chưa có")
         if has_tr:
             self.tr_status.ok(f"Đã dịch: {Path(it.srt_translated_path).name}")
+        elif no_key:
+            self.tr_status.warn(NO_KEY)
         else:
             self.tr_status.info("Chưa dịch.")
 

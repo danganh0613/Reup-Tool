@@ -90,6 +90,7 @@ class MainWindow(_Root):
         self._last_retry: Callable[[], None] | None = None
         self._failed_model: str | None = None
         self._failed_key: tuple | None = None          # key lúc lỗi «chưa có / sai key» — Lưu key khác → «Thử lại»
+        self._resume = ("Thử lại", "Bấm «Thử lại» để chạy tiếp phần lỗi")     # nút + câu sau khi lưu key
         self.player = AudioPlayer(self.ffmpeg)
         self.modules: dict[str, BaseModule] = {}
         self._rail_buttons: dict[str, ctk.CTkButton] = {}
@@ -705,6 +706,7 @@ class MainWindow(_Root):
         self._last_retry = retry
         self._failed_model = None
         self._failed_key = None
+        self._resume = ("Thử lại", "Bấm «Thử lại» để chạy tiếp phần lỗi")
         msg = message or ""
         if UNAVAILABLE_MARK in msg and "quá tải" not in msg:
             self._failed_model = self.app_state.settings.translate_model
@@ -718,14 +720,40 @@ class MainWindow(_Root):
             return ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True)
         return ("Thử lại", retry, "refresh", True) if retry else None
 
+    def _preflight(self, items: list[VideoItem], rerun: Callable[[], None]) -> bool:
+        """Trước khi chạy: cần dịch mà chưa có API key Gemini / cần nghe lời thoại mà chưa cài Qwen3-ASR → báo ngay
+        (trước đây nhận diện xong cả chục phút mới lỗi ở bước dịch). False = không chạy."""
+        from app.services.qwen_asr import is_installed
+
+        need = [self.pipeline_for(it).needs(it) for it in items]
+        no_key = not self.app_state.settings.gemini_keys() and any("gemini" in n for n in need)
+        no_qwen = any("qwen" in n for n in need) and not is_installed()
+        if not (no_key or no_qwen):
+            return True
+        lines = (["• API key Gemini — để dịch phụ đề"] if no_key else []) + \
+                (["• Bộ nghe lời thoại (Qwen3-ASR) — để nhận diện"] if no_qwen else [])
+        page = "cloud" if no_key else "local"
+        if no_key:                                  # nhập key + Lưu → nút trên thanh trạng thái thành «Chạy tiếp»
+            self._error_action(None)
+            self._last_retry, self._failed_key = rerun, ()
+            self._resume = ("Chạy tiếp", "Bấm «Chạy tiếp» để chạy")
+            self.progress.result("error", "Chưa nhập API key Gemini", "Cần để dịch phụ đề — Cài đặt › AI dùng API key",
+                                 ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True))
+        else:
+            self.progress.result("error", "Chưa cài bộ nghe lời thoại", "Cài ở Cài đặt › AI trên máy (một lần)",
+                                 ("Cài…", lambda: self.open_settings(tab="local"), "download", True))
+        if messagebox.askyesno(APP_NAME, "Còn thiếu để chạy:\n\n" + "\n".join(lines) + "\n\nMở Cài đặt?"):
+            self.open_settings(tab=page)
+        return False
+
     def _offer_retry_after_model(self) -> None:
         """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại».
         Tương tự lỗi «chưa có / sai key»: đã nhập key khác."""
         keys = tuple(self.app_state.settings.gemini_keys())
         if self._failed_key is not None and self._last_retry is not None and keys and keys != self._failed_key:
             self._failed_key = None
-            self.progress.result("error", "Đã lưu key", "Bấm «Thử lại» để chạy tiếp phần lỗi",
-                                 ("Thử lại", self._last_retry, "refresh", True))
+            label, detail = self._resume
+            self.progress.result("error", "Đã lưu key", detail, (label, self._last_retry, "refresh", True))
             return
         model = self.app_state.settings.translate_model
         if self._failed_model is None or self._last_retry is None or model == self._failed_model:
@@ -1025,6 +1053,8 @@ class MainWindow(_Root):
     def _run_queue(self, items: list[VideoItem], *, mode: str = "render", audio_only: bool = False) -> None:
         if not self.ffmpeg.available:
             messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
+            return
+        if not self._preflight(items, lambda: self._run_queue(items, mode=mode, audio_only=audio_only)):
             return
         if self.tasks.running or self.runner.running:   # không đổi audio_only của pipeline khi hàng đợi đang chạy
             label = "Chuẩn bị" if mode == "prepare" else ("Xuất MP3" if audio_only else "Render")

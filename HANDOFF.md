@@ -90,6 +90,8 @@
 20. **Nút «Dọn dẹp» thay «Render MP3» trên header** (`app/services/cleanup.py`, `MainWindow.clean_workspace`): hỏi trước,
     xoá phụ đề / bản dịch / giọng lồng / job / cache xem trước-TTS-khử giọng và làm trống hàng đợi; giữ video đã xuất,
     Dựng truyện, mẫu, cài đặt, model, bộ nhớ dịch. Cài đặt › Bộ nhớ dùng chung hàm này. Không còn nút xuất MP3.
+21. **Kiểm tra trước khi chạy** (`MainWindow._preflight`, `Pipeline.needs`): cần dịch mà chưa có key Gemini / cần nghe
+    lời thoại mà chưa cài Qwen3-ASR → báo ngay + «Mở Cài đặt?»; lưu key xong nút thành «Chạy tiếp». Mục Dịch nhắc chưa có key.
 
 ## Còn tồn / để ý khi làm tiếp
 
