@@ -52,8 +52,12 @@ def render_cli(argv: list[str]) -> int:
     state.load_config(Path(ns.config) if ns.config else None)
     state.set_save_scheduler(lambda _save: None)   # chỉ đọc: --out không ghi đè cấu hình làm việc của app
     state.output_dir = ns.out or state.output_dir or str(VIDEOS_DIR)
-    if ns.model:
-        state.settings.translate_model = ns.model.strip()
+    if ns.model:                                   # «deepseek-…» → DeepSeek, còn lại → Gemini
+        m = ns.model.strip()
+        if m.lower().startswith("deepseek"):
+            state.settings.translate_provider, state.settings.deepseek_model = "DeepSeek", m
+        else:
+            state.settings.translate_provider, state.settings.translate_model = "Gemini", m
     ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
     ffmpeg.require()
     pipe = Pipeline(state, ffmpeg)

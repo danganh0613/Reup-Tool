@@ -215,6 +215,17 @@
       trúng cache ở phần 2), lấp khung 75 % / 79 %, tự nhiên + tiếng lóng tốt nhất; v4-pro ≈ $0.011, giọng hành chính
       («Cấp quốc gia nhóm II»), lấp 71 % / 73 %. Tên loài hiếm (钳嘴鹤, 大鸨) model nào cũng hay sai → từ điển tên riêng.
 
+33. **Chọn AI dịch + đủ ý** (test `test_deepseek.py` 26, `test_whole.py` 19; đo `audit_out/qa/exp_windows.py`):
+    - `Settings.translate_provider` ("Gemini" | "DeepSeek", nút chọn «Dùng để dịch» trong Cài đặt), `translate_model` =
+      model Gemini, `deepseek_model` (mặc định deepseek-flash), `active_model()`. Cài đặt cũ có «deepseek-…» trong ô model
+      → tự tách sang DeepSeek; nhà cung cấp đã gỡ (Groq…) → Gemini. `--model` dòng lệnh chọn nhà cung cấp theo tên.
+    - Đo chia đoạn (39 câu, không bước khớp): DeepSeek flash 25 câu/lượt → âm tiết / tối thiểu 1,34 · 1,43, 0 câu ngắn;
+      cả video 1 lượt → 1,06 · 1,03, 4 câu ngắn. Gemini Lite 25 câu → 1,08 · 1,17, 3 câu; 1 lượt → 1,11 · 1,08, 5 câu ⇒
+      giữ 25 câu / lượt cho mọi model.
+    - `fit_texts` thêm lý do «bỏ ý»: câu phóng tác < `MIN_MEANING` 60 % số âm tiết bản dịch sát (`directs` lưu từ lượt
+      dịch) mà còn chỗ trong khung → vào lượt sửa chung, `adjust_prompt` có «FAITHFUL (all the information)»; nhận bản
+      sửa chỉ khi đúng chiều (dài → ngắn đi, ngắn / bỏ ý → dài thêm) và ≤ tối đa.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

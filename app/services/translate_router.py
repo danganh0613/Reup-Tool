@@ -131,8 +131,8 @@ class Candidate:
 
 def build_candidates(settings: Settings) -> list[Candidate]:
     """Mọi key của nhà cung cấp model đang chọn (Gemini / DeepSeek) với đúng model đó."""
-    model = settings.translate_model or DEFAULT_MODEL
-    return [Candidate(settings.translate_provider(), k, model) for k in settings.translate_keys()]
+    model = settings.active_model() or DEFAULT_MODEL
+    return [Candidate(settings.translate_provider, k, model) for k in settings.translate_keys()]
 
 
 DEEPSEEK_URL = "https://api.deepseek.com"
@@ -216,7 +216,7 @@ class Router:
         self.log = log
         self.cancel = cancel
         if not self.cands:
-            raise RuntimeError(f"Chưa có {settings.translate_provider()} API key (Cài đặt › AI dùng API key).")
+            raise RuntimeError(f"Chưa có {settings.translate_provider} API key (Cài đặt › AI dùng API key).")
 
     @property
     def current(self) -> Candidate:

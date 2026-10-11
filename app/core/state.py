@@ -381,11 +381,13 @@ class Settings:
     output_dir: str = ""
     windows_toast: bool = True
     vieneu_precision: str = "int8"     # int8 (nhanh) | fp32 (chất lượng)
-    #: model dùng để dịch / tách câu / sửa phụ đề (Gemini hoặc DeepSeek «deepseek-…») — hết lượt hay quá tải thì dừng
-    #: và báo, không tự đổi model
-    translate_model: str = "gemini-flash-latest"
+    #: AI dùng để dịch / tách câu / sửa phụ đề: "Gemini" | "DeepSeek" (Cài đặt › AI dùng API key) — hết lượt hay quá
+    #: tải thì dừng và báo, không tự đổi
+    translate_provider: str = "Gemini"
+    translate_model: str = "gemini-flash-latest"   # model Gemini
+    deepseek_model: str = "deepseek-flash"         # model DeepSeek (flash: nhanh, rẻ · v4-pro: mạnh hơn)
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
-    deepseek_api_key: str = ""         # DeepSeek (trả phí theo lượng dùng) — dùng khi model dịch là «deepseek-…»
+    deepseek_api_key: str = ""         # DeepSeek (trả phí theo lượng dùng)
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
 
     @staticmethod
@@ -398,10 +400,11 @@ class Settings:
         return self.split_keys(self.gemini_api_keys)
 
     def uses_deepseek(self) -> bool:
-        return (self.translate_model or "").strip().lower().startswith("deepseek")
+        return self.translate_provider == "DeepSeek"
 
-    def translate_provider(self) -> str:
-        return "DeepSeek" if self.uses_deepseek() else "Gemini"
+    def active_model(self) -> str:
+        """Model đang dùng để dịch (theo nhà cung cấp đã chọn)."""
+        return (self.deepseek_model or "deepseek-flash") if self.uses_deepseek() else self.translate_model
 
     def translate_keys(self) -> list[str]:
         """Key của nhà cung cấp model dịch đang chọn (Gemini / DeepSeek)."""
@@ -963,7 +966,14 @@ class AppState:
                     # key / cài đặt của tính năng đã gỡ (Groq, ElevenLabs…) giữ nguyên trong file, không xoá
                     known = {f.name for f in fields(Settings)}
                     self._settings_extra = {k: v for k, v in data.items() if k not in known}
-                    if data.get("translate_provider", "Gemini") != "Gemini":   # model của nhà cung cấp khác → Gemini
+                    if self.settings.translate_provider not in ("Gemini", "DeepSeek"):
+                        # nhà cung cấp đã gỡ (Groq, OpenAI…) → về Gemini, model mặc định
+                        self.settings.translate_provider = "Gemini"
+                        self.settings.translate_model = Settings.translate_model
+                    if self.settings.translate_model.strip().lower().startswith("deepseek"):
+                        # bản trước chọn DeepSeek ngay trong ô model → tách sang ô chọn nhà cung cấp
+                        self.settings.translate_provider = "DeepSeek"
+                        self.settings.deepseek_model = self.settings.translate_model.strip()
                         self.settings.translate_model = Settings.translate_model
                     # một ô key Gemini: chuyển key ở ô key đơn cũ + ô «Google API keys» (vẫn được dùng làm key Gemini)
                     moved = [self._settings_extra.pop(k, "") for k in ("gemini_api_key", "google_api_key")]

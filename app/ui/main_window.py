@@ -184,7 +184,7 @@ class MainWindow(_Root):
         if self.runner.running or self.tasks.running or self.progress._mode != "idle":
             return
         miss = (["bộ nghe lời thoại"] if not is_installed() else []) + \
-               ([f"API key {self.app_state.settings.translate_provider()}"]
+               ([f"API key {self.app_state.settings.translate_provider}"]
                 if not self.app_state.settings.translate_keys() else [])
         if miss:
             self.progress.result("stopped", "Còn thiếu để làm video tiếng nước ngoài: " + " và ".join(miss),
@@ -806,7 +806,7 @@ class MainWindow(_Root):
         self._resume = ("Thử lại", "Bấm «Thử lại» để chạy tiếp phần lỗi")
         msg = message or ""
         if UNAVAILABLE_MARK in msg and "quá tải" not in msg:
-            self._failed_model = self.app_state.settings.translate_model
+            self._failed_model = self.app_state.settings.active_model()
             return ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True)
         if MISSING_MARK in msg:
             return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
@@ -842,9 +842,9 @@ class MainWindow(_Root):
         no_qwen = any("qwen" in n for n in need) and not is_installed() and not ocr_ok()
         if not (no_key or no_qwen):
             return True
-        provider = self.app_state.settings.translate_provider()
+        provider = self.app_state.settings.translate_provider
         lines = ([f"• API key {provider} — để dịch phụ đề (model dịch đang chọn: "
-                  f"{self.app_state.settings.translate_model})"] if no_key else []) + \
+                  f"{self.app_state.settings.active_model()})"] if no_key else []) + \
                 (["• Bộ nghe lời thoại (Qwen3-ASR) — để nhận diện"] if no_qwen else [])
         page = "cloud" if no_key else "local"
         if no_key:                                  # nhập key + Lưu → nút trên thanh trạng thái thành «Chạy tiếp»
@@ -915,7 +915,7 @@ class MainWindow(_Root):
             label, detail = self._resume
             self.progress.result("ok", "Đã lưu key", detail, (label, self._last_retry, "refresh", True))
             return
-        model = self.app_state.settings.translate_model
+        model = self.app_state.settings.active_model()
         if self._failed_model is None or self._last_retry is None or model == self._failed_model:
             return
         self._failed_model = None

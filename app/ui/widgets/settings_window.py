@@ -181,6 +181,7 @@ class SettingsWindow(ctk.CTkToplevel):
         return (self.toast.get(), self.ffmpeg.get().strip(), self.ffprobe.get().strip(), self.vieneu.get(),
                 float(self.loudness.get()), self.waveform.get(), self.tr_model.get().strip(),
                 tuple(self.app_state.settings.split_keys(self._key_text())), self.ds_key.get().strip(),
+                self.provider_var.get(), self.ds_model.get(),
                 self.glossary.get("1.0", "end").strip(), self.out_var.get().strip())
 
     def _close(self) -> None:
@@ -287,27 +288,23 @@ class SettingsWindow(ctk.CTkToplevel):
     def _build_cloud(self, c, st) -> None:
         self._page_head(c, "AI dùng API key", "Cần mạng. Gemini miễn phí có giới hạn lượt mỗi ngày; DeepSeek trả phí "
                                                   "theo lượng dùng.")
-        b = self._card(c, "Model dịch", info="Dùng để: dịch phụ đề, tách câu nhận diện quá dài, «Nhờ AI sửa», khớp độ dài "
-                                             "câu đọc (Dựng truyện chọn model riêng ở tab Truyện). Cách dịch (cả video một "
-                                             "lượt, phóng tác, lời dặn của mẫu) giống nhau với mọi model.")
+        b = self._card(c, "AI dịch", info="Dùng để: dịch phụ đề, tách câu nhận diện quá dài, «Nhờ AI sửa», khớp độ dài "
+                                          "câu đọc (Dựng truyện dùng Gemini, chọn model ở tab Truyện). Cách dịch (từng "
+                                          "đoạn 25 câu, phóng tác, đủ ý, lời dặn của mẫu) giống nhau với mọi model. Hết "
+                                          "lượt / quá tải lâu: máy dừng và báo — không tự đổi giữa chừng.")
         row = ctk.CTkFrame(b, fg_color="transparent")
         row.pack(fill="x", pady=3)
-        ctk.CTkLabel(row, text="Model", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
-        info_icon(row, "gemini-…: dùng key Gemini (miễn phí có hạn mức). deepseek-flash: nhanh, rẻ, đủ cho clip đời "
-                       "thường · deepseek-v4-pro: hay hơn với tiếng lóng, biệt danh, ẩn dụ — dùng key DeepSeek. Hết lượt "
-                       "hoặc quá tải lâu: máy dừng và báo để bạn chọn model khác — không tự đổi model giữa chừng. Bấm ↻ "
-                       "để lấy danh sách model Gemini mới nhất.").pack(side="left", padx=(4, 8))
-        self.tr_model = Select(row, (text_models() or [DEFAULT_MODEL]) + DEEPSEEK_MODELS, height=34, placeholder="")
-        self.tr_model.set(st.translate_model or DEFAULT_MODEL)
-        self.tr_model.pack(side="left", fill="x", expand=True)
-        self.models_btn = button(row, "", icon_name="refresh", size="sm", width=36, command=self._refresh_models,
-                                 tip="Lấy danh sách model Gemini mới nhất bằng API key Gemini")
-        self.models_btn.pack(side="left", padx=(6, 0))
-        self.models_status = hint(b, "")
-        self.models_status.pack(fill="x")
+        ctk.CTkLabel(row, text="Dùng để dịch", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left",
+                                                                                                 padx=(0, 12))
+        self.provider_var = ctk.StringVar(value=st.translate_provider if st.translate_provider in ("Gemini", "DeepSeek")
+                                          else "Gemini")
+        for name in ("Gemini", "DeepSeek"):
+            ctk.CTkRadioButton(row, text=name, value=name, variable=self.provider_var, font=T.font(12),
+                               text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                               border_color=T.TEXT_MUTED).pack(side="left", padx=(0, 16))
 
-        b = self._card(c, "Gemini", info="Gói miễn phí: Google có thể dùng chữ bạn gửi để cải thiện sản phẩm — đừng gửi "
-                                         "nội dung nhạy cảm.")
+        b = self._card(c, "Gemini", info="Gói miễn phí có giới hạn lượt mỗi ngày. Google có thể dùng chữ bạn gửi để cải "
+                                         "thiện sản phẩm — đừng gửi nội dung nhạy cảm.")
         r = ctk.CTkFrame(b, fg_color="transparent")
         r.pack(fill="x")
         ctk.CTkLabel(r, text="API key", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
@@ -324,6 +321,19 @@ class SettingsWindow(ctk.CTkToplevel):
         self._keys_real = st.gemini_api_keys
         self._keys_shown = not st.gemini_keys()
         self._paint_keys()
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+        ctk.CTkLabel(row, text="Model", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        info_icon(row, "Model Gemini dùng khi chọn «Gemini» ở trên. Bấm ↻ để lấy danh sách model mới nhất bằng key của "
+                       "bạn.").pack(side="left", padx=(4, 8))
+        self.tr_model = Select(row, text_models() or [DEFAULT_MODEL], height=34, placeholder="")
+        self.tr_model.set(st.translate_model or DEFAULT_MODEL)
+        self.tr_model.pack(side="left", fill="x", expand=True)
+        self.models_btn = button(row, "", icon_name="refresh", size="sm", width=36, command=self._refresh_models,
+                                 tip="Lấy danh sách model Gemini mới nhất bằng API key ở trên")
+        self.models_btn.pack(side="left", padx=(6, 0))
+        self.models_status = hint(b, "")
+        self.models_status.pack(fill="x")
 
         b = self._card(c, "DeepSeek", info="Trả phí theo lượng dùng (nạp trước ở platform.deepseek.com). Dùng khi chọn "
                                            "model «deepseek-…» ở trên. Máy tắt chế độ suy nghĩ khi dịch (nhanh, rẻ — lời "
@@ -342,6 +352,14 @@ class SettingsWindow(ctk.CTkToplevel):
         self.ds_key = ctk.CTkEntry(b, height=32, font=T.mono(11), show="•")
         self.ds_key.insert(0, st.deepseek_api_key)
         self.ds_key.pack(fill="x", pady=(2, 4))
+        row = ctk.CTkFrame(b, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+        ctk.CTkLabel(row, text="Model", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
+        info_icon(row, "deepseek-flash: nhanh, rẻ — thử trên video review thấy tự nhiên, tiếng lóng tốt nhất · "
+                       "deepseek-v4-pro: mạnh hơn, giá ~4 lần, giọng văn trang trọng hơn.").pack(side="left", padx=(4, 8))
+        self.ds_model = Select(row, DEEPSEEK_MODELS, height=34, placeholder="")
+        self.ds_model.set(st.deepseek_model if st.deepseek_model else DEEPSEEK_MODELS[0])
+        self.ds_model.pack(side="left", fill="x", expand=True)
         self.ds_status = hint(b, "")
         self.ds_status.pack(fill="x")
 
@@ -706,8 +724,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _save(self, close: bool = True, silent: bool = False) -> None:
         st = self.app_state.settings
-        before = (st.gemini_api_keys, st.translate_model)
-        before_ds = st.deepseek_api_key
+        before = (st.gemini_api_keys, st.translate_model, st.translate_provider)
+        before_ds = (st.deepseek_api_key, st.deepseek_model, st.translate_provider)
         st.windows_toast = self.toast.get()
         st.ffmpeg_path, st.ffprobe_path = self.ffmpeg.get().strip(), self.ffprobe.get().strip()
         st.vieneu_precision = self.vieneu.get()
@@ -717,6 +735,8 @@ class SettingsWindow(ctk.CTkToplevel):
         st.translate_model = self.tr_model.get().strip() or DEFAULT_MODEL
         st.gemini_api_keys = "\n".join(st.split_keys(self._key_text()))
         st.deepseek_api_key = self.ds_key.get().strip()
+        st.translate_provider = self.provider_var.get()
+        st.deepseek_model = self.ds_model.get().strip() or DEEPSEEK_MODELS[0]
         st.glossary = self.glossary.get("1.0", "end").strip()
         out = self.out_var.get().strip().strip('"')
         if out and out != self.app_state.output_dir:
@@ -739,14 +759,15 @@ class SettingsWindow(ctk.CTkToplevel):
             return
         self.window.apply_settings()
         self.window.refresh_modules()
-        if st.deepseek_api_key and (st.deepseek_api_key != before_ds
-                                    or (st.uses_deepseek() and st.translate_model != before[1])):
+        if st.deepseek_api_key and st.uses_deepseek() and (st.deepseek_api_key, st.deepseek_model,
+                                                             st.translate_provider) != before_ds:
             from app.services.translate_router import check_deepseek_key
 
             self.ds_status.configure(text="Đang thử key DeepSeek…", text_color=T.TEXT_MUTED)
             key = st.deepseek_api_key
             self.window.run_bg(lambda: check_deepseek_key(key), self._ds_checked)
-        if (st.gemini_api_keys, st.translate_model) != before and st.gemini_keys() and not st.uses_deepseek():
+        if (st.gemini_api_keys, st.translate_model, st.translate_provider) != before and st.gemini_keys() \
+                and not st.uses_deepseek():
             # vừa đổi key / model → gọi thử ngay (không tốn lượt dịch); cửa sổ còn mở thì ghi kết quả dưới ô model
             self.models_status.configure(text="Đang thử key…", text_color=T.TEXT_MUTED)
             self.window.check_gemini_keys(on_done=self._key_checked)

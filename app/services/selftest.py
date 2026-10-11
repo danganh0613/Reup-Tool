@@ -175,7 +175,7 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
         if ds:                                 # model dịch là DeepSeek → cần key DeepSeek
             d = bool(settings.split_keys(settings.deepseek_api_key))
             out.append(Check("DeepSeek API key", "ok" if d else "bad",
-                             f"Có key · model dịch {settings.translate_model}" if d else "Chưa có → không dịch AI được",
+                             f"Có key · model dịch {settings.active_model()}" if d else "Chưa có → không dịch AI được",
                              "" if d else "Nhập ở Cài đặt › AI dùng API key (platform.deepseek.com).", "cloud"))
 
     # 7. Font icon

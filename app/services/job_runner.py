@@ -413,7 +413,7 @@ class Pipeline:
                           source_hint=cfg.source_hint, style=style, instruction=instruction,
                           on_progress=progress, log=log, cancel=cancel, budgets=budgets,
                           memory_key=memory_style(cfg.translate_style, self.state.settings.glossary,
-                                                 self.state.settings.translate_model))
+                                                 self.state.settings.active_model()))
         if save and new:
             base = current or orig
             out = [Cue(c.index, c.start, c.end, wrap_lines(new[i]) if i in new else c.text, dict(c.meta))

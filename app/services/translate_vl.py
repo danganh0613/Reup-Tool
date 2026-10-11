@@ -36,6 +36,7 @@ SUMMARY_CHARS = 8000                     # config summary_length
 # mẫu: 39 câu một lượt → nửa sau giọng chỉ lấp 54 % khung, «Con này bắt nuôi được hông?» thành «Nuôi được hông?»)
 WHOLE_LINES, WHOLE_CHARS = 25, 1500
 MIN_FILL = 0.7                           # câu dịch nên đọc ≥ 70 % thời gian người gốc nói câu đó (ngắn hơn = khoảng lặng)
+MIN_MEANING = 0.6                        # câu phóng tác < 60 % số âm tiết bản dịch sát → nhiều khả năng đã bỏ ý → bù lại
 TOLERANCE = 1.5                          # config tolerance: câu được mượn tối đa 1,5 s khoảng lặng sau nó
 MAX_SPLIT_TOKENS = 20                    # config max_split_length
 STYLE_TAG = "|vl-motluot2"              # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
@@ -576,7 +577,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     total = len(lines)
     src_lang = source_name(lines, source_hint)
     tgt_lang = lang_name(target)
-    key_style = memory_style(style, settings.glossary, settings.translate_model)
+    key_style = memory_style(style, settings.glossary, settings.active_model())
     memory = TranslationMemory()
     source = hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:12]
     ckpt = Checkpoint(srt_path, target, key_style, source)
@@ -595,6 +596,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     custom = _custom_terms(settings.glossary)
     unsure: set[int] = set()                            # câu AI không trả nổi → giữ lời gốc, không ghi bộ nhớ dịch
     weak: set[int] = set()                              # câu dùng tạm bản dịch sát → không nhớ, lần sau dịch thoát lại
+    directs: dict[int, str] = {}                        # bản dịch sát từng câu — chuẩn «đủ ý» cho bước khớp độ dài
 
     def keep(i: int, text: str) -> None:
         results[i] = text
@@ -640,6 +642,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                 log(f"Dịch: {len(terms_got)} thuật ngữ — " + ", ".join(f"{t['src']}={t['tgt']}" for t in terms_got[:8]))
         for i in idx:
             sat, free = got[i]
+            directs[i] = sat
             if _free_broken(free, sat):
                 logger.warning("Dịch cả lượt câu %d: dịch thoát cụt / thiếu (%r) → dùng bản dịch sát", i + 1, free)
                 weak.add(i)
@@ -708,6 +711,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                 halt()
                 raise
             faith = {k: {"origin": lines[i], "direct": sat[i]} for i, k in zip(idx, keys)}
+            directs.update({i: sat[i] for i in idx if i not in unsure})
             try:
                 if any(i in unsure for i in idx):
                     raise ValueError("lô có câu chưa dịch được")
@@ -764,7 +768,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             + ("…" if len(kept) > 12 else "") + " — sửa tay ở tab Lời thoại.")
     # 4) khớp thời lượng lồng tiếng
     if fit and not stopped():
-        texts = fit_texts(cues, texts, router, fit, log, style=style, tgt_lang=tgt_lang)
+        texts = fit_texts(cues, texts, router, fit, log, style=style, tgt_lang=tgt_lang, directs=directs)
     memory.save()
     ckpt.finish()
     # câu gốc bị ngắt ở dấu phẩy (Qwen tách câu dài) → bản dịch cũng kết thúc bằng «,» → giọng đọc lên giọng lửng lơ,
@@ -804,11 +808,13 @@ def syllable_range(cues: list[Cue], i: int, fit: dict) -> tuple[int, int]:
     return max(2, min(lo, hi - 1)), hi
 
 
-def adjust_prompt(items: list[tuple[str, str, int, int, int]], tgt_lang: str, style: str) -> str:
-    """``items``: (câu gốc, bản dịch hiện tại, số âm tiết hiện tại, tối thiểu, tối đa) — các câu dài / ngắn quá so với
-    thời gian nói, sửa chung một lượt."""
-    rows = "\n".join(f"{n}. [{lo}-{hi} syllables] SOURCE: {src}\n   CURRENT ({cnt} syllables): {cur}"
-                      for n, (src, cur, cnt, lo, hi) in enumerate(items, 1))
+def adjust_prompt(items: list[tuple[str, str, int, int, int, str]], tgt_lang: str, style: str) -> str:
+    """``items``: (câu gốc, bản dịch hiện tại, số âm tiết hiện tại, tối thiểu, tối đa, bản dịch sát) — các câu dài /
+    ngắn quá so với thời gian nói, hoặc bỏ ý so với bản dịch sát, sửa chung một lượt."""
+    rows = "\n".join(f"{n}. [{lo}-{hi} syllables] SOURCE: {src}"
+                      + (f"\n   FAITHFUL (all the information): {sat}" if sat else "")
+                      + f"\n   CURRENT ({cnt} syllables): {cur}"
+                      for n, (src, cur, cnt, lo, hi, sat) in enumerate(items, 1))
     return f'''
 ## Role
 You are a professional subtitle editor fitting a {tgt_lang} voice-over to the original speaking time.
@@ -816,9 +822,11 @@ You are a professional subtitle editor fitting a {tgt_lang} voice-over to the or
 ## Task
 Rewrite each CURRENT line so its number of syllables (one syllable = one spoken word / Vietnamese syllable) falls
 inside its [min-max syllables] range:
-- too SHORT: put back what the SOURCE says that was left out (names, details, the punchline) — never pad with filler;
+- too SHORT, or missing information that FAITHFUL has: put back what was left out (names, numbers, protection
+  level, consequences, the punchline) — never pad with filler;
 - too LONG: cut filler words and redundant phrases, keep the key meaning and the punchline.
-Keep the tone, slang, pronouns and names of the CURRENT line. One output per item, same numbers.
+Keep the tone, slang, pronouns and names of the CURRENT line — the result must stay natural, fun spoken {tgt_lang}.
+One output per item, same numbers.
 
 {style_section(style)}## Items
 {rows}
@@ -831,26 +839,35 @@ Keep the tone, slang, pronouns and names of the CURRENT line. One output per ite
 
 
 def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log: Callable[[str], None] | None = None,
-              style: str = "", tgt_lang: str = "Vietnamese") -> list[str]:
-    """Khớp độ dài lời dịch với thời gian nói: câu đọc không kịp khung (dài) hoặc chưa tới ``MIN_FILL`` thời gian người
-    gốc nói (ngắn — khoảng lặng dài) → AI sửa CHUNG một lượt cho mọi câu đó. Lượt chung lỗi → câu dài rút gọn từng câu
-    như cũ (``_trim_each``), câu ngắn để nguyên."""
+              style: str = "", tgt_lang: str = "Vietnamese", directs: dict[int, str] | None = None) -> list[str]:
+    """Khớp độ dài + đủ ý: câu đọc không kịp khung (dài), chưa tới ``MIN_FILL`` thời gian người gốc nói (ngắn — khoảng
+    lặng dài), hoặc ngắn hơn hẳn bản dịch sát (``MIN_MEANING`` — AI bỏ ý, hay gặp ở cuối lượt dài) → AI sửa CHUNG một
+    lượt cho mọi câu đó, có bản dịch sát làm chuẩn. Lượt chung lỗi → câu dài rút gọn từng câu như cũ (``_trim_each``)."""
     from app.services.translate_router import _parse_items
     from app.services.tts.quality import expected_duration, syllable_count
 
     ts = max(0.5, float(fit.get("tts_speed", 1.0)))
+    directs = directs or {}
     out = list(texts)
     todo: list[int] = []
+    why: dict[int, str] = {}
     for i in range(len(cues)):
-        lo, _hi = syllable_range(cues, i, fit)
-        if expected_duration(out[i], ts) > _slot(cues, i, fit) or syllable_count(out[i]) < lo * 0.85:
+        lo, hi = syllable_range(cues, i, fit)
+        n, sat = syllable_count(out[i]), directs.get(i, "")
+        if expected_duration(out[i], ts) > _slot(cues, i, fit):
+            why[i] = "long"
+        elif n < lo * 0.85:
+            why[i] = "short"
+        elif sat and n < MIN_MEANING * syllable_count(sat) and n < hi:
+            why[i] = "meaning"                            # đủ khung nhưng ngắn hơn hẳn bản dịch sát → bỏ ý
+        if i in why:
             todo.append(i)
     if not todo:
         if log:
-            log("Dịch: khớp thời lượng lồng tiếng — các câu đã vừa khung")
+            log("Dịch: khớp thời lượng lồng tiếng — các câu đã vừa khung, đủ ý")
         return out
-    items = [(cues[i].plain.replace("\n", " "), out[i], syllable_count(out[i]), *syllable_range(cues, i, fit))
-             for i in todo]
+    items = [(cues[i].plain.replace("\n", " "), out[i], syllable_count(out[i]), *syllable_range(cues, i, fit),
+              directs.get(i, "")) for i in todo]
     try:
         new = _parse_items(router.call(adjust_prompt(items, tgt_lang, style)), list(range(1, len(todo) + 1)))
     except RenderCancelled:
@@ -864,17 +881,18 @@ def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log:
     except (ValueError, json.JSONDecodeError, RuntimeError) as exc:
         logger.warning("Khớp độ dài chung một lượt lỗi (%s) → rút gọn từng câu dài", exc)
         return _trim_each(cues, out, router, fit, log)
-    fixed = short = 0
-    for (i, (_src, cur, cnt, lo, hi)), t in zip(zip(todo, items), new):
+    done = {"long": 0, "short": 0, "meaning": 0}
+    for (i, (_src, cur, cnt, lo, hi, _sat)), t in zip(zip(todo, items), new):
         n = syllable_count(t) if t else 0
-        # nhận khi đã vào khoảng, hoặc gần khoảng hơn bản cũ (không cắt cụt, không vượt quá tối đa)
-        if t and n <= hi and abs(n - min(max(n, lo), hi)) < abs(cnt - min(max(cnt, lo), hi)):
+        if not t or n > hi:                             # trống / cụt (đã lọc) / vượt tối đa → giữ câu cũ
+            continue
+        # dài → phải ngắn đi · ngắn / bỏ ý → phải dài thêm (đã bù ý) — không nhận bản sửa ngược chiều
+        if (n < cnt) if why[i] == "long" else (n > cnt):
             out[i] = t
-            fixed += 1
-            short += cnt < lo
+            done[why[i]] += 1
     if log:
-        log(f"Dịch: khớp thời lượng lồng tiếng — sửa {fixed}/{len(todo)} câu chưa vừa khung "
-            f"({short} câu quá ngắn, {fixed - short} câu quá dài) trong 1 lượt")
+        log(f"Dịch: khớp thời lượng + đủ ý — sửa {sum(done.values())}/{len(todo)} câu trong 1 lượt "
+            f"({done['short']} ngắn quá, {done['meaning']} bỏ ý, {done['long']} dài quá)")
     return out
 
 
