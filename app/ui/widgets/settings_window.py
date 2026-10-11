@@ -653,6 +653,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _save(self, close: bool = True, silent: bool = False) -> None:
         st = self.app_state.settings
+        before = (st.gemini_api_keys, st.translate_model)
         st.windows_toast = self.toast.get()
         st.ffmpeg_path, st.ffprobe_path = self.ffmpeg.get().strip(), self.ffprobe.get().strip()
         st.vieneu_precision = self.vieneu.get()
@@ -672,5 +673,13 @@ class SettingsWindow(ctk.CTkToplevel):
             return
         self.window.apply_settings()
         self.window.refresh_modules()
+        if (st.gemini_api_keys, st.translate_model) != before and st.gemini_keys():
+            # vừa đổi key / model → gọi thử ngay (không tốn lượt dịch); cửa sổ còn mở thì ghi kết quả dưới ô model
+            self.models_status.configure(text="Đang thử key…", text_color=T.TEXT_MUTED)
+            self.window.check_gemini_keys(on_done=self._key_checked)
         if close:
             self.destroy()
+
+    def _key_checked(self, summary: str) -> None:
+        if self.winfo_exists():
+            self.models_status.configure(text=summary, text_color=T.WARNING if summary.startswith("⚠") else T.TEXT_MUTED)

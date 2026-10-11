@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 
 import requests
 
@@ -158,3 +159,32 @@ def fetch_models(api_key: str, timeout: float = 20) -> dict[str, list[str]]:
         logger.warning("Không lưu được danh sách model", exc_info=True)
     logger.info("Danh sách model Gemini: %d văn bản · %d ảnh · %d video", len(text), len(image), len(video))
     return result
+
+
+@dataclass
+class KeyCheck:
+    """Kết quả gọi thử một key: ``ok`` True dùng được · False hỏng · None không kiểm được (mất mạng…);
+    ``has_model``: model đang chọn có với key này không (None = không biết)."""
+    ok: bool | None
+    reason: str = ""
+    has_model: bool | None = None
+
+
+def check_key(api_key: str, model: str, timeout: float = 15) -> KeyCheck:
+    """Gọi thử key bằng models.get (hỏi thông tin model đang chọn) — không tốn lượt dịch / lượt tạo nội dung."""
+    try:
+        r = requests.get(f"{BASE}/models/{model.removeprefix('models/')}", headers={"x-goog-api-key": api_key},
+                         timeout=timeout)
+    except requests.RequestException:
+        return KeyCheck(None, "không kết nối được tới Google")
+    if r.status_code == 200:
+        return KeyCheck(True, "", True)
+    if r.status_code == 404:                     # key đúng nhưng model không có (đã bị gỡ / tên sai)
+        return KeyCheck(True, "", False)
+    if r.status_code == 429:                     # key đúng, đang chạm giới hạn lượt
+        return KeyCheck(True, "đang chạm giới hạn lượt", True)
+    if r.status_code == 400 and ("API_KEY_INVALID" in r.text or "API key not valid" in r.text):
+        return KeyCheck(False, "key không đúng (chép thiếu / thừa ký tự?)")
+    if r.status_code in (401, 403):
+        return KeyCheck(False, "key bị chặn hoặc chưa bật Gemini API")
+    return KeyCheck(None, f"Google trả lỗi {r.status_code}")

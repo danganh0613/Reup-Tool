@@ -746,6 +746,52 @@ class MainWindow(_Root):
             self.open_settings(tab=page)
         return False
 
+    def check_gemini_keys(self, on_done: Callable[[str], None] | None = None) -> None:
+        """Gọi thử từng key Gemini (models.get — không tốn lượt dịch) sau khi lưu Cài đặt: key sai / model không có →
+        báo ngay trên thanh trạng thái, khỏi đợi tới lúc dịch mới lỗi. ``on_done(câu tóm tắt)``: cho trang Cài đặt."""
+        from app.services.gemini_models import check_key
+        from app.services.translate_router import DEFAULT_MODEL
+
+        st = self.app_state.settings
+        keys, model = st.gemini_keys(), st.translate_model or DEFAULT_MODEL
+        if not keys:
+            return
+
+        def done(result, error) -> None:
+            if error or not result:
+                return
+            bad = [(i + 1, r.reason) for i, r in enumerate(result) if r.ok is False]
+            good = [r for r in result if r.ok]
+            no_model = bool(good) and all(r.has_model is False for r in good)
+            n = len(result)
+            if bad:
+                which = ", ".join(str(i) for i, _ in bad)
+                title = f"Key Gemini thứ {which} không dùng được" if n > 1 else "Key Gemini không dùng được"
+                detail = bad[0][1] + (f" — {len(good)} key còn lại vẫn dùng được" if good else "")
+                summary = f"⚠ {title}: {detail}"
+                self._show_key_problem(title, detail, ("Nhập key…", lambda: self.open_settings(tab="cloud"),
+                                                       "settings", True))
+            elif no_model:
+                title = f"Model «{model}» không có với key của bạn"
+                summary = f"⚠ {title} — chọn model khác (bấm ↻ để lấy danh sách)."
+                self._show_key_problem(title, "Chọn model khác ở Cài đặt › AI dùng API key",
+                                       ("Chọn model…", lambda: self.open_settings(tab="model"), "settings", True))
+            elif not good:
+                summary = f"Chưa kiểm được key ({result[0].reason}) — sẽ thử lại khi dịch."
+            else:
+                summary = f"✓ Key Gemini dùng được ({len(good)}/{n}) · model «{model}» có sẵn."
+            self.log(summary)
+            if on_done is not None:
+                on_done(summary)
+
+        self.run_bg(lambda: [check_key(k, model) for k in keys], done)
+
+    def _show_key_problem(self, title: str, detail: str, action: tuple) -> None:
+        """Key / model có vấn đề: báo trên thanh trạng thái (đang chạy việc khác thì chỉ ghi thông báo, không đè)."""
+        self.add_notification(title, detail, "error")
+        if not (self.runner.running or self.tasks.running):
+            self.progress.result("error", title, detail, action)
+
     def _offer_retry_after_model(self) -> None:
         """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại».
         Tương tự lỗi «chưa có / sai key»: đã nhập key khác."""

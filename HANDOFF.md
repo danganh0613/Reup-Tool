@@ -106,6 +106,9 @@
     `srt_utils.decode_subtitle` (GBK / Big5 / Shift-JIS / EUC-KR, UTF-16 chỉ khi có BOM) + báo SRT 0 câu ·
     `platform.keep_awake` trong `set_running` · `qwen_asr.install` dừng pip ngay + lỗi có lý do, `local_ai._must` ·
     Hiệu ứng / Che chữ tự bật công tắc · `translate_vl.same_language` bỏ dịch Việt → Việt, báo câu sót chữ Hán.
+25. **Gọi thử key Gemini khi lưu Cài đặt** (`gemini_models.check_key` — models.get, không tốn lượt dịch;
+    `MainWindow.check_gemini_keys`): chỉ khi key / model vừa đổi. Key sai / bị chặn → thanh trạng thái báo key thứ mấy +
+    «Nhập key…»; model không có → «Chọn model…»; mất mạng → chỉ ghi log. Test: `audit_out/qa/test_key_check.py`.
 
 ## Còn tồn / để ý khi làm tiếp
 
