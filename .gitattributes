@@ -1,0 +1,3 @@
+# script chạy trên macOS: luôn xuống dòng kiểu LF (chép thư mục từ Windows sang Mac vẫn chạy được)
+*.sh text eol=lf
+*.command text eol=lf
