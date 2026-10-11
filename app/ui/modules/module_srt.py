@@ -17,7 +17,7 @@ from app.config.paths import SUBS_DIR, VOICE_DIR
 from app.core.state import SRT_MODE_LABELS, SRT_MODES, TRANSLATE_TARGETS
 from app.services.srt_utils import load_srt, stats
 from app.services.subtitle_presets import CUSTOM as SUB_CUSTOM, STYLES as SUB_STYLES, apply_style, refit, style_of
-from app.services.translate_router import RETRANSLATE_PRESETS
+from app.services.translate_router import DEFAULT_MODEL, RETRANSLATE_PRESETS
 from app.ui.modules.base_module import BaseModule
 from app.ui.widgets.common import ButtonRow, OptionRow, Section, StatusLabel, SwitchRow, hint, pack_rows, row_label
 from app.ui.widgets.ui import button, button_width, set_variant
@@ -56,9 +56,9 @@ class SRTModule(BaseModule):
                                                                              self.window.queue_update(it)))
         self.editor.pack(fill="x")
 
-        sec = Section(page, "Dịch", info="AI Gemini dịch 2 bước: dịch sát nghĩa rồi tự đọc lại cho tự nhiên; có lồng "
-                                         "tiếng thì tự rút gọn câu đọc không kịp. Lỗi giữa chừng thì «Thử lại» dịch "
-                                         "tiếp. Key và model: Cài đặt › AI dùng API key.")
+        sec = Section(page, "Dịch", info="AI dịch cả video theo từng đoạn: dịch sát rồi phóng tác cho tự nhiên; có lồng "
+                                         "tiếng thì tự khớp độ dài câu đọc. Lỗi giữa chừng thì «Thử lại» dịch tiếp. "
+                                         "Chọn Gemini / DeepSeek và model: Cài đặt › AI dùng API key.")
         sec.pack(fill="x", pady=4)
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
         self.target.pack(fill="x", pady=3)
@@ -76,6 +76,15 @@ class SRTModule(BaseModule):
         self.style = ctk.CTkTextbox(sec.body, height=96, font=T.font(12), wrap="word")
         self.style.pack(fill="x", pady=(2, 3))
         self.style.bind("<FocusOut>", lambda _e: self._style_changed())
+        # lượt dùng hôm nay của AI dịch đang chọn — tự cập nhật sau mỗi lượt gọi
+        from app.ui.widgets.usage_bar import UsageBar
+
+        def ai_target() -> tuple[str, str, str]:
+            st = self.state.settings
+            return st.translate_provider, st.active_model() or DEFAULT_MODEL, st.deepseek_api_key
+
+        self.usage = UsageBar(sec.body, ai_target)
+        self.usage.pack(fill="x", pady=(6, 0))
         self.tr_btn = button(sec.body, "Dịch phụ đề", icon_name="translate", command=self._translate_now,
                              min_width=button_width(sec.body, "Dịch phụ đề", icon=True, font=T.font(13, "medium")))
         self.tr_btn.pack(fill="x", pady=(6, 2))

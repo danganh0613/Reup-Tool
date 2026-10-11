@@ -11,6 +11,8 @@ from pathlib import Path
 
 import requests
 
+from app.services import ai_usage
+
 logger = logging.getLogger(__name__)
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -102,6 +104,7 @@ class GeminiClient:
                     raise GeminiModelGone(f"Model {model} không còn khả dụng: {self._api_message(r)}")
                 if r.status_code != 200:
                     raise GeminiError(f"Gemini {r.status_code} ({model}): {self._api_message(r)}")
+                ai_usage.record("Gemini", model)      # Dựng truyện dùng chung hạn mức với dịch
                 return r.json()
             if attempt + 1 < retries:
                 wait = min(30.0, 4.0 * 2 ** attempt)          # 4 → 8 → 16 s: 503 «quá tải» thường qua sau vài chục giây

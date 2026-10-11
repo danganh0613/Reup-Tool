@@ -23,6 +23,7 @@ import requests
 
 from app.config.paths import CACHE_DIR
 from app.core.state import Settings
+from app.services import ai_usage
 from app.services.ffmpeg import RenderCancelled
 from app.services.srt_utils import Cue
 
@@ -157,6 +158,7 @@ def _call_deepseek(c: Candidate, prompt: str, timeout: float = 180) -> str:
         raise RuntimeError(f"DeepSeek {r.status_code}: {r.text[:300]}")
     data = r.json()
     u = data.get("usage") or {}
+    ai_usage.record("DeepSeek", c.model, int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0))
     if u:
         logger.info("DeepSeek %s: %s token vào (%s trúng cache) · %s token ra", c.model, u.get("prompt_tokens"),
                     u.get("prompt_cache_hit_tokens", 0), u.get("completion_tokens"))
@@ -184,7 +186,10 @@ def check_deepseek_key(api_key: str, timeout: float = 15) -> tuple[bool | None, 
     except ValueError:
         data, bal = {}, ""
     if data.get("is_available") is False:
+        ai_usage.set_balance("DeepSeek", "hết số dư")
         return True, "key đúng nhưng tài khoản hết số dư — nạp thêm ở platform.deepseek.com"
+    if bal:
+        ai_usage.set_balance("DeepSeek", bal)
     return True, f"số dư {bal}" if bal else "dùng được"
 
 
@@ -199,6 +204,7 @@ def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
         raise _quota_error(r, "Gemini")
     if r.status_code != 200:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
+    ai_usage.record("Gemini", c.model)               # đếm lượt cho thanh «đã dùng / lượt trong ngày»
     data = r.json()
     cands = data.get("candidates") or []
     if not cands:
@@ -307,6 +313,8 @@ class Router:
             raise RuntimeError("DeepSeek API key không đúng (401) — kiểm tra ở Cài đặt › AI dùng API key.")
         if daily is not None or gone:
             exc = ModelUnavailable(self.current.provider, self.current.model, bool(daily), gone)
+            if daily and not gone and self.current.provider == "Gemini":
+                ai_usage.mark_full("Gemini", self.current.model)
             if self.log:
                 self.log(f"✖ {exc.message}")
             notify_unavailable(exc)

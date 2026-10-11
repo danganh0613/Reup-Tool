@@ -22,6 +22,7 @@ from app.services.translate_router import DEEPSEEK_KEY_URL, DEEPSEEK_MODELS, DEF
 from app.ui.widgets.ui import Select, button
 from app.ui.widgets.common import EntryRow, OptionRow, SwitchRow, SliderRow, StatusLabel, hint, info_icon
 from app.ui.widgets.dialogs import SHORTCUTS
+from app.ui.widgets.usage_bar import UsageBar
 from app.core.platform import open_path
 
 GEMINI_KEY_URL = "https://aistudio.google.com/apikey"
@@ -332,11 +333,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.models_btn = button(row, "", icon_name="refresh", size="sm", width=36, command=self._refresh_models,
                                  tip="Lấy danh sách model Gemini mới nhất bằng API key ở trên")
         self.models_btn.pack(side="left", padx=(6, 0))
+        # lượt đã dùng hôm nay của model đang chọn ở ô trên (đổi model → thanh đổi theo)
+        UsageBar(b, lambda: ("Gemini", self.tr_model.get().strip() or DEFAULT_MODEL, "")).pack(fill="x", pady=(6, 2))
         self.models_status = hint(b, "")
         self.models_status.pack(fill="x")
 
         b = self._card(c, "DeepSeek", info="Trả phí theo lượng dùng (nạp trước ở platform.deepseek.com). Dùng khi chọn "
-                                           "model «deepseek-…» ở trên. Máy tắt chế độ suy nghĩ khi dịch (nhanh, rẻ — lời "
+                                           "«DeepSeek» ở trên. Máy tắt chế độ suy nghĩ khi dịch (nhanh, rẻ — lời "
                                            "nhắc đã bắt dịch sát rồi mới phóng tác); phần luật cố định được DeepSeek "
                                            "nhớ giữa các lượt nên giá đầu vào rẻ hơn nhiều.")
         r = ctk.CTkFrame(b, fg_color="transparent")
@@ -360,6 +363,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.ds_model = Select(row, DEEPSEEK_MODELS, height=34, placeholder="")
         self.ds_model.set(st.deepseek_model if st.deepseek_model else DEEPSEEK_MODELS[0])
         self.ds_model.pack(side="left", fill="x", expand=True)
+        UsageBar(b, lambda: ("DeepSeek", self.ds_model.get(), self.ds_key.get().strip())).pack(fill="x", pady=(6, 2))
         self.ds_status = hint(b, "")
         self.ds_status.pack(fill="x")
 

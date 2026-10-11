@@ -226,6 +226,21 @@
       dịch) mà còn chỗ trong khung → vào lượt sửa chung, `adjust_prompt` có «FAITHFUL (all the information)»; nhận bản
       sửa chỉ khi đúng chiều (dài → ngắn đi, ngắn / bỏ ý → dài thêm) và ≤ tối đa.
 
+34. **Lượt dùng AI hôm nay** (test `audit_out/qa/test_usage.py` 53, ảnh `audit_out/qa/shot_usage.py`):
+    - `app/services/ai_usage.py`: Google không có API hỏi số lượt còn lại → máy tự đếm mỗi lượt gọi THÀNH CÔNG
+      (`_call_gemini`, `_call_deepseek` kèm token, `GeminiClient._post` của Dựng truyện) theo model, lưu
+      `cache/ai_usage.json` (không lưu key; app và dòng lệnh dùng chung, giao diện đọc lại khi file đổi). Router gặp 429
+      hết lượt ngày → `mark_full` (thanh 100 %). Ngày Gemini theo giờ Mỹ Pacific (tự tính giờ mùa hè, không cần tzdata)
+      → đặt lại 14:00 (hè) / 15:00 (đông) giờ VN; DeepSeek theo giờ máy. Chưa có file → ước tính từ dòng «Gọi Gemini/…»
+      trong nhật ký từ đầu ngày. Hạn mức gói miễn phí: `FREE_PER_DAY` (flash-lite 500, flash 20, 2.5-flash-lite 20, Gemma
+      14 400; Pro / model mới = chưa rõ → chỉ đếm). Mọi lỗi đọc / ghi bộ đếm chỉ ghi log.
+    - `app/ui/widgets/usage_bar.py` `UsageBar(master, target)`: «37/500 · 7%» + thanh (≥ 80 % vàng, hết lượt đỏ) + «còn N
+      lượt · đặt lại lúc 14:00»; DeepSeek: «N lượt · 52K token» + số dư (tự hỏi `/user/balance` ở luồng nền sau khi dùng
+      thêm / cũ hơn 10 phút, tối đa 1 lần / phút). Đọc lại bộ đếm mỗi 1,5 s. Ở tab Lời thoại (trên nút «Dịch phụ đề»,
+      theo AI đang chọn) và thẻ Gemini (theo model đang chọn ở ô) / DeepSeek trong Cài đặt.
+    - Test ẩn: `audit_out/headless/sitecustomize.py` chuyển bộ đếm sang `audit_out/_ai_usage_test/` — test dùng AI giả
+      (giả hết lượt ngày, số dư giả) không ghi vào bộ đếm thật.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).
