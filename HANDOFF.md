@@ -176,9 +176,9 @@
       lô); dịch lại / rút gọn cụt → giữ câu cũ.
     - Chạy trước (`_preflight`): chưa cài Qwen mà máy đọc được chữ → không chặn. `pypinyin` thêm vào requirements + spec.
 
-31. **Dịch: cả video một lượt + phóng tác cho người xem Việt** (test `audit_out/qa/test_whole.py` 14,
-    `test_transcreate.py` 16; thử câu tiếng lóng `audit_out/qa/try_transcreate.py`):
-    - `translate_cues_vl`: mỗi phần ≤ 60 câu / 3000 ký tự (`WHOLE_LINES`, `_windows`) gửi MỘT lượt (`whole_prompt`):
+31. **Dịch: cả video một lượt + phóng tác cho người xem Việt** (test `audit_out/qa/test_whole.py` 16,
+    `test_transcreate.py` 18; thử câu tiếng lóng `audit_out/qa/try_transcreate.py`):
+    - `translate_cues_vl`: mỗi phần ≤ 25 câu / 1500 ký tự (`WHOLE_LINES`, `_windows`) gửi MỘT lượt (`whole_prompt`):
       AI đọc hết câu chuyện rồi trả `terms` + mỗi câu `direct` (dịch sát, đã đoán lại lời nghe / đọc sai) và `free`
       (phóng tác, ≤ `[max N syllables]`). Video 2 phút = 1 lượt gọi (trước ~10: tóm tắt + 2 lượt / lô 10 câu). Phần trả
       thiếu câu / JSON hỏng 3 lần → phần đó dịch từng lô như cũ (tóm tắt lười, `faith_prompt` → `express_prompt`).
@@ -186,8 +186,12 @@
       `transcreation_section`: video ngắn lồng tiếng, không dịch từng chữ biệt danh / meme, cô đọng. Giọng văn riêng (xưng
       hô mày–tao, tiếng lóng Việt, ví dụ «đít gắn động cơ») nằm trong lời dặn của mẫu (`templates.REVIEW_STYLE`, mẫu
       «Review phim dọc») — tab Lời thoại ô «Lời dặn cho AI dịch» nhiều dòng (CTkTextbox) + nút «Gợi ý» chèn câu dặn.
-    - `syllable_budget` (khung câu + mượn khoảng lặng, `_slot`): số âm tiết tối đa từng câu → câu dịch vừa khung ngay:
-      video mẫu 0 câu tăng tốc / 0 tràn / 0 câu phải rút gọn (trước 14).
+    - `syllable_range`: mỗi câu «[min-max syllables]» — tối đa = đọc kịp khung (`syllable_budget`, `_slot`), tối thiểu =
+      `MIN_FILL` 70 % thời gian người gốc nói. Chỉ có tối đa thì AI viết ngắn dần về cuối lượt dài (đo: 39 câu một lượt →
+      nửa sau giọng lấp 54 % khung, «Nuôi được hông?», khoảng lặng) → phần ≤ 25 câu, phần sau thấy thuật ngữ + 3 câu đã
+      dịch ngay trước; lời nhắc «không bỏ ý, câu lặp dịch đủ, câu cuối kỹ như câu đầu». `fit_texts`: câu quá dài / quá
+      ngắn sửa CHUNG một lượt (`adjust_prompt`), lỗi thì rút gọn từng câu dài như cũ (`_trim_each`). Câu dịch kết thúc
+      «,» (câu gốc Qwen ngắt ở dấu phẩy) → «.». Video mẫu: lấp khung 76 % / 77 %, 5 câu < 60 % (trước 22), 5 lượt gọi.
     - Câu dịch thoát cụt (`_free_broken`: còn dấu cách cuối = cắt ở `"`, hoặc kết thúc lửng bằng là / của / và / để…;
       KHÔNG so độ dài — câu cô đọng đủ ý vẫn dùng) → dịch sát, không ghi bộ nhớ (`weak`). `STYLE_TAG` đổi khi đổi lời
       nhắc (bộ nhớ dịch kiểu cũ không bị dùng lại). Mỗi lượt gọi Gemini ghi log «Gọi Gemini/model (N ký tự)».

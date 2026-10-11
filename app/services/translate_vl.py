@@ -32,10 +32,13 @@ logger = logging.getLogger(__name__)
 
 CHUNK_CHARS, CHUNK_LINES = 600, 10       # _4_2: split_chunks_by_chars(chunk_size=600, max_i=10)
 SUMMARY_CHARS = 8000                     # config summary_length
-WHOLE_LINES, WHOLE_CHARS = 60, 3000      # dịch cả video một lượt: mỗi lượt ≤ 60 câu / 3000 ký tự (đầu ra ~70 token / câu)
+# dịch cả video một lượt: mỗi lượt ≤ 25 câu / 1500 ký tự — một lượt dài quá thì AI viết ngắn dần về cuối (đo trên video
+# mẫu: 39 câu một lượt → nửa sau giọng chỉ lấp 54 % khung, «Con này bắt nuôi được hông?» thành «Nuôi được hông?»)
+WHOLE_LINES, WHOLE_CHARS = 25, 1500
+MIN_FILL = 0.7                           # câu dịch nên đọc ≥ 70 % thời gian người gốc nói câu đó (ngắn hơn = khoảng lặng)
 TOLERANCE = 1.5                          # config tolerance: câu được mượn tối đa 1,5 s khoảng lặng sau nó
 MAX_SPLIT_TOKENS = 20                    # config max_split_length
-STYLE_TAG = "|vl-motluot"              # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
+STYLE_TAG = "|vl-motluot2"              # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
 
 
 # ── Lời nhắc (nguyên văn VideoLingo core/prompts.py) ──────────────────────
@@ -58,7 +61,10 @@ def transcreation_section(tgt_lang: str) -> str:
         "dramatic, cute…) and keep the jokes funny.",
         "Nicknames, puns, memes, slang and culture-specific references: never translate them word for word — use an "
         f"image or expression {tgt_lang} viewers get instantly and find fun.",
-        "Concise and punchy: about as long as the original line; drop filler words.",
+        "Natural length: about as long as the original line, filling its speaking time. Drop only filler words — never "
+        "information (names, numbers, protection level, consequences…).",
+        "Give every line the same care — the last lines as carefully as the first. A line that repeats is translated "
+        "in full every time (wording may vary a little), never abbreviated.",
     ]
     return "### Transcreation for viewers\n" + "\n".join(f"{n}. {r}" for n, r in enumerate(rules, 1)) + "\n\n"
 
@@ -205,15 +211,16 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 
 
 def express_prompt(faith: dict, lines: str, sp: str, src_lang: str, tgt_lang: str, style: str,
-                   budgets: dict[str, int] | None = None) -> str:
-    """``budgets``: số âm tiết tối đa từng câu (theo khung thời gian lồng tiếng) — có thì AI viết vừa khung luôn."""
+                   budgets: dict[str, tuple[int, int]] | None = None) -> str:
+    """``budgets``: số âm tiết (tối thiểu, tối đa) từng câu theo khung lồng tiếng — có thì AI viết vừa khung luôn."""
     budgets = budgets or {}
     json_format = json.dumps({k: {"origin": v["origin"], "direct": v["direct"],
-                                  **({"max_syllables": budgets[k]} if k in budgets else {}),
+                                  **({"syllables": f"{budgets[k][0]}-{budgets[k][1]}"} if k in budgets else {}),
                                   "reflect": "your reflection on direct translation", "free": "your free translation"}
                               for k, v in faith.items()}, indent=2, ensure_ascii=False)
-    fit_rule = ("6. Each free translation must fit its max_syllables (one syllable = one spoken word / Vietnamese "
-                "syllable); keep the key meaning and the fun, drop details if needed\n" if budgets else "")
+    fit_rule = ("6. Each free translation must have a number of syllables inside its \"syllables\" range (one syllable = "
+                "one spoken word / Vietnamese syllable): long enough to fill the speaking time, short enough to fit\n"
+                if budgets else "")
     return f'''
 ## Role
 You are a professional Netflix subtitle translator and language consultant.
@@ -447,17 +454,21 @@ def _free_broken(free, direct: str) -> bool:
     return cut_at_quote(free) or bool(_DANGLING.search(str(free).strip()))
 
 
-def whole_prompt(rows: list[str], budgets: list[int] | None, src_lang: str, tgt_lang: str, style: str,
-                 custom_terms: list[dict], before: list[str]) -> str:
+def whole_prompt(rows: list[str], budgets: list[tuple[int, int]] | None, src_lang: str, tgt_lang: str, style: str,
+                 custom_terms: list[dict], before: list[str], known_terms: list[dict] | None = None) -> str:
     """Cả video (hoặc một phần dài) trong một lượt: AI đọc hết câu chuyện rồi mới dịch — xưng hô, tên gọi nhất quán,
     hiểu câu đùa / biệt danh theo cả video. Mỗi câu trả cả dịch sát lẫn dịch thoát (vừa số âm tiết của câu)."""
-    numbered = "\n".join(f"{n}. " + (f"[max {budgets[n - 1]} syllables] " if budgets else "") + t
+    numbered = "\n".join(f"{n}. " + (f"[{budgets[n - 1][0]}-{budgets[n - 1][1]} syllables] " if budgets else "") + t
                           for n, t in enumerate(rows, 1))
-    fit = ", within its [max N syllables] (one syllable = one spoken word / Vietnamese syllable)" if budgets else ""
+    fit = (", with a number of syllables inside its [min-max syllables] range (one syllable = one spoken word / "
+           "Vietnamese syllable): long enough to fill the speaking time, short enough to fit") if budgets else ""
     terms = ("### Terms the user requires (always use these)\n"
              + "\n".join(f"- {t['src']} → {t['tgt']}" for t in custom_terms) + "\n\n") if custom_terms else ""
-    ctx = ("### Context: what was said just before this part (do not translate)\n" + "\n".join(before) + "\n\n"
-           if before else "")
+    if known_terms:
+        terms += ("### Terms already used earlier in this video (keep them the same)\n"
+                  + "\n".join(f"- {t['src']} → {t['tgt']}" for t in known_terms) + "\n\n")
+    ctx = ("### Context: what was said just before this part, with the translation already used (do not translate "
+           "again — keep the same pronouns and tone)\n" + "\n".join(before) + "\n\n" if before else "")
     sample = json.dumps({"terms": [{"src": f"{src_lang} term", "tgt": f"{tgt_lang} rendering"}],
                          "lines": {"1": {"direct": "faithful translation", "free": "final line"},
                                    "2": {"direct": "...", "free": "..."}}}, indent=2, ensure_ascii=False)
@@ -505,20 +516,23 @@ def _windows(idx: list[int], lines: list[str]) -> list[list[int]]:
     return out
 
 
-def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: list[int] | None, *, src_lang: str,
-                     tgt_lang: str, style: str, custom_terms: list[dict]) -> tuple[list[dict], dict[int, tuple]]:
+def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: list[tuple[int, int]] | None, *,
+                     src_lang: str, tgt_lang: str, style: str, custom_terms: list[dict],
+                     known_terms: list[dict] | None = None,
+                     done: dict[int, str] | None = None) -> tuple[list[dict], dict[int, tuple]]:
     """Một lượt cho cả phần ``idx`` → (thuật ngữ, {câu: (dịch sát, dịch thoát)}). Thiếu câu / dịch sát cụt → ValueError
     (``_ask`` hỏi lại 3 lần; nơi gọi chuyển phần đó sang dịch từng lô)."""
     keys = [str(n) for n in range(1, len(idx) + 1)]
-    before = [lines[i] for i in range(max(0, idx[0] - 3), idx[0])]
+    done = done or {}
+    before = [lines[i] + (f"  →  {done[i]}" if i in done else "") for i in range(max(0, idx[0] - 3), idx[0])]
 
     def ok(d: dict) -> bool:
         got = d.get("lines")
         return isinstance(got, dict) and all(isinstance(got.get(k), dict) and not cut_at_quote(got[k].get("direct"))
                                              for k in keys)
 
-    d = _ask(router, whole_prompt([lines[i] for i in idx], budgets, src_lang, tgt_lang, style, custom_terms, before),
-             ok)
+    d = _ask(router, whole_prompt([lines[i] for i in idx], budgets, src_lang, tgt_lang, style, custom_terms, before,
+                                  known_terms), ok)
     terms = [t for t in d.get("terms") or [] if isinstance(t, dict) and str(t.get("src", "")).strip()
              and str(t.get("tgt", "")).strip()]
     return terms, {i: (str(d["lines"][k]["direct"]).replace("\n", " ").strip(), d["lines"][k].get("free"))
@@ -603,10 +617,12 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         if log:
             log(f"Dịch cả video một lượt: {len(idx)} câu" + (f" (phần {pi + 1}/{len(parts)})" if len(parts) > 1 else "")
                 + "…")
-        budgets = [syllable_budget(cues, i, fit) for i in idx] if fit else None
+        budgets = [syllable_range(cues, i, fit) for i in idx] if fit else None
         try:
             terms_got, got = _translate_whole(router, idx, lines, budgets, src_lang=src_lang, tgt_lang=tgt_lang,
-                                              style=style, custom_terms=custom)
+                                              style=style, custom_terms=custom,
+                                              known_terms=[t for t in ckpt.extra.get("terms", []) if t not in custom],
+                                              done=results)
         except (ModelUnavailable, RenderCancelled):
             halt()
             raise
@@ -693,7 +709,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             try:
                 if any(i in unsure for i in idx):
                     raise ValueError("lô có câu chưa dịch được")
-                budgets = {k: syllable_budget(cues, i, fit) for i, k in zip(idx, keys)} if fit else None
+                budgets = {k: syllable_range(cues, i, fit) for i, k in zip(idx, keys)} if fit else None
                 expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style, budgets),
                             lambda d: all(isinstance(d.get(k), dict) for k in keys))
                 out = []
@@ -746,9 +762,12 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             + ("…" if len(kept) > 12 else "") + " — sửa tay ở tab Lời thoại.")
     # 4) khớp thời lượng lồng tiếng
     if fit and not stopped():
-        texts = fit_texts(cues, texts, router, fit, log)
+        texts = fit_texts(cues, texts, router, fit, log, style=style, tgt_lang=tgt_lang)
     memory.save()
     ckpt.finish()
+    # câu gốc bị ngắt ở dấu phẩy (Qwen tách câu dài) → bản dịch cũng kết thúc bằng «,» → giọng đọc lên giọng lửng lơ,
+    # nghe như dịch cụt → kết thúc bằng dấu chấm
+    texts = [re.sub(r"\s*[,;:，；：]+\s*$", ".", t) if t else t for t in texts]
     return [Cue(c.index, c.start, c.end, wrap_lines(t), dict(c.meta)) for c, t in zip(cues, texts)]
 
 
@@ -771,8 +790,94 @@ def syllable_budget(cues: list[Cue], i: int, fit: dict) -> int:
     return max(3, int(_slot(cues, i, fit) * ts / SEC_PER_SYL * 0.9))
 
 
+def syllable_range(cues: list[Cue], i: int, fit: dict) -> tuple[int, int]:
+    """Số âm tiết nên đọc ở câu ``i``: tối đa = đọc kịp khung (``syllable_budget``); tối thiểu = ``MIN_FILL`` thời gian
+    người gốc nói câu đó — câu dịch ngắn hơn thì giọng xong sớm, khoảng lặng dài, nghe như dịch cụt."""
+    from app.services.tts.quality import SEC_PER_SYL
+
+    ts = max(0.5, float(fit.get("tts_speed", 1.0)))
+    vs = max(0.5, float(fit.get("video_speed", 1.0)))
+    hi = syllable_budget(cues, i, fit)
+    lo = int((cues[i].end - cues[i].start) / vs * ts / SEC_PER_SYL * MIN_FILL)
+    return max(2, min(lo, hi - 1)), hi
+
+
+def adjust_prompt(items: list[tuple[str, str, int, int, int]], tgt_lang: str, style: str) -> str:
+    """``items``: (câu gốc, bản dịch hiện tại, số âm tiết hiện tại, tối thiểu, tối đa) — các câu dài / ngắn quá so với
+    thời gian nói, sửa chung một lượt."""
+    rows = "\n".join(f"{n}. [{lo}-{hi} syllables] SOURCE: {src}\n   CURRENT ({cnt} syllables): {cur}"
+                      for n, (src, cur, cnt, lo, hi) in enumerate(items, 1))
+    return f'''
+## Role
+You are a professional subtitle editor fitting a {tgt_lang} voice-over to the original speaking time.
+
+## Task
+Rewrite each CURRENT line so its number of syllables (one syllable = one spoken word / Vietnamese syllable) falls
+inside its [min-max syllables] range:
+- too SHORT: put back what the SOURCE says that was left out (names, details, the punchline) — never pad with filler;
+- too LONG: cut filler words and redundant phrases, keep the key meaning and the punchline.
+Keep the tone, slang, pronouns and names of the CURRENT line. One output per item, same numbers.
+
+{style_section(style)}## Items
+{rows}
+
+## Output in only JSON format and no other text
+{{"items": [{{"id": 1, "text": "..."}}]}}
+
+{QUOTE_RULE}
+'''.strip()
+
+
 def fit_texts(cues: list[Cue], texts: list[str], router: Router, fit: dict, log: Callable[[str], None] | None = None,
-              ) -> list[str]:
+              style: str = "", tgt_lang: str = "Vietnamese") -> list[str]:
+    """Khớp độ dài lời dịch với thời gian nói: câu đọc không kịp khung (dài) hoặc chưa tới ``MIN_FILL`` thời gian người
+    gốc nói (ngắn — khoảng lặng dài) → AI sửa CHUNG một lượt cho mọi câu đó. Lượt chung lỗi → câu dài rút gọn từng câu
+    như cũ (``_trim_each``), câu ngắn để nguyên."""
+    from app.services.translate_router import _parse_items
+    from app.services.tts.quality import expected_duration, syllable_count
+
+    ts = max(0.5, float(fit.get("tts_speed", 1.0)))
+    out = list(texts)
+    todo: list[int] = []
+    for i in range(len(cues)):
+        lo, _hi = syllable_range(cues, i, fit)
+        if expected_duration(out[i], ts) > _slot(cues, i, fit) or syllable_count(out[i]) < lo * 0.85:
+            todo.append(i)
+    if not todo:
+        if log:
+            log("Dịch: khớp thời lượng lồng tiếng — các câu đã vừa khung")
+        return out
+    items = [(cues[i].plain.replace("\n", " "), out[i], syllable_count(out[i]), *syllable_range(cues, i, fit))
+             for i in todo]
+    try:
+        new = _parse_items(router.call(adjust_prompt(items, tgt_lang, style)), list(range(1, len(todo) + 1)))
+    except RenderCancelled:
+        raise
+    except ModelUnavailable as exc:
+        # đã dịch xong mà AI hết lượt ở bước phụ này → giữ bản dịch (không bỏ cả video)
+        logger.warning("Hết lượt AI khi khớp độ dài: %s", exc)
+        if log:
+            log("⚠ AI hết lượt — bỏ bước rút gọn câu dài; câu đọc không kịp sẽ được đọc nhanh hơn.")
+        return out
+    except (ValueError, json.JSONDecodeError, RuntimeError) as exc:
+        logger.warning("Khớp độ dài chung một lượt lỗi (%s) → rút gọn từng câu dài", exc)
+        return _trim_each(cues, out, router, fit, log)
+    fixed = short = 0
+    for (i, (_src, cur, cnt, lo, hi)), t in zip(zip(todo, items), new):
+        n = syllable_count(t) if t else 0
+        # nhận khi đã vào khoảng, hoặc gần khoảng hơn bản cũ (không cắt cụt, không vượt quá tối đa)
+        if t and n <= hi and abs(n - min(max(n, lo), hi)) < abs(cnt - min(max(cnt, lo), hi)):
+            out[i] = t
+            fixed += 1
+            short += cnt < lo
+    if log:
+        log(f"Dịch: khớp thời lượng lồng tiếng — sửa {fixed}/{len(todo)} câu chưa vừa khung "
+            f"({short} câu quá ngắn, {fixed - short} câu quá dài) trong 1 lượt")
+    return out
+
+
+def _trim_each(cues: list[Cue], texts: list[str], router: Router, fit: dict, log: Callable[[str], None] | None = None,
+               ) -> list[str]:
     """check_len_then_trim của VideoLingo với ước lượng đúng nhịp đọc: thời gian có = khung câu + mượn ≤ 1,5 s khoảng
     lặng sau (trên dòng thời gian video ra, trừ khoảng nghỉ tối thiểu giữa hai câu). Ước lượng đọc lâu hơn → AI rút gọn
     (lời nhắc gốc, cho biết số giây); vẫn dài hơn 10 % → thêm một lượt chặt hơn (cho biết số tiếng tối đa)."""

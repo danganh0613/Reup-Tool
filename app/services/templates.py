@@ -63,7 +63,8 @@ REVIEW_STYLE = (
     "- Xưng hô theo quan hệ và tình huống (mày – tao, anh – em, ông tướng này, con này…), không dùng «tôi – bạn» "
     "kiểu dịch máy.\n"
     "- Tiếng lóng Douyin → tiếng lóng mạng Việt (bị bắt đi tù → «bóc lịch», 银手镯 → «còng số 8»).\n"
-    "- Cô đọng: số âm tiết xấp xỉ câu gốc, bỏ từ thừa (thì, là, mà, ở, những, cái…)."
+    "- Độ dài xấp xỉ câu gốc, đủ ý (tên, cấp bảo vệ, hậu quả…), lấp đủ thời gian nói — chỉ bỏ từ thừa (thì, là, mà, "
+    "ở, những, cái…), không bỏ ý. Câu lặp lại vẫn dịch đủ, câu cuối video kỹ như câu đầu."
 )
 
 BUILTIN: list[Template] = [
