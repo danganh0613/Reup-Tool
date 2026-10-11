@@ -525,7 +525,8 @@ class CueEditor(ctk.CTkFrame):
 
         try:
             cfg = self.app_state.state_for(it).subtitle
-            mem, key = TranslationMemory(), memory_style(cfg.translate_style, self.app_state.settings.glossary)
+            mem, key = TranslationMemory(), memory_style(cfg.translate_style, self.app_state.settings.glossary,
+                                                         self.app_state.settings.translate_model)
             for k in idxs:
                 if k < len(self.ref) and self.ref[k].plain.strip() and self.cues[k].plain.strip():
                     mem.put(cfg.translate_target, self.ref[k].plain.replace("\n", " ").strip(),

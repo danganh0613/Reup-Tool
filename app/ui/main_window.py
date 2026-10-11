@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import sys
 import threading
@@ -183,7 +184,8 @@ class MainWindow(_Root):
         if self.runner.running or self.tasks.running or self.progress._mode != "idle":
             return
         miss = (["bộ nghe lời thoại"] if not is_installed() else []) + \
-               (["API key Gemini"] if not self.app_state.settings.gemini_keys() else [])
+               ([f"API key {self.app_state.settings.translate_provider()}"]
+                if not self.app_state.settings.translate_keys() else [])
         if miss:
             self.progress.result("stopped", "Còn thiếu để làm video tiếng nước ngoài: " + " và ".join(miss),
                                  "Video tiếng Việt / chỉ ghép, che, nhạc vẫn làm được",
@@ -809,9 +811,9 @@ class MainWindow(_Root):
         if MISSING_MARK in msg:
             return ("Cài…", lambda: self.open_settings(tab="local"), "download", True)
         low = msg.lower()
-        if "chưa có gemini api key" in low or ("api key" in low and ("401" in low or "403" in low)):
+        if re.search(r"chưa có (gemini|deepseek) api key", low) or ("api key" in low and ("401" in low or "403" in low)):
             # key nhập xong + Lưu → nút thành «Thử lại» như khi đổi model
-            self._failed_key = tuple(self.app_state.settings.gemini_keys())
+            self._failed_key = tuple(self.app_state.settings.translate_keys())
             return ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True)
         return ("Thử lại", retry, "refresh", True) if retry else None
 
@@ -833,21 +835,23 @@ class MainWindow(_Root):
                 self.app_state.set_for(off, "subtitle", "translate_enable", True)
                 self.refresh_modules()
                 need = [self.pipeline_for(it).needs(it) for it in items]
-        no_key = not self.app_state.settings.gemini_keys() and any("gemini" in n for n in need)
+        no_key = not self.app_state.settings.translate_keys() and any("gemini" in n for n in need)
         from app.services.ocr_hardsub import available as ocr_ok
 
         # chưa cài Qwen nhưng đọc được chữ in sẵn → video có phụ đề vẫn chạy được, video không có thì báo riêng từng video
         no_qwen = any("qwen" in n for n in need) and not is_installed() and not ocr_ok()
         if not (no_key or no_qwen):
             return True
-        lines = (["• API key Gemini — để dịch phụ đề"] if no_key else []) + \
+        provider = self.app_state.settings.translate_provider()
+        lines = ([f"• API key {provider} — để dịch phụ đề (model dịch đang chọn: "
+                  f"{self.app_state.settings.translate_model})"] if no_key else []) + \
                 (["• Bộ nghe lời thoại (Qwen3-ASR) — để nhận diện"] if no_qwen else [])
         page = "cloud" if no_key else "local"
         if no_key:                                  # nhập key + Lưu → nút trên thanh trạng thái thành «Chạy tiếp»
             self._error_action(None)
             self._last_retry, self._failed_key = rerun, ()
             self._resume = ("Chạy tiếp", "Bấm «Chạy tiếp» để chạy")
-            self.progress.result("error", "Chưa nhập API key Gemini", "Cần để dịch phụ đề — Cài đặt › AI dùng API key",
+            self.progress.result("error", f"Chưa nhập API key {provider}", "Cần để dịch phụ đề — Cài đặt › AI dùng API key",
                                  ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True))
         else:
             self.progress.result("error", "Chưa cài bộ nghe lời thoại", "Cài ở Cài đặt › AI trên máy (một lần)",
@@ -905,7 +909,7 @@ class MainWindow(_Root):
     def _offer_retry_after_model(self) -> None:
         """Lưu Cài đặt sau lỗi «model hết lượt»: đã chọn model khác → nút trên thanh trạng thái thành «Thử lại».
         Tương tự lỗi «chưa có / sai key»: đã nhập key khác."""
-        keys = tuple(self.app_state.settings.gemini_keys())
+        keys = tuple(self.app_state.settings.translate_keys())
         if self._failed_key is not None and self._last_retry is not None and keys and keys != self._failed_key:
             self._failed_key = None
             label, detail = self._resume

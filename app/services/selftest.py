@@ -167,8 +167,16 @@ def run_checks(settings=None, progress: Callable[[str], None] | None = None) -> 
     step("API key")
     if settings is not None:
         g = len(settings.gemini_keys())
-        out.append(Check("Gemini API key", "ok" if g else "warn", f"{g} key" if g else "Chưa có → không dịch AI / dựng truyện được",
-                         "" if g else "Miễn phí tại aistudio.google.com.", "cloud"))
+        ds = settings.uses_deepseek()
+        out.append(Check("Gemini API key", "ok" if g else "warn",
+                         f"{g} key" if g else ("Chưa có → không dựng truyện được" if ds
+                                               else "Chưa có → không dịch AI / dựng truyện được"),
+                         "" if g else "Miễn phí tại aistudio.google.com.", "cloud", optional=ds))
+        if ds:                                 # model dịch là DeepSeek → cần key DeepSeek
+            d = bool(settings.split_keys(settings.deepseek_api_key))
+            out.append(Check("DeepSeek API key", "ok" if d else "bad",
+                             f"Có key · model dịch {settings.translate_model}" if d else "Chưa có → không dịch AI được",
+                             "" if d else "Nhập ở Cài đặt › AI dùng API key (platform.deepseek.com).", "cloud"))
 
     # 7. Font icon
     step("Font")

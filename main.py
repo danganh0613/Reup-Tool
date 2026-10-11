@@ -6,6 +6,7 @@
         --stt        nhận diện phụ đề (Whisper/Gemini theo cấu hình) trước khi render
         --out DIR    thư mục xuất
         --config F   đọc cấu hình làm việc từ file F (vd của bản cài) thay cho output/last_config.json — chỉ đọc
+        --model M    dịch bằng model M (vd deepseek-v4-pro) thay cho model trong Cài đặt — không ghi lại Cài đặt
     python main.py --selftest            kiểm tra máy (GPU, CUDA, model, giọng, key) → logs/selftest.txt
     Kết quả + nhật ký ghi vào logs/edit_studio.log (bản .exe không có console).
 """
@@ -29,6 +30,7 @@ def render_cli(argv: list[str]) -> int:
     ap.add_argument("--stt", action="store_true")
     ap.add_argument("--out", default="")
     ap.add_argument("--config", default="")
+    ap.add_argument("--model", default="")
 
     from app.config.paths import VIDEOS_DIR, ensure_dirs
     ensure_dirs()
@@ -50,6 +52,8 @@ def render_cli(argv: list[str]) -> int:
     state.load_config(Path(ns.config) if ns.config else None)
     state.set_save_scheduler(lambda _save: None)   # chỉ đọc: --out không ghi đè cấu hình làm việc của app
     state.output_dir = ns.out or state.output_dir or str(VIDEOS_DIR)
+    if ns.model:
+        state.settings.translate_model = ns.model.strip()
     ffmpeg = FFmpeg(state.settings.ffmpeg_path, state.settings.ffprobe_path)
     ffmpeg.require()
     pipe = Pipeline(state, ffmpeg)

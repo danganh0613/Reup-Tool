@@ -78,7 +78,11 @@ class ModelUnavailable(RuntimeError):
 
     def __init__(self, provider: str, model: str, daily: bool, gone: bool = False) -> None:
         self.model, self.daily = model, daily
-        if gone:
+        if provider == "DeepSeek":                     # trả phí, không có hạn mức ngày: 429 = giới hạn tốc độ
+            why = (f"DeepSeek {model} không còn dùng được — chọn model khác ở Cài đặt › AI dùng API key." if gone else
+                   f"DeepSeek {model} đang bận / giới hạn tốc độ. Đợi vài phút rồi Thử lại, hoặc chọn model khác ở "
+                   "Cài đặt › AI dùng API key.")
+        elif gone:
             why = f"{provider} {model} không còn dùng được (Google đã gỡ). Chọn model khác ở Cài đặt › AI dùng API key."
         elif daily:
             why = (f"{provider} {model} đã hết lượt hôm nay (gói miễn phí). Chọn model khác ở Cài đặt › AI dùng API key, "
@@ -126,9 +130,62 @@ class Candidate:
 
 
 def build_candidates(settings: Settings) -> list[Candidate]:
-    """Mọi key Gemini với đúng model đang chọn."""
+    """Mọi key của nhà cung cấp model đang chọn (Gemini / DeepSeek) với đúng model đó."""
     model = settings.translate_model or DEFAULT_MODEL
-    return [Candidate("Gemini", k, model) for k in settings.gemini_keys()]
+    return [Candidate(settings.translate_provider(), k, model) for k in settings.translate_keys()]
+
+
+DEEPSEEK_URL = "https://api.deepseek.com"
+#: model DeepSeek hiện có (api-docs.deepseek.com, 10/2026): flash nhanh rẻ, đủ cho clip đời thường; v4-pro mạnh hơn cho
+#: phim nhiều tiếng lóng / ẩn dụ. Tên cũ (deepseek-v4-flash…) DeepSeek vẫn nhận.
+DEEPSEEK_MODELS = ["deepseek-flash", "deepseek-v4-pro"]
+DEEPSEEK_KEY_URL = "https://platform.deepseek.com/api_keys"
+
+
+def _call_deepseek(c: Candidate, prompt: str, timeout: float = 180) -> str:
+    """DeepSeek (chuẩn OpenAI): TẮT chế độ suy nghĩ — lời nhắc đã bắt dịch sát rồi mới phóng tác (chính là phần suy
+    nghĩ có ích), suy nghĩ ngầm chỉ tốn thêm token đầu ra + chậm; chế độ JSON. Luật cố định nằm đầu lời nhắc → DeepSeek
+    tự nhớ (cache) phần đó giữa các lượt, giá đầu vào rẻ hơn nhiều."""
+    body = {"model": c.model, "messages": [{"role": "user", "content": prompt}],
+            "thinking": {"type": "disabled"}, "response_format": {"type": "json_object"},
+            "temperature": 1.3, "max_tokens": 8192, "stream": False}     # 1.3: mức DeepSeek khuyên cho dịch
+    r = requests.post(f"{DEEPSEEK_URL}/chat/completions", headers={"Authorization": f"Bearer {c.key}"}, json=body,
+                      timeout=(15, timeout))
+    if r.status_code in (401, 402, 403, 429):
+        raise _quota_error(r, "DeepSeek")
+    if r.status_code != 200:
+        raise RuntimeError(f"DeepSeek {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    u = data.get("usage") or {}
+    if u:
+        logger.info("DeepSeek %s: %s token vào (%s trúng cache) · %s token ra", c.model, u.get("prompt_tokens"),
+                    u.get("prompt_cache_hit_tokens", 0), u.get("completion_tokens"))
+    choices = data.get("choices") or []
+    text = (choices[0].get("message") or {}).get("content") if choices else None
+    if not text:
+        raise RuntimeError(f"DeepSeek không trả kết quả: {json.dumps(data)[:300]}")
+    return text
+
+
+def check_deepseek_key(api_key: str, timeout: float = 15) -> tuple[bool | None, str]:
+    """Gọi thử key DeepSeek bằng hỏi số dư (không tốn tiền) → (đúng / sai / chưa rõ, câu báo)."""
+    try:
+        r = requests.get(f"{DEEPSEEK_URL}/user/balance", headers={"Authorization": f"Bearer {api_key}"},
+                         timeout=timeout)
+    except requests.RequestException:
+        return None, "không kết nối được tới DeepSeek"
+    if r.status_code == 401:
+        return False, "key không đúng (chép thiếu / thừa ký tự?)"
+    if r.status_code != 200:
+        return None, f"DeepSeek trả lỗi {r.status_code}"
+    try:
+        data = r.json()
+        bal = ", ".join(f"{b.get('total_balance')} {b.get('currency')}" for b in data.get("balance_infos") or [])
+    except ValueError:
+        data, bal = {}, ""
+    if data.get("is_available") is False:
+        return True, "key đúng nhưng tài khoản hết số dư — nạp thêm ở platform.deepseek.com"
+    return True, f"số dư {bal}" if bal else "dùng được"
 
 
 def _call_gemini(c: Candidate, prompt: str, timeout: float = 120) -> str:
@@ -159,7 +216,7 @@ class Router:
         self.log = log
         self.cancel = cancel
         if not self.cands:
-            raise RuntimeError("Chưa có Gemini API key (Cài đặt › AI dùng API key).")
+            raise RuntimeError(f"Chưa có {settings.translate_provider()} API key (Cài đặt › AI dùng API key).")
 
     @property
     def current(self) -> Candidate:
@@ -190,7 +247,7 @@ class Router:
             while attempt < self.TRIES:
                 try:
                     logger.info("Gọi %s/%s (%d ký tự)", c.provider, c.model, len(prompt))   # đếm lượt gọi trong log
-                    return _call_gemini(c, prompt)
+                    return (_call_deepseek if c.provider == "DeepSeek" else _call_gemini)(c, prompt)
                 except QuotaError as exc:
                     last = str(exc)
                     if exc.status == 429:               # 401/403 = key hỏng → không phải hết lượt
@@ -243,7 +300,11 @@ class Router:
                 break
             self.idx = (self.idx + 1) % len(self.cands)
         if offline:
-            raise RuntimeError("Không kết nối được tới Gemini — kiểm tra mạng rồi Thử lại.")
+            raise RuntimeError(f"Không kết nối được tới {self.current.provider} — kiểm tra mạng rồi Thử lại.")
+        if self.current.provider == "DeepSeek" and " 402" in last:
+            raise RuntimeError("DeepSeek: tài khoản hết số dư (402) — nạp thêm ở platform.deepseek.com rồi Thử lại.")
+        if self.current.provider == "DeepSeek" and " 401" in last:
+            raise RuntimeError("DeepSeek API key không đúng (401) — kiểm tra ở Cài đặt › AI dùng API key.")
         if daily is not None or gone:
             exc = ModelUnavailable(self.current.provider, self.current.model, bool(daily), gone)
             if self.log:

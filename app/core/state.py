@@ -381,9 +381,11 @@ class Settings:
     output_dir: str = ""
     windows_toast: bool = True
     vieneu_precision: str = "int8"     # int8 (nhanh) | fp32 (chất lượng)
-    #: model Gemini dùng để dịch / tách câu / sửa phụ đề — hết lượt hay quá tải thì dừng và báo, không tự đổi model
+    #: model dùng để dịch / tách câu / sửa phụ đề (Gemini hoặc DeepSeek «deepseek-…») — hết lượt hay quá tải thì dừng
+    #: và báo, không tự đổi model
     translate_model: str = "gemini-flash-latest"
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
+    deepseek_api_key: str = ""         # DeepSeek (trả phí theo lượng dùng) — dùng khi model dịch là «deepseek-…»
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
 
     @staticmethod
@@ -394,6 +396,16 @@ class Settings:
 
     def gemini_keys(self) -> list[str]:
         return self.split_keys(self.gemini_api_keys)
+
+    def uses_deepseek(self) -> bool:
+        return (self.translate_model or "").strip().lower().startswith("deepseek")
+
+    def translate_provider(self) -> str:
+        return "DeepSeek" if self.uses_deepseek() else "Gemini"
+
+    def translate_keys(self) -> list[str]:
+        """Key của nhà cung cấp model dịch đang chọn (Gemini / DeepSeek)."""
+        return self.split_keys(self.deepseek_api_key) if self.uses_deepseek() else self.gemini_keys()
     show_waveform: bool = True
     show_guide_on_start: bool = True     # mở Hướng dẫn ở lần chạy đầu (tắt trong cửa sổ hướng dẫn)
     # hậu kỳ từng câu lồng tiếng (kiểm lỗi + đọc lại, đọc liền, AI rút gọn câu tràn, dự phòng Edge: luôn bật)

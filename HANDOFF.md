@@ -198,6 +198,23 @@
     - Flash Lite vẫn hay: dùng sai tiếng lóng («gỡ lịch»), tên loài tiếng Việt sai (钳嘴鹤 «cò mỏ nhện»), không theo hết
       ví dụ trong lời dặn — giới hạn của model nhỏ.
 
+32. **Model dịch DeepSeek** (test `audit_out/qa/test_deepseek.py` 19, máy chủ giả):
+    - `Settings.deepseek_api_key`, `uses_deepseek()` / `translate_provider()` / `translate_keys()` (key của model dịch
+      đang chọn). Model «deepseek-…» → `Router` gọi `_call_deepseek` (api.deepseek.com/chat/completions, chuẩn OpenAI):
+      `thinking: {type: disabled}` (lời nhắc đã dịch sát → phóng tác, suy nghĩ ngầm chỉ tốn token + chậm), JSON mode,
+      temperature 1.3 (DeepSeek khuyên cho dịch), log token trúng cache. Model hiện có (api-docs.deepseek.com 10/2026):
+      `deepseek-flash`, `deepseek-v4-pro`; thinking mặc định BẬT nên phải tắt rõ.
+    - Cache của DeepSeek tính theo phần đầu lời nhắc giống nhau → `whole_prompt` để luật cố định đầu, số câu dời xuống
+      «## Lines (N lines)».
+    - Lỗi: 402 → «hết số dư», 401 → «key không đúng» (nút «Nhập key…»); 429 = giới hạn tốc độ (không phải hết lượt ngày).
+      `check_deepseek_key` hỏi /user/balance (không tốn tiền) khi lưu Cài đặt → báo số dư.
+    - Cài đặt › AI dùng API key: thẻ «Model dịch» riêng (Gemini + DeepSeek), thẻ Gemini (key), thẻ DeepSeek (key che,
+      Hiện, Lấy key ↗). Kiểm key trước khi chạy / Kiểm tra máy theo nhà cung cấp của model dịch.
+    - Khoá bộ nhớ dịch kèm model (`memory_style(..., model)`): đổi sang model khác → dịch mới. `main.py --render --model M`
+      thử model mà không ghi Cài đặt. Đo video mẫu (39 câu, 5 lượt): deepseek-flash ≈ $0.0027 / video (768 token
+      trúng cache ở phần 2), lấp khung 75 % / 79 %, tự nhiên + tiếng lóng tốt nhất; v4-pro ≈ $0.011, giọng hành chính
+      («Cấp quốc gia nhóm II»), lấp 71 % / 73 %. Tên loài hiếm (钳嘴鹤, 大鸨) model nào cũng hay sai → từ điển tên riêng.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

@@ -364,10 +364,12 @@ def _ask(router: Router, prompt: str, valid: Callable[[dict], bool] | None = Non
 _CODE_NAME = {"zh": "Chinese", "ja": "Japanese", "ko": "Korean", "en": "English", "vi": "Vietnamese"}
 
 
-def memory_style(style: str, glossary: str) -> str:
-    """Khoá «phong cách» của bộ nhớ dịch: lời dặn + cách dịch + từ điển (đổi từ điển → không dùng lại bản dịch cũ)."""
+def memory_style(style: str, glossary: str, model: str = "") -> str:
+    """Khoá «phong cách» của bộ nhớ dịch: lời dặn + cách dịch + từ điển + model dịch (đổi từ điển / đổi sang model
+    khác → dịch mới, không lấy lại bản dịch của model cũ)."""
     gloss = " ".join((glossary or "").split())
-    return (style or "") + STYLE_TAG + (f"|g{hashlib.sha1(gloss.encode('utf-8')).hexdigest()[:8]}" if gloss else "")
+    return ((style or "") + STYLE_TAG + (f"|g{hashlib.sha1(gloss.encode('utf-8')).hexdigest()[:8]}" if gloss else "")
+            + (f"|m{model.strip().lower()}" if model and model.strip() else ""))
 
 
 def lang_name(value: str) -> str:
@@ -478,8 +480,8 @@ You are an expert subtitle translator and localizer of short videos, fluent in {
 internet culture.
 
 ## Task
-Below is the whole numbered transcript ({len(rows)} lines). First read ALL of it to understand the story, who is
-talking, the jokes and the running gags. Then:
+Below is the whole numbered transcript. First read ALL of it to understand the story, who is talking, the jokes
+and the running gags. Then:
 1. "terms": the key names / terms (people, animals, places, nicknames, slang) with the {tgt_lang} rendering you will
    use consistently in every line (at most 15; the common name viewers know, not a literal rendering).
 2. For EVERY line number give:
@@ -489,7 +491,7 @@ Exactly one output per line number, in the same order; never merge, split or ski
 
 {source_note(src_lang)}
 
-{transcreation_section(tgt_lang)}{style_section(style)}{terms}{ctx}## Lines
+{transcreation_section(tgt_lang)}{style_section(style)}{terms}{ctx}## Lines ({len(rows)} lines)
 {numbered}
 
 ## Output in only JSON format and no other text
@@ -574,7 +576,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     total = len(lines)
     src_lang = source_name(lines, source_hint)
     tgt_lang = lang_name(target)
-    key_style = memory_style(style, settings.glossary)
+    key_style = memory_style(style, settings.glossary, settings.translate_model)
     memory = TranslationMemory()
     source = hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:12]
     ckpt = Checkpoint(srt_path, target, key_style, source)

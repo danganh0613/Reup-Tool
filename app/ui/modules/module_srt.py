@@ -26,7 +26,7 @@ from app.ui.progress_panel import friendly_error
 
 MODE_LABELS = SRT_MODE_LABELS
 TAB_TEXT, TAB_SUB = "Lời thoại", "Phụ đề"
-NO_KEY = "Chưa có API key Gemini — nhập ở Cài đặt › AI dùng API key."
+NO_KEY = "Chưa có API key của model dịch đang chọn — nhập ở Cài đặt › AI dùng API key."
 
 
 class SRTModule(BaseModule):
@@ -233,7 +233,7 @@ class SRTModule(BaseModule):
             self.style_panel.follow_status()
         has_tr = bool(it and it.srt_translated_path and Path(it.srt_translated_path).exists())
         set_variant(self.tr_btn, "secondary" if has_tr else "primary")     # đã dịch → nút chính là «Lưu» ở trên
-        no_key = not self.state.settings.gemini_keys()
+        no_key = not self.state.settings.translate_keys()
         if it is None:
             self.file_status.info("Chưa có video được chọn.")
             self.file_section.set_subtitle("")
