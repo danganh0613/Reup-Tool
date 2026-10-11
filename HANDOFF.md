@@ -109,6 +109,10 @@
 25. **Gọi thử key Gemini khi lưu Cài đặt** (`gemini_models.check_key` — models.get, không tốn lượt dịch;
     `MainWindow.check_gemini_keys`): chỉ khi key / model vừa đổi. Key sai / bị chặn → thanh trạng thái báo key thứ mấy +
     «Nhập key…»; model không có → «Chọn model…»; mất mạng → chỉ ghi log. Test: `audit_out/qa/test_key_check.py`.
+26. **Đoán bảng mã phụ đề bằng chấm điểm** (`srt_utils.decode_subtitle`, bỏ charset_normalizer): UTF-8 / UTF-16 có BOM
+    → đọc thử cp1258, cp1252, EUC-KR, GB18030, Big5, Shift-JIS: chữ có dấu ghép thành âm tiết tiếng Việt (≥ 80 %) → cp1258
+    (trả NFC); không thì chọn bảng mã CJK ra nhiều chữ thông dụng nhất (GB2312 cấp 1 / Big5 thường dụng, Hangul; hoà
+    điểm → Hàn); còn lại cp1252. Test: `audit_out/qa/test_encoding.py` (8 loại × 200 file).
 
 ## Còn tồn / để ý khi làm tiếp
 

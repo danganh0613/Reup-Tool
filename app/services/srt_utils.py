@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,36 +72,86 @@ def parse_srt(text: str) -> list[Cue]:
     return cues
 
 
-_CJK_TEXT = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
-_CJK_CODECS = ("gb", "big5", "shift_jis", "cp932", "euc", "cp949", "johab", "hz", "iso2022")
+_TONE_MARKS = {"̀", "́", "̃", "̉", "̣"}         # huyền sắc ngã hỏi nặng (dạng tách rời)
+_VI_INIT = "(?:ngh|ng|nh|ch|gh|gi|kh|ph|qu|th|tr|b|c|d|đ|g|h|k|l|m|n|p|r|s|t|v|x)?"
+_VI_NUC = ("(?:uyê|uya|uyu|iêu|yêu|oai|oay|oeo|uôi|ươi|ươu|uây|uơ|ươ|uô|uâ|uê|uy|ưa|ưi|ưu|ua|ui|oa|oă|oe|oi|oo|ôi|ơi|"
+           "ai|ao|au|ay|âu|ây|eo|êu|ia|iê|iu|yê|a|ă|â|e|ê|i|o|ô|ơ|u|ư|y)")
+_VI_SYLLABLE = re.compile(f"^{_VI_INIT}{_VI_NUC}(?:ch|ng|nh|c|m|n|p|t)?$")
+_LETTERS = re.compile(r"[^\W\d_]+")
+
+
+def _looks_vietnamese(text: str) -> bool:
+    """Phần lớn (≥ 80 %) từ có dấu ghép thành âm tiết tiếng Việt hợp lệ — phân biệt file Việt cp1258 với file Tây Âu
+    cp1252 đọc nhầm («São» → «Săo», «Déjà» → «Déjà» không phải âm tiết Việt)."""
+    good = total = 0
+    for w in _LETTERS.findall(unicodedata.normalize("NFC", text).lower()):
+        if w.isascii():
+            continue
+        total += 1
+        bare = unicodedata.normalize("NFC", "".join(c for c in unicodedata.normalize("NFD", w) if c not in _TONE_MARKS))
+        good += bool(_VI_SYLLABLE.match(bare))
+    return total > 0 and good >= 0.8 * total
+
+
+def _common_han(ch: str) -> bool:
+    """Chữ Hán thông dụng: GB2312 cấp 1 (3755 chữ giản thể hay dùng) hoặc Big5 «thường dụng» (5401 chữ phồn thể)."""
+    for enc, lo, hi in (("gb2312", 0xB0, 0xD7), ("big5", 0xA4, 0xC6)):
+        try:
+            b = ch.encode(enc)
+        except UnicodeEncodeError:
+            continue
+        if len(b) == 2 and lo <= b[0] <= hi:
+            return True
+    return False
+
+
+def _cjk_score(text: str, codec: str) -> float:
+    """Điểm trung bình mỗi ký tự không phải ASCII: chữ Hán thông dụng / Hangul +2, Kana +1, dấu câu toàn khổ +0,5;
+    chữ Hán hiếm, Hanja trong tiếng Hàn, katakana nửa khổ, ký hiệu lạ thì trừ — đọc sai bảng mã ra toàn chữ hiếm."""
+    score = n = 0.0
+    for ch in text:
+        if ch.isascii():
+            continue
+        n += 1
+        o = ord(ch)
+        if 0x4E00 <= o <= 0x9FFF:
+            score += -1.5 if codec == "euc_kr" else (2 if _common_han(ch) else -2)
+        elif 0xAC00 <= o <= 0xD7A3:
+            score += 2
+        elif 0x3040 <= o <= 0x30FF:
+            score += 1
+        elif 0x3000 <= o <= 0x303F or 0xFF01 <= o <= 0xFF60:
+            score += 0.5
+        else:
+            score -= 2
+    return score / n if n else 0.0
 
 
 def decode_subtitle(raw: bytes) -> str:
     """Chữ của file phụ đề tải ngoài: UTF-8 (có / không BOM) · UTF-16 (chỉ khi có BOM — không BOM thì gần như byte nào
-    cũng «giải mã được» thành rác) · bảng mã Trung / Nhật / Hàn cũ (GBK, Big5, Shift-JIS, EUC-KR — đoán bằng
-    charset_normalizer đi kèm requests) · cuối cùng cp1258 (Việt cũ) / cp1252."""
+    cũng «giải mã được» thành rác) · rồi đọc thử các bảng mã cũ và chấm điểm: tiếng Việt cp1258 (chữ có dấu ghép thành
+    âm tiết tiếng Việt) · Trung GBK / Big5, Nhật Shift-JIS, Hàn EUC-KR (ra nhiều chữ thông dụng nhất) · còn lại cp1252."""
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         return raw.decode("utf-16")
     try:
         return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         pass
-    try:
-        from charset_normalizer import from_bytes
-
-        best = from_bytes(raw).best()
-        if best is not None and best.encoding.lower().replace("-", "_").startswith(_CJK_CODECS):
-            text = str(best)
-            if _CJK_TEXT.search(text):
-                return text
-    except Exception:                                    # noqa: BLE001 — không đoán được thì thử bảng mã Latin
-        pass
-    for enc in ("cp1258", "cp1252"):
+    texts: dict[str, str] = {}
+    for enc in ("cp1258", "cp1252", "euc_kr", "gb18030", "big5", "shift_jis"):
         try:
-            return raw.decode(enc)
+            texts[enc] = raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    return raw.decode("utf-8", "replace")
+    if "cp1258" in texts and _looks_vietnamese(texts["cp1258"]):
+        return unicodedata.normalize("NFC", texts["cp1258"])     # cp1258 tách dấu thanh → ghép lại như chữ thường gõ
+    best, best_score = "", 0.5
+    for enc in ("euc_kr", "gb18030", "big5", "shift_jis"):        # hoà điểm → tiếng Hàn (vùng mã trùng chữ Hán GBK)
+        if enc in texts and (s := _cjk_score(texts[enc], enc)) > best_score:
+            best, best_score = enc, s
+    if best:
+        return texts[best]
+    return texts.get("cp1252") or texts.get("cp1258") or raw.decode("utf-8", "replace")
 
 
 def load_srt(path: str | Path) -> list[Cue]:
