@@ -975,6 +975,11 @@ class MainWindow(_Root):
                                  self._error_action(first.message, self.retry_failed))
         elif any(it.status == "Đã huỷ" for it in items):
             self.progress.result("stopped", "Đã dừng", f"{ok}/{len(items)} video đã xong{skip_note}")
+        elif skipped and not ok:                    # bỏ qua hết (vd máy đang bận chạy game) → mời chạy lại
+            again = [it for it in items if it.status == "Đã bỏ qua"]
+            self.progress.result("stopped", f"Đã bỏ qua {skipped} video", "Bấm «Chạy lại» khi máy rảnh",
+                                 ("Chạy lại", lambda: self._run_queue(again, mode="prepare" if prep else "render"),
+                                  "refresh", True))
         elif prep:
             self.progress.result("ok", f"Chuẩn bị xong {ok} video" + skip_note,
                                  f"{took} · xem từng video ở tab «Duyệt», ưng thì bấm «Duyệt», xong bấm «Xuất» trên cùng")
@@ -1102,19 +1107,23 @@ class MainWindow(_Root):
                 self.app_state.save_config()
                 self.pipeline.audio_only = False
                 return
+            skipped = sum(1 for it in items if it.status == "Đã bỏ qua")
+            skip_note = f", bỏ qua {skipped}" if skipped else ""
             if prep:
-                msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi · {elapsed / 60:.1f} phút"
+                msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi{skip_note} · {elapsed / 60:.1f} phút"
                 self.log(msg)
-                self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
-                notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
+                if ok or fail:                       # bỏ qua hết → không báo «chờ duyệt»
+                    self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
+                    notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
                 self.app_state.save_config()
                 if ok:
                     self.open_review()
                 return
-            msg = f"Hoàn tất: {ok} xong, {fail} lỗi · {elapsed / 60:.1f} phút"
+            msg = f"Hoàn tất: {ok} xong, {fail} lỗi{skip_note} · {elapsed / 60:.1f} phút"
             self.log(msg)
-            self.add_notification("Render xong" if fail == 0 else "Render có lỗi", msg, "ok" if fail == 0 else "error")
-            notify("Edit Studio — Render xong", msg, enabled=self.app_state.settings.windows_toast)
+            if ok or fail:
+                self.add_notification("Render xong" if fail == 0 else "Render có lỗi", msg, "ok" if fail == 0 else "error")
+                notify("Edit Studio — Render xong", msg, enabled=self.app_state.settings.windows_toast)
             self.app_state.save_config()
             self.pipeline.audio_only = False
 
