@@ -20,8 +20,17 @@ say "Môi trường build riêng (.venv-mac — không đụng Python của máy
 # shellcheck disable=SC1091
 source .venv-mac/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt av pyinstaller
+mkdir -p build_mac
+# thư viện chính (bắt buộc): phần trên dòng «Tuỳ chọn» của requirements.txt
+sed '/Tuỳ chọn/,$d' requirements.txt > build_mac/req-core.txt
+pip install -r build_mac/req-core.txt av pyinstaller
 python -c "import tkinter, platform; print('Tk', tkinter.TkVersion, platform.machine()); assert platform.machine() == 'arm64'"
+
+say "Thư viện tuỳ chọn (nhận diện tiếng Trung, đọc chữ in sẵn) — gói nào không cài được trên Mac thì bỏ qua"
+sed -n '/Tuỳ chọn/,$p' requirements.txt | sed 's/#.*//' | while read -r pkg; do
+  [ -n "$pkg" ] || continue
+  pip install "$pkg" || echo "⚠ Bỏ qua $pkg — app vẫn chạy, thiếu phần dùng gói này"
+done
 
 say "VieNeu (giọng Việt chạy trên máy, tuỳ chọn — lỗi thì bỏ qua)"
 pip install "sea-g2p>=0.9.1" "onnxruntime>=1.20.0" numpy soundfile soxr "kaldi-native-fbank>=1.20" "tokenizers>=0.20" \
