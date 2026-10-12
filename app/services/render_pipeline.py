@@ -185,6 +185,18 @@ class VideoGraph:
     ctx: RenderContext
 
 
+def _offsets(cfg: VideoConfig) -> tuple[float, float]:
+    """Lệch canh nội dung (−0,5…0,5) theo ``offset_x`` / ``offset_y`` (−50…50 %)."""
+    return (max(-0.5, min(0.5, getattr(cfg, "offset_x", 0) / 100.0)),
+            max(-0.5, min(0.5, getattr(cfg, "offset_y", 0) / 100.0)))
+
+
+def _place(free: float, off: float) -> float:
+    """Vị trí đầu (theo cùng đơn vị với ``free``) khi canh trong khoảng trống ``free`` (âm = nguồn lớn hơn khung, phần
+    thừa bị cắt): lệch dương luôn đưa NỘI DUNG sang phải / xuống dưới."""
+    return free * (0.5 + off) if free >= 0 else free * (0.5 - off)
+
+
 def source_rect_in_output(info: MediaInfo, cfg: VideoConfig) -> tuple[float, float, float, float]:
     """Vị trí khung nguồn (sau phóng to) trong khung ra, theo tỉ lệ khung ra: (ox, oy, sx, sy).
     Điểm nguồn (x, y) ∈ [0,1]² (sau lật/phóng) nằm tại (ox + x·sx, oy + y·sy) trong khung ra; với chế độ cắt vừa
@@ -199,7 +211,8 @@ def source_rect_in_output(info: MediaInfo, cfg: VideoConfig) -> tuple[float, flo
     else:
         return 0.0, 0.0, 1.0, 1.0
     dw, dh = sw * k, sh * k
-    return (W - dw) / 2 / W, (H - dh) / 2 / H, dw / W, dh / H
+    ox, oy = _offsets(cfg)
+    return _place(W - dw, ox) / W, _place(H - dh, oy) / H, dw / W, dh / H
 
 
 def source_to_output(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
@@ -207,9 +220,16 @@ def source_to_output(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> t
     zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
     if cfg.flip_h:
         x = 1.0 - x
-    x, y = (x - 0.5) * zoom + 0.5, (y - 0.5) * zoom + 0.5
+    zx, zy = _zoom_origin(cfg, zoom)
+    x, y = (x - zx) * zoom, (y - zy) * zoom
     ox, oy, sx, sy = source_rect_in_output(info, cfg)
     return ox + x * sx, oy + y * sy
+
+
+def _zoom_origin(cfg: VideoConfig, zoom: float) -> tuple[float, float]:
+    """Góc trên-trái vùng phóng to (theo tỉ lệ khung nguồn) — vùng phóng đi theo lệch canh (0 = giữa)."""
+    ox, oy = _offsets(cfg)
+    return _place(1.0 - 1.0 / zoom, -ox) if zoom > 1.001 else 0.0, _place(1.0 - 1.0 / zoom, -oy) if zoom > 1.001 else 0.0
 
 
 def output_to_source(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> tuple[float, float]:
@@ -217,7 +237,8 @@ def output_to_source(info: MediaInfo, cfg: VideoConfig, x: float, y: float) -> t
     zoom = max(1.0, min(4.0, cfg.zoom / 100.0))
     ox, oy, sx, sy = source_rect_in_output(info, cfg)
     x, y = (x - ox) / max(1e-9, sx), (y - oy) / max(1e-9, sy)
-    x, y = (x - 0.5) / zoom + 0.5, (y - 0.5) / zoom + 0.5
+    zx, zy = _zoom_origin(cfg, zoom)
+    x, y = x / zoom + zx, y / zoom + zy
     if cfg.flip_h:
         x = 1.0 - x
     return x, y
@@ -294,7 +315,8 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
     if cfg.flip_h:
         pre.append("hflip")
     if zoom > 1.001:
-        pre.append(f"crop=iw/{zoom:.4f}:ih/{zoom:.4f}")
+        zx, zy = _zoom_origin(cfg, zoom)
+        pre.append(f"crop=iw/{zoom:.4f}:ih/{zoom:.4f}:iw*{zx:.4f}:ih*{zy:.4f}")
     cur = g.chain(cur, pre)
 
     for st in pre_stages or []:
@@ -309,12 +331,16 @@ def build_video_graph(info: MediaInfo, cfg: VideoConfig, *, work_dir: Path, ass_
                               f"gblur=sigma={28 * k:.1f}", "eq=brightness=-0.08"])
         fg = g.chain(fg_src, [f"scale={W}:{H}:force_original_aspect_ratio=decrease"])
         cur = g.label()
-        g.add(f"{bg}{fg}overlay=(W-w)/2:(H-h)/2{cur}")
+        ox, oy = _offsets(cfg)                          # canh nội dung: lệch trong khoảng trống (0 = giữa)
+        g.add(f"{bg}{fg}overlay=(W-w)*{0.5 + ox:.4f}:(H-h)*{0.5 + oy:.4f}{cur}")
     elif geo.mode == "pad":
+        ox, oy = _offsets(cfg)
         cur = g.chain(cur, [f"scale={W}:{H}:force_original_aspect_ratio=decrease",
-                            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black"])
+                            f"pad={W}:{H}:(ow-iw)*{0.5 + ox:.4f}:(oh-ih)*{0.5 + oy:.4f}:black"])
     elif geo.mode == "crop":
-        cur = g.chain(cur, [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}"])
+        ox, oy = _offsets(cfg)                          # chọn phần giữ lại: lệch dương = nội dung sang phải / xuống
+        cur = g.chain(cur, [f"scale={W}:{H}:force_original_aspect_ratio=increase",
+                            f"crop={W}:{H}:(iw-{W})*{0.5 - ox:.4f}:(ih-{H})*{0.5 - oy:.4f}"])
     else:
         cur = g.chain(cur, [f"scale={W}:{H}"])
 

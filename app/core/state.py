@@ -98,6 +98,10 @@ class VideoConfig:
     resolution: str = RESOLUTIONS[0]
     fps: str = FPS_OPTIONS[0]
     zoom: int = 100
+    #: canh nội dung trong khung ra (−50…50 %, 0 = giữa): nền mờ / viền đen → dời video lên-xuống / trái-phải;
+    #: cắt vừa khung → chọn phần giữ lại; phóng to → chọn vùng phóng. Dương = sang phải / xuống dưới
+    offset_x: int = 0
+    offset_y: int = 0
     speed: int = 100
     flip_h: bool = False
     mute: bool = False
@@ -184,7 +188,7 @@ class SubtitleConfig:
 
     @property
     def source_hint(self) -> str:
-        """Ngôn ngữ gốc cho bước dịch = «Ngôn ngữ video» ở tab Nhận diện (ô «Ngôn ngữ gốc» cũ đã bỏ khỏi giao diện —
+        """Ngôn ngữ gốc cho bước dịch = «Ngôn ngữ video» ở Lời thoại › «Nguồn & dịch» (ô «Ngôn ngữ gốc» cũ đã bỏ khỏi giao diện —
         giá trị cũ còn trong mẫu không được âm thầm ép ngôn ngữ nữa)."""
         return SOURCE_BY_CODE.get(self.stt_language or "auto", "Tự nhận diện")
 

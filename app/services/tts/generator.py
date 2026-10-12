@@ -129,7 +129,7 @@ def _check_script_matches_voice(items, cfg: TTSConfig, voice_id: str) -> None:
     if cjk >= max(3, len(items) * 0.4):
         raise RuntimeError(
             f"Phụ đề đang là chữ Trung/Nhật/Hàn ({cjk}/{len(items)} câu) nhưng giọng đọc là tiếng '{lang}' — giọng không đọc "
-            "được. Bật «Tự dịch khi chuẩn bị video» ở tab Lời thoại rồi ở tab Lồng tiếng chọn «Đọc từ: Bản dịch», hoặc chọn "
+            "được. Ở tab Lồng tiếng chọn «Đọc từ: Bản dịch» (Chuẩn bị tự dịch), hoặc chọn "
             "giọng đúng ngôn ngữ của phụ đề.")
 
 

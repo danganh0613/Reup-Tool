@@ -76,7 +76,7 @@ class TTSModule(BaseModule):
         # cao độ chỉ Edge đổi được — VieNeu (mặc định) thì ẩn hẳn, không để thanh trượt bị khoá
         self.pitch = SliderRow(sec.body, "Cao độ", from_=-50, to=50, step=5, fmt="{:+.0f}", suffix="Hz",
                                on_change=s(cfg, "tts_pitch", cast=int, preview=False))
-        self.volume_hint = hint(sec.body, "Âm lượng lồng tiếng chỉnh ở tab «Video».")
+        self.volume_hint = hint(sec.body, "Âm lượng lồng tiếng, âm gốc / nền: khối «Âm thanh» bên dưới.")
         self.volume_hint.pack(fill="x")
 
         sec = Section(self, "Nhiều giọng theo người nói")
@@ -112,6 +112,11 @@ class TTSModule(BaseModule):
                               tip="Tạo giọng theo cấu hình hiện tại để nghe trước (Chuẩn bị / xuất video cũng tự tạo)")
         self.gen_btn.pack(fill="x", pady=(4, 2))
         hint(sec.body, "Câu không đổi lấy lại từ bộ nhớ nên tạo lại rất nhanh.").pack(fill="x")
+
+        # âm thanh cả video (âm gốc / nền, khử giọng gốc, to nhỏ lồng tiếng) — trước nằm ở tab Video
+        from app.ui.widgets.audio_section import AudioSection
+
+        self.audio = AudioSection(self)
 
         sec = self.timing_sec = Section(self, "Khớp thời gian", collapsed=True,
                                         info="Giọng luôn khớp mềm với hình: câu được vào sớm một chút khi câu trước "
@@ -169,6 +174,7 @@ class TTSModule(BaseModule):
             self._timing_summary()
             self.multi.set(cfg.multi_voice)
             self.speaker_count.set(cfg.speaker_count)
+            self.audio.refresh()
         finally:
             self._loading = False
         self._layout_multi()
@@ -181,7 +187,8 @@ class TTSModule(BaseModule):
         if self.state.tts.multi_voice:
             self.speakers.refresh()
         sub = self.state.subtitle
-        if (self.state.tts.tts_provider.startswith("VieNeu") and sub.translate_enable
+        self.audio.novocal_status()
+        if (self.state.tts.tts_provider.startswith("VieNeu") and self.state.tts.tts_source == TTS_SOURCES[0]
                 and sub.translate_target != "Tiếng Việt"):
             self.voice_status.warn(f"VieNeu chỉ đọc tiếng Việt — đang dịch sang {sub.translate_target}: chọn "
                                    "«Edge TTS» + giọng đúng ngôn ngữ đó.")
@@ -362,7 +369,7 @@ class TTSModule(BaseModule):
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
         if not item.srt_path or not Path(item.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào tab Nhận diện bấm «Tạo phụ đề cho video đang chọn» "
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc.\n\nVào Lời thoại › «Nguồn & dịch» bấm «Nhận diện lại video này» "
                                                "(hoặc chọn file SRT) trước — máy dựa vào từng câu phụ đề để biết ai nói.")
             return
         if not onnx_available():
@@ -391,7 +398,7 @@ class TTSModule(BaseModule):
             messagebox.showinfo("Edit Studio", "Hãy nạp và chọn một video trước.")
             return
         if not item.srt_path or not Path(item.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc — nhận diện (tab Nhận diện) hoặc chọn file SRT trước.")
+            messagebox.showinfo("Edit Studio", "Video này chưa có phụ đề gốc — nhận diện (Lời thoại › «Nguồn & dịch») hoặc chọn file SRT trước.")
             return
         from app.ui.widgets.speaker_panel import SpeakerAssignDialog
 

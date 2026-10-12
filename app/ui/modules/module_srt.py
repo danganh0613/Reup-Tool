@@ -1,8 +1,8 @@
 """Module Lời thoại — ba tab trên cùng:
 - «Lời thoại»: cả bảng là danh sách câu của video đang chọn (tự cuộn) + ô «Nhờ AI sửa» neo dưới cùng kiểu chatbot;
-- «Dịch»: dịch AI (ngôn ngữ, lời dặn, lượt dùng) + tệp phụ đề (xuất / nhập bản dịch cho AI bên ngoài, nạp lời gốc, sửa
-  thời gian, xoá);
-- «Phụ đề»: chữ hiện trên video — bật, kiểu dựng sẵn, chữ hiện; chỉnh tay (chữ, nền & chữ nổi, khung, thời gian) bấm
+- «Nguồn & dịch»: lời gốc (ngôn ngữ video, bộ nghe lời thoại, nhận diện lại — trước là tab «Nhận diện» riêng) + dịch AI
+  (ngôn ngữ, lời dặn, lượt dùng) + hồ sơ kịch bản + tệp phụ đề (xuất / nhập bản dịch cho AI bên ngoài, nạp lời gốc, xoá);
+- «Phụ đề»: chữ hiện trên video — bật, kiểu dựng sẵn, chữ hiện, che chữ cứng có sẵn (tự dò); chỉnh tay (chữ, nền & chữ nổi, khung, thời gian) bấm
   mới mở."""
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.core.platform import open_path
 from app.ui.progress_panel import friendly_error
 
 MODE_LABELS = SRT_MODE_LABELS
-TAB_TEXT, TAB_TR, TAB_SUB = "Lời thoại", "Dịch", "Phụ đề"
+TAB_TEXT, TAB_TR, TAB_SUB = "Lời thoại", "Nguồn & dịch", "Phụ đề"
 NO_KEY = "Chưa có API key của model dịch đang chọn — nhập ở Cài đặt › AI dùng API key."
 
 
@@ -60,15 +60,19 @@ class SRTModule(BaseModule):
         tk.Misc.bind(self._parent_canvas, "<Configure>", lambda _e: self._fit_text_page(), add="+")
         tk.Misc.bind(page, "<Map>", lambda _e: self.after_idle(self._fit_text_page), add="+")    # vừa hiện ra mới đo được
 
-        # ══ Tab «Dịch»: dịch AI + tệp phụ đề (xuất / nhập cho AI bên ngoài) ═════════════════════════════
+        # ══ Tab «Nguồn & dịch»: lời gốc + dịch AI + hồ sơ + tệp phụ đề (xuất / nhập cho AI bên ngoài) ══════════
         page = self.pages[TAB_TR]
+        from app.ui.widgets.source_panel import SourcePanel
+
+        self.source = SourcePanel(page, self)
+        self.source.pack(fill="x")
         sec = Section(page, "Dịch", info="AI dịch cả video theo từng đoạn: dịch sát rồi phóng tác cho tự nhiên; có lồng "
                                          "tiếng thì tự khớp độ dài câu đọc. Lỗi giữa chừng thì «Thử lại» dịch tiếp. "
                                          "Chọn Gemini / DeepSeek và model: Cài đặt › AI dùng API key.")
         sec.pack(fill="x", pady=4)
         self.target = OptionRow(sec.body, "Dịch sang", TRANSLATE_TARGETS, on_change=s(cfg, "translate_target", preview=False))
         self.target.pack(fill="x", pady=3)
-        # ngôn ngữ gốc: một ô duy nhất «Ngôn ngữ video» ở tab Nhận diện (trước: hai ô ở hai tab, dễ lệch)
+        # ngôn ngữ gốc: một ô duy nhất «Ngôn ngữ video» ở khối «Lời gốc» phía trên
         self.src_hint = hint(sec.body, "")
         self.src_hint.pack(fill="x")
         # một ô lời dặn cho AI dịch (dùng chung với tab Duyệt / bảng dịch từng câu) — nhiều dòng: mẫu có thể kèm cả
@@ -93,10 +97,7 @@ class SRTModule(BaseModule):
         self.usage.pack(fill="x", pady=(6, 0))
         self.tr_btn = button(sec.body, "Dịch phụ đề", icon_name="translate", command=self._translate_now,
                              min_width=button_width(sec.body, "Dịch phụ đề", icon=True, font=T.font(13, "medium")))
-        self.tr_btn.pack(fill="x", pady=(6, 2))
-        self.tr_enable = SwitchRow(sec.body, "Tự dịch khi chuẩn bị video", on_change=s(cfg, "translate_enable", preview=False),
-                                   info="Bước «Chuẩn bị» tự dịch khi phụ đề hoặc lồng tiếng cần bản dịch.")
-        self.tr_enable.pack(fill="x", pady=(4, 0))
+        self.tr_btn.pack(fill="x", pady=(6, 2))      # Chuẩn bị tự dịch khi cần — dừng ở đâu: ô «Chạy đến» trên cùng
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
@@ -142,7 +143,10 @@ class SRTModule(BaseModule):
         self.sub_on = SwitchRow(sec.body, "Hiện phụ đề", on_change=self._sub_on_changed)
         self.sub_style = OptionRow(sec.body, "Kiểu", [*SUB_STYLES, SUB_CUSTOM], on_change=self._style_picked)
         self.sub_mode = OptionRow(sec.body, "Chữ hiện", SRT_MODES, labels=MODE_LABELS, on_change=s(cfg, "srt_mode"))
-        pack_rows(sec.body, [self.sub_on, self.sub_style, self.sub_mode])
+        self.hardsub = SwitchRow(sec.body, "Che chữ cứng có sẵn trên video (tự dò)", on_change=self._hardsub_toggled,
+                                 info="Máy tự tìm dải phụ đề in sẵn (vd chữ Trung) của từng video và làm mờ để phụ đề "
+                                      "dịch không đè lên chữ cũ. Vẽ vùng che tay: «Thêm tính năng» › Che mờ (thanh bên trái).")
+        pack_rows(sec.body, [self.sub_on, self.sub_style, self.sub_mode, self.hardsub])
         self.style_box = ctk.CTkFrame(page, fg_color="transparent")
         self.style_box.pack(fill="x")
         self.style_panel = None                  # chỉnh tay: dựng lần đầu mở tab «Phụ đề» (~40 widget)
@@ -153,11 +157,11 @@ class SRTModule(BaseModule):
         cfg = self.state.subtitle
         self._loading = True
         try:
-            self.src_hint.configure(text=f"Ngôn ngữ gốc: {cfg.source_hint} (đổi ở tab Nhận diện › «Ngôn ngữ video»)")
+            self.refresh_source_hint()
+            self.source.refresh()
             self.target.set(cfg.translate_target)
             self.style.delete("1.0", "end")
             self.style.insert("1.0", cfg.translate_style or "")
-            self.tr_enable.set(cfg.translate_enable)
             self.refresh_subtitle()
         finally:
             self._loading = False
@@ -171,10 +175,27 @@ class SRTModule(BaseModule):
             self.sub_on.set(cfg.enable_subtitle)
             self.sub_style.set(style_of(cfg))
             self.sub_mode.set(cfg.srt_mode if cfg.srt_mode in SRT_MODES else SRT_MODES[0])
+            self.hardsub.set(self.state.blur.enable and self.state.blur.auto_detect)
             if self.style_panel is not None:
                 self.style_panel.refresh()
         finally:
             self._loading = loading
+
+    def refresh_source_hint(self) -> None:
+        self.src_hint.configure(text=f"Ngôn ngữ gốc: {self.state.subtitle.source_hint} (đổi ở «Ngôn ngữ video» phía trên)")
+
+    def _hardsub_toggled(self, on: bool) -> None:
+        """Che chữ cứng: bật = tự dò + bật che mờ (một công tắc thay cho tab Che mờ trong việc hay dùng)."""
+        if self._loading:
+            return
+        b = self.state.blur
+        b.auto_detect = bool(on)
+        if on:
+            b.enable = True
+        self.state.config_changed("blur")
+        self.window.preview.schedule_refresh()
+        if on:
+            self.window.preview.ensure_hardsub()
 
     # ── Hai tab ──────────────────────────────────────────────────────────
     def show_tab(self, name: str) -> None:
@@ -279,6 +300,7 @@ class SRTModule(BaseModule):
 
     def on_active_changed(self) -> None:
         it = self.state.active
+        self.source.on_active_changed()
         if self.editor.item is not it:
             self._ask_save()
             self.editor.load(it)
@@ -311,7 +333,7 @@ class SRTModule(BaseModule):
                 self.file_status.ok(f"{name} · {stats(cues)}" if cues else name)
             self.file_section.set_subtitle(name)
         else:
-            self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab Nhận diện.")
+            self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc «Nhận diện lại video này» ở khối Lời gốc.")
             self.file_section.set_subtitle("chưa có")
         self._load_brief(it)
         if has_tr:
@@ -448,7 +470,7 @@ class SRTModule(BaseModule):
         if it is None:
             return
         if not it.srt_path or not Path(it.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (tab Nhận diện) hoặc chọn file SRT trước.")
+            messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện («Nhận diện lại video này» ở tab Nguồn & dịch) hoặc chọn file SRT trước.")
             return
         if self.state.settings.prepare_until == "source" and not messagebox.askyesno(
                 "Dịch phụ đề", "Đang chọn «Chạy đến: Đến lời gốc» (tự dịch bên ngoài, cạnh nút Chuẩn bị).\n\n"
@@ -538,7 +560,7 @@ class SRTModule(BaseModule):
         has_src = bool(it.srt_path and Path(it.srt_path).exists())
         has_tr = bool(it.srt_translated_path and Path(it.srt_translated_path).exists())
         if not has_src and not has_tr:
-            messagebox.showinfo("Edit Studio", "Video này chưa có lời thoại — nhận diện ở tab Nhận diện hoặc nạp file SRT trước.")
+            messagebox.showinfo("Edit Studio", "Video này chưa có lời thoại — nhận diện ở tab Nguồn & dịch hoặc nạp file SRT trước.")
             return
         if kind == "bilingual" and not (has_src and has_tr):
             messagebox.showinfo("Edit Studio", "Cần cả lời gốc và bản dịch để xuất song ngữ — chưa dịch thì xuất «Lời gốc».")
@@ -641,7 +663,7 @@ class SRTModule(BaseModule):
         if it is None:
             return
         if not it.srt_path or not Path(it.srt_path).exists():
-            messagebox.showinfo("Dịch thủ công", "Chưa có SRT để dịch.\nHãy chọn file SRT, hoặc tạo phụ đề ở tab Nhận diện trước.")
+            messagebox.showinfo("Dịch thủ công", "Chưa có SRT để dịch.\nHãy chọn file SRT, hoặc nhận diện ở tab Nguồn & dịch trước.")
             return
         from app.ui.widgets.srt_editor import ManualTranslateDialog
 

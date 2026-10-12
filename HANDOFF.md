@@ -386,6 +386,28 @@
     - Tab Duyệt: dòng «Câu cần nghe lại» (`QA_TITLE`, WARN, liệt kê số câu); «Sửa ›» → `edit_in` bật sẵn lọc. Dòng
       giọng không còn nhắc trùng «câu đọc chưa đạt / tràn khung».
 
+47. **Gọn giao diện (đợt 1 audit `audit_out/audit_gon/BAO_CAO.md`)** (test `test_gon.py` 24; ảnh `shot_gon.py`):
+    - Thanh bên: Video · Duyệt · Lời thoại · Lồng tiếng · Cắt · Nhạc · Logo · Hiệu ứng · «Thêm» (`MORE` = Che mờ, Truyện —
+      menu `Popover`, nút sáng khi đang mở mục đó; vẫn mở bằng F8 / F9). `PREWARM` bỏ mục trong `MORE`.
+    - Tab «Nhận diện» gộp vào Lời thoại › «Nguồn & dịch» (`widgets/source_panel.py`: ngôn ngữ video, bộ nghe Qwen, nhận
+      diện lại, từ file khác — `show_module("stt")` chuyển tới đây). `module_stt.py` không còn dùng (chờ người dùng đồng ý
+      mới xoá).
+    - Bỏ công tắc «Tự nhận diện khi chuẩn bị» / «Tự dịch khi chuẩn bị»: Chuẩn bị luôn dịch khi cần (`translate_enable` bỏ
+      qua; dừng ở đâu do «Chạy đến»); mẫu «Chọn file SRT» → `sidecar_srt` (không có SRT cạnh video thì tự nhận diện);
+      giọng có sẵn (khoá) thì lồng tiếng không cần bản dịch. «Đến lời gốc» không nhờ AI rút gọn câu tràn.
+    - Tab Video: bỏ Tỉ lệ / Cách vừa khung / Độ phân giải / Số hình (đã có trên thanh khung xem trước); khối «Khung hình»
+      = Phóng to, **Canh ngang / Canh dọc** (`VideoConfig.offset_x/offset_y` −50…50: nền mờ / viền đen dời nội dung, cắt
+      vừa khung chọn phần giữ, phóng to chọn vùng — `render_pipeline._offsets/_place/_zoom_origin`, đo bằng ffmpeg thật),
+      Tốc độ, Lật. Khối «Âm thanh» chuyển sang tab Lồng tiếng (`widgets/audio_section.py`, ghi cấu hình `video`).
+    - Tab Phụ đề: công tắc «Che chữ cứng có sẵn (tự dò)» (`blur.enable` + `auto_detect`).
+
+48. **Nhẹ hơn khi cài (đợt 2)**: Whisper (kiểm giọng đọc, tách đoạn đọc gộp) dùng chung cuBLAS 12 / cuDNN 9 của bộ nghe
+    Qwen (`whisper_stt._share_qwen_cuda`: nạp từng DLL theo đường dẫn đầy đủ, KHÔNG thêm `torch\lib` vào đường tìm DLL —
+    trong đó có `libiomp5md.dll` của torch → xung đột OpenMP với Paddle). Thử thật (`audit_out/repeat_fit/
+    cuda_share_probe.py`): giấu CUDA khác, large-v3-turbo chạy GPU 10 s / 0,76 s, PaddleOCR cùng tiến trình ổn.
+    `make_installer.py` mặc định chỉ bản Lite (`--full` / `--both` khi cần). OCR thưa hơn (4 / 3 khung/giây) đo được
+    nhanh hơn nhưng sửa sai tên riêng (猞→舍) → giữ 10 khung/giây (`audit_out/repeat_fit/ocr_fps.json`).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

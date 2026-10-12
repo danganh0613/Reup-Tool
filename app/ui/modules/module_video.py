@@ -1,5 +1,6 @@
-"""Module Video theo mức hay dùng: hàng đợi → khung hình → âm thanh → cấu hình riêng; thư mục theo dõi và «Nâng cao
-xuất file» (bộ mã hoá, chất lượng, tên / nơi lưu file) thu gọn bên dưới."""
+"""Module Video theo mức hay dùng: hàng đợi → khung hình (phóng to, canh nội dung, tốc độ — tỉ lệ / kiểu khung / độ
+phân giải / số hình chọn trên thanh khung xem trước) → cấu hình riêng; thư mục theo dõi và «Nâng cao xuất file» (bộ mã
+hoá, chất lượng, tên / nơi lưu file) thu gọn bên dưới. Âm thanh: tab Lồng tiếng."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIO_VALUES, RATIOS, RESOLUTIONS, VIDEO_CODECS
+from app.core.state import ENCODE_PRESETS, GPU_BACKENDS, RATIO_VALUES, VIDEO_CODECS
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
 from app.ui.queue_panel import QueuePanel
@@ -53,39 +54,26 @@ class VideoModule(BaseModule):
         button(foot, "Xoá hết hàng đợi", icon_name="trash", variant="ghost", size="sm", command=self._clear,
                tip="Bỏ mọi video khỏi hàng đợi (có hỏi trước; phụ đề / video đã xuất vẫn giữ trên ổ đĩa)").pack(side="right")
 
-        sec = Section(self, "Khung hình & tốc độ", info="9:16 = TikTok / Shorts · 16:9 = YouTube. Nền mờ: video nằm "
-                                                          "giữa, hai bên là chính nó phóng to và làm mờ.")
+        sec = Section(self, "Khung hình", info="Tỉ lệ (giữ nguyên / 9:16…), kiểu khung (nền mờ trên-dưới, viền đen, cắt "
+                                                 "vừa khung), độ phân giải, số hình / giây: chọn trên thanh của khung xem "
+                                                 "trước. Ở đây: phóng to, canh nội dung trong khung, tốc độ.")
         sec.pack(fill="x", pady=4)
-        set_ratio, set_fit = s(cfg, "ratio"), s(cfg, "fit_mode")
-        self.ratio = OptionRow(sec.body, "Tỉ lệ", RATIOS, on_change=lambda v: (set_ratio(v), self.update_fit_hint()))
-        self.fit = OptionRow(sec.body, "Cách vừa khung", FIT_MODES, on_change=lambda v: (set_fit(v), self.update_fit_hint()))
-        self.res = OptionRow(sec.body, "Độ phân giải", RESOLUTIONS, on_change=s(cfg, "resolution"))
-        self.fps = OptionRow(sec.body, "Số hình / giây", list(FPS_LABELS.values()), on_change=self._fps_changed)
-        self.zoom = OptionRow(sec.body, "Phóng to", list(ZOOM_LABELS.values()), on_change=self._zoom_changed)
-        self.speed = OptionRow(sec.body, "Tốc độ", list(SPEED_LABELS.values()), on_change=self._speed_changed)
-        pack_rows(sec.body, [self.ratio, self.fit, self.res, self.fps, self.zoom, self.speed])
-        # chỉ hiện khi «Cách vừa khung» không có tác dụng (video đã đúng tỉ lệ xuất) — tránh tưởng chọn mà không ăn
+        # chỉ hiện khi kiểu khung không có tác dụng (giữ tỉ lệ gốc / video đã đúng tỉ lệ xuất) — tránh tưởng chọn mà không ăn
         self.fit_hint = hint(sec.body, "")
         self.fit_hint.configure(text_color=T.INFO)
+        self.zoom = OptionRow(sec.body, "Phóng to", list(ZOOM_LABELS.values()), on_change=self._zoom_changed)
+        self.off_x = SliderRow(sec.body, "Canh ngang", from_=-50, to=50, step=1, suffix="%",
+                               on_change=s(cfg, "offset_x", cast=int),
+                               info="Dời nội dung sang trái (âm) / phải (dương). Cắt vừa khung: chọn phần giữ lại; phóng "
+                                    "to: chọn vùng phóng. 0 = giữa.")
+        self.off_y = SliderRow(sec.body, "Canh dọc", from_=-50, to=50, step=1, suffix="%",
+                               on_change=s(cfg, "offset_y", cast=int),
+                               info="Dời nội dung lên (âm) / xuống (dương) — vd nền mờ trên-dưới mà muốn video nằm cao "
+                                    "hơn để chừa chỗ phụ đề. 0 = giữa.")
+        self.speed = OptionRow(sec.body, "Tốc độ", list(SPEED_LABELS.values()), on_change=self._speed_changed)
+        pack_rows(sec.body, [self.zoom, self.off_x, self.off_y, self.speed])
         self.flip = SwitchRow(sec.body, "Lật ngang video (soi gương)", on_change=s(cfg, "flip_h"))
         self.flip.pack(fill="x", pady=3)
-
-        sec = Section(self, "Âm thanh", info="Lồng tiếng: bật «Khử giọng nói gốc», âm nền 60–90%, lồng tiếng 120–160%. "
-                                               "«Tự hạ âm gốc»: âm gốc giảm mượt khi có lời đọc rồi lên lại.")
-        sec.pack(fill="x", pady=4)
-        self.keep = SwitchRow(sec.body, "Phát âm thanh gốc của video", on_change=s(cfg, "keep_original_audio", preview=False))
-        self.novocal = SwitchRow(sec.body, "Khử giọng nói gốc (AI) — giữ nhạc nền & tiếng động", on_change=self._novocal_toggled)
-        self.novocal_hint = hint(sec.body, "")
-        self.orig_vol = SliderRow(sec.body, "Âm gốc / nền", from_=0, to=200, step=5, suffix="%",
-                                  on_change=s(cfg, "original_volume", cast=float, preview=False))
-        self.tts_vol = SliderRow(sec.body, "Lồng tiếng", from_=0, to=300, step=5, suffix="%",
-                                 on_change=s(cfg, "tts_volume", cast=float, preview=False))
-        self.duck = SwitchRow(sec.body, "Tự hạ âm gốc khi có lời đọc", on_change=s(cfg, "adaptive_ducking", preview=False))
-        self.norm = SwitchRow(sec.body, "Chuẩn hoá độ to đầu ra", on_change=s(cfg, "normalize_audio", preview=False))
-        self.mute = SwitchRow(sec.body, "Video câm (tắt hết: âm gốc, lồng tiếng, nhạc)", on_change=s(cfg, "mute", preview=False))
-        self.loop = SwitchRow(sec.body, "Lặp video cho đủ thời lượng giọng đọc", on_change=s(cfg, "loop_to_voice", preview=False))
-        pack_rows(sec.body, [self.keep, self.novocal, self.novocal_hint, self.orig_vol, self.tts_vol, self.duck,
-                             self.norm, self.mute, self.loop])
 
         sec = Section(self, "Cấu hình của video đang chọn",
                       info="Mọi video dùng chung mẫu ở thanh trên cùng. Bật «Chỉnh riêng» khi video này cần khác (vd chữ "
@@ -178,11 +166,9 @@ class VideoModule(BaseModule):
         cfg = self.state.video
         self._loading = True
         try:
-            self.ratio.set(cfg.ratio)
-            self.fit.set(cfg.fit_mode)
-            self.res.set(cfg.resolution)
-            self.fps.set(FPS_LABELS.get(cfg.fps, FPS_LABELS["Giữ nguyên"]))
             self.zoom.set(_label_for(ZOOM_LABELS, int(cfg.zoom)))
+            self.off_x.set(int(getattr(cfg, "offset_x", 0)))
+            self.off_y.set(int(getattr(cfg, "offset_y", 0)))
             self.speed.set(_label_for(SPEED_LABELS, int(cfg.speed)))
             self.flip.set(cfg.flip_h)
             if cfg.gpu_backend == "cpu":                 # cấu hình cũ chọn «cpu» → cùng nghĩa với tắt «Tăng tốc GPU»
@@ -197,15 +183,6 @@ class VideoModule(BaseModule):
             self.out_name.set(cfg.output_name)
             self.out_sub.set(cfg.output_subdir)
             self.gop.set(cfg.gop_size)
-            self.keep.set(cfg.keep_original_audio)
-            self.orig_vol.set(cfg.original_volume)
-            self.tts_vol.set(cfg.tts_volume)
-            self.duck.set(cfg.adaptive_ducking)
-            self.norm.set(cfg.normalize_audio)
-            self.mute.set(cfg.mute)
-            self.loop.set(cfg.loop_to_voice)
-            self.novocal.set(cfg.demucs_enable)
-            self._novocal_status()
         finally:
             self._loading = False
         self.update_fit_hint()
@@ -218,7 +195,6 @@ class VideoModule(BaseModule):
         self.update_fit_hint()
         self.update_own()
         self._name_example()
-        self._novocal_status()
 
     def _name_example(self) -> None:
         """Ví dụ tên file xuất theo mẫu tên đang nhập + thư mục xuất đang dùng."""
@@ -353,15 +329,15 @@ class VideoModule(BaseModule):
         target = RATIO_VALUES.get(cfg.ratio)
         text = ""
         if it is not None and target is None:
-            text = ("Đang giữ tỉ lệ gốc của video → «Cách vừa khung» không có tác dụng. Chọn một tỉ lệ khác "
-                    "(vd. 9:16) để thêm viền đen / nền mờ.")
+            text = ("Đang giữ tỉ lệ gốc của video → kiểu khung (nền mờ / viền đen) và canh nội dung không có tác dụng. "
+                    "Chọn tỉ lệ khác (vd. 9:16) trên thanh khung xem trước.")
         elif w and h and target and abs(w / h - target) < 0.02:
             text = (f"Video đang chọn ({w}×{h}) đã đúng tỉ lệ {cfg.ratio.split(' ')[0]} → vừa khít khung, «Cách vừa "
                     "khung» không thay đổi gì. Viền đen / nền mờ chỉ xuất hiện khi tỉ lệ video khác tỉ lệ xuất "
                     "(vd. video ngang 16:9 → 9:16).")
         self.fit_hint.configure(text=text)
         if text and not self.fit_hint.winfo_ismapped():
-            self.fit_hint.pack(fill="x", pady=(0, 3), after=self.fit)
+            self.fit_hint.pack(fill="x", pady=(0, 3), before=self.zoom)
         elif not text and self.fit_hint.winfo_ismapped():
             self.fit_hint.pack_forget()
 
@@ -400,9 +376,6 @@ class VideoModule(BaseModule):
 
         self.window.run_bg(work, done)
 
-    def _fps_changed(self, label: str) -> None:
-        self.set_value(self.state.video, "fps", _FPS_BY_LABEL.get(label, "Giữ nguyên"), preview=False)
-
     def _zoom_changed(self, label: str) -> None:
         val = next((k for k, v in ZOOM_LABELS.items() if v == label), 100)
         self.set_value(self.state.video, "zoom", int(val))
@@ -410,33 +383,6 @@ class VideoModule(BaseModule):
     def _speed_changed(self, label: str) -> None:
         val = next((k for k, v in SPEED_LABELS.items() if v == label), 100)
         self.set_value(self.state.video, "speed", int(val), preview=False)
-
-    def _novocal_toggled(self, v: bool) -> None:
-        self.set_value(self.state.video, "demucs_enable", bool(v), preview=False)
-        if v and self.state.video.original_volume < 40:
-            # trước đây âm gốc để nhỏ cho đỡ lẫn giọng; giờ chỉ còn nhạc & tiếng động → nâng lên mức nền dễ nghe
-            self.set_value(self.state.video, "original_volume", 70.0, preview=False)
-            self.orig_vol.set(70.0)
-        self._novocal_status()
-        self.window.preview.ensure_no_vocals()
-
-    def _novocal_status(self) -> None:
-        from app.services.vocal_remove import cached_no_vocals, model_ready
-
-        if not self.state.video.demucs_enable:
-            text = ("Tắt: giữ nguyên âm gốc (cả giọng nói). Bật khi lồng tiếng: AI bỏ giọng Trung / Anh… của video gốc, "
-                    "giữ nhạc nền & tiếng động. Chạy trên máy, ~1 phút cho mỗi phút video, làm một lần ở bước Chuẩn bị.")
-        elif not self.state.video.keep_original_audio or self.state.video.mute:
-            text = "Đang tắt âm gốc (hoặc tắt toàn bộ âm thanh) nên không cần khử giọng — bước này sẽ được bỏ qua."
-        else:
-            it = self.state.active
-            if it is not None and cached_no_vocals(it.path) is not None:
-                text = "✓ Video này đã khử giọng gốc."
-            elif not model_ready():
-                text = "Lần đầu sẽ tải model AI (~64 MB). Chưa khử xong thì xem trước tạm vặn âm gốc rất nhỏ."
-            else:
-                text = "Video này sẽ được khử giọng khi Chuẩn bị / Xuất (xem trước tự khử nền nếu đang mở)."
-        self.novocal_hint.configure(text=text)
 
     # ── Hàng đợi ─────────────────────────────────────────────────────────
     def _add_files(self) -> None:

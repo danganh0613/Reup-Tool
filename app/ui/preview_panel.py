@@ -529,9 +529,9 @@ class PreviewPanel(ctk.CTkFrame):
 
         def done(_r, _e):
             pending.discard(it.path)
-            m = self.window.modules.get("video")
+            m = self.window.modules.get("tts")              # khối Âm thanh (khử giọng gốc) ở tab Lồng tiếng
             if m is not None:
-                m._novocal_status()
+                m.audio.novocal_status()
             if self.item is it and self.player.playing:
                 self._restart_live()
 

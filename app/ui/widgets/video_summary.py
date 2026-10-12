@@ -130,7 +130,7 @@ def summarize(window, item: VideoItem) -> list[Row]:
     if not uses_text:
         rows.append(Row("srt", "doc", "Lời thoại", "Không dùng (mẫu không phụ đề / lồng tiếng)", OFF))
     elif not n_orig:
-        rows.append(Row("srt", "doc", "Lời thoại", "Chưa có — bấm «Chuẩn bị» (hoặc nhận diện ở tab Nhận diện)", WARN))
+        rows.append(Row("srt", "doc", "Lời thoại", "Chưa có — bấm «Chuẩn bị» (hoặc nhận diện ở tab Nguồn & dịch)", WARN))
     else:
         val = f"{n_orig} câu"
         level = OK
@@ -215,20 +215,20 @@ def summarize(window, item: VideoItem) -> list[Row]:
 
     # 5. Âm thanh gốc
     if v.mute:
-        rows.append(Row("video", "speaker", "Âm thanh gốc", "Tắt toàn bộ âm thanh", OFF))
+        rows.append(Row("tts", "speaker", "Âm thanh gốc", "Tắt toàn bộ âm thanh", OFF))
     elif not v.keep_original_audio:
-        rows.append(Row("video", "speaker", "Âm thanh gốc", "Bỏ âm gốc" + (f" · lồng tiếng {v.tts_volume:.0f}%"
+        rows.append(Row("tts", "speaker", "Âm thanh gốc", "Bỏ âm gốc" + (f" · lồng tiếng {v.tts_volume:.0f}%"
                                                                            if t.enable_tts else ""), OK))
     elif v.demucs_enable:
         from app.services.vocal_remove import cached_no_vocals
 
         done = cached_no_vocals(item.path) is not None
-        rows.append(Row("video", "speaker", "Âm thanh gốc",
+        rows.append(Row("tts", "speaker", "Âm thanh gốc",
                         "Khử giọng gốc (AI) " + ("✓ đã khử" if done else "· sẽ khử khi chuẩn bị")
                         + f" · nền {v.original_volume:.0f}%" + (f" · lồng {v.tts_volume:.0f}%" if t.enable_tts else "")))
     else:
         loud = t.enable_tts and v.original_volume > 30
-        rows.append(Row("video", "speaker", "Âm thanh gốc",
+        rows.append(Row("tts", "speaker", "Âm thanh gốc",
                         f"Giữ nguyên cả giọng gốc · {v.original_volume:.0f}%"
                         + (f" · lồng {v.tts_volume:.0f}%" if t.enable_tts else ""), WARN if loud else OK,
                         "Giọng gốc có thể lấn giọng lồng — bật «Khử giọng nói gốc (AI)»." if loud else ""))

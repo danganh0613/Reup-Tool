@@ -101,7 +101,7 @@ TOPICS: list[dict] = [
             "Tab Nhận diện: «Ngôn ngữ video» để «Tự nhận diện», bấm «Tạo phụ đề cho video đang chọn».",
             "Tab Lời thoại: «Dịch sang» = Tiếng Việt, bấm «Dịch phụ đề». Sửa câu nào thì sửa ngay ở đầu tab.",
             "Tab Lồng tiếng: bật «Thêm lồng tiếng vào video», «Đọc từ» = Bản dịch, chọn giọng, bấm «Nghe thử giọng».",
-            "Tab Video › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung / Anh, giữ nhạc nền & tiếng động), «Âm gốc "
+            "Tab Lồng tiếng › Âm thanh: bật «Khử giọng nói gốc (AI)» (bỏ giọng Trung / Anh, giữ nhạc nền & tiếng động), «Âm gốc "
             "/ nền» khoảng 70, «Lồng tiếng» khoảng 150.",
             "Video có chữ nước ngoài in sẵn: tab Che mờ bật «Tự dò & che chữ cứng», hoặc bấm B vẽ một ô đè lên.",
             "Bấm «Xuất video».",
@@ -128,10 +128,10 @@ TOPICS: list[dict] = [
         ("steps", [
             "Bấm «＋ Nạp video» rồi chọn file (mp4, mkv, mov…). Đưa nhiều file cũng được — máy làm lần lượt từng cái.",
             "Trong ô Hàng đợi, bấm vào tên video để chọn video đang chỉnh. Bấm ✕ để bỏ video khỏi danh sách.",
-            "Phần «Khung hình & tốc độ»: chọn Tỉ lệ (ngang 16:9, dọc 9:16…), Độ phân giải (1080p là đẹp), «Số hình / giây» "
-            "để «Giữ nguyên».",
-            "Phần «Âm thanh»: «Âm gốc / nền» là tiếng có sẵn trong video, «Lồng tiếng» là giọng máy đọc. Có lồng tiếng thì bật "
-            "«Khử giọng nói gốc (AI)» — chỉ còn nhạc nền & tiếng động, để âm nền 60–90. Không bật thì để âm gốc 10–20.",
+            "Tỉ lệ (ngang 16:9, dọc 9:16…), kiểu khung (nền mờ trên-dưới, viền đen, cắt vừa khung), độ phân giải: chọn "
+            "trên thanh của khung xem trước. Phần «Khung hình» ở đây: phóng to, «Canh dọc» / «Canh ngang» để dời video "
+            "trong khung (vd nền mờ mà muốn video cao hơn chừa chỗ phụ đề), tốc độ.",
+            "Âm thanh (âm gốc / nền, khử giọng gốc, to nhỏ lồng tiếng) nằm ở tab Lồng tiếng.",
         ]),
         ("kv", [
             ("Nâng cao xuất file › Tăng tốc GPU", "Để bật. Máy tự chọn card màn hình để làm nhanh; không có card thì tự dùng "
@@ -182,7 +182,8 @@ TOPICS: list[dict] = [
             f"Lần đầu bấm «Cài bộ nghe lời thoại» (~{INSTALL_GB} GB, một lần).",
             "Video có phụ đề in sẵn (Douyin…): máy tự đọc chữ trên hình để sửa chỗ nghe sai (tên riêng) — không cần chọn.",
             "«Ngôn ngữ video» để «Tự nhận diện» — máy tự nhận. Ô này dùng chung cho bước dịch (ngôn ngữ gốc).",
-            "Bấm «Tạo phụ đề cho video đang chọn». Xong sẽ thấy dòng «Phụ đề: … câu». Xem / sửa chữ ở tab «Lời thoại».",
+            "Bước «Chuẩn bị» tự nhận diện video chưa có lời gốc. Nhận diện lại riêng một video: tab Lời thoại › «Nguồn & "
+            "dịch» › «Nhận diện lại video này». Xem / sửa chữ ở tab «Lời thoại».",
             "Tên riêng hiếm có thể sai: mở tab «Lời thoại» sửa ngay (bấm ô câu là video nhảy tới câu đó) hoặc gõ vào ô "
             "«Nhờ AI sửa».",
         ]),
@@ -260,7 +261,7 @@ TOPICS: list[dict] = [
         ]),
         ("h", "Video có nhiều người nói"),
         ("steps", [
-            "Cần có phụ đề gốc trước (tab Nhận diện bấm «Tạo phụ đề cho video đang chọn», hoặc chọn file SRT).",
+            "Cần có phụ đề gốc trước (bấm «Chuẩn bị», hoặc «Nhận diện lại video này» ở Lời thoại › «Nguồn & dịch»).",
             "Tab Lồng tiếng bật «Mỗi người nói một giọng», bấm «Nhận diện người nói». Lần đầu máy tải model ~28 MB.",
             "Máy chia ra Người 1, Người 2… và tự gợi ý giọng (nam/nữ). Bấm «Nghe giọng gốc» để biết ai là ai, rồi chọn giọng "
             "cho từng người. Edge tiếng Việt chỉ có 2 giọng — người thứ ba dùng lại giọng nhưng đổi «Cao độ» cho khác đi.",
@@ -391,7 +392,7 @@ TOPICS: list[dict] = [
                                               "đợi hạn mức đặt lại (≈ 14–15 giờ chiều). Đã dịch được lô nào thì «Thử lại» dịch "
                                               "tiếp phần còn lại. Tạo ảnh/video AI cần tài khoản trả tiền."),
             ("Video bị xoay sai", "Mục Hiệu ứng → Xoay."),
-            ("Giọng gốc (Trung, Anh…) vẫn nghe thấy", "Tab Video › Âm thanh: bật «Khử giọng nói gốc (AI)». AI bỏ giọng nói, giữ nhạc nền & tiếng động (lần đầu tải model ~64 MB, mỗi video khử một lần ~1 phút/phút video)."),
+            ("Giọng gốc (Trung, Anh…) vẫn nghe thấy", "Tab Lồng tiếng › Âm thanh: bật «Khử giọng nói gốc (AI)». AI bỏ giọng nói, giữ nhạc nền & tiếng động (lần đầu tải model ~64 MB, mỗi video khử một lần ~1 phút/phút video)."),
         ]),
     ]},
 ]

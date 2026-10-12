@@ -35,20 +35,20 @@ GUIDE = [
                               "bản Dựng truyện. Hết lượt / quá tải thì máy dừng và báo để bạn chọn model khác."),
         ("Thư mục xuất & mẫu", "Tuỳ chỉnh nơi lưu video. Lưu thiết lập thành mẫu ở ô «Mẫu» trên cùng (xuất / nhập file mẫu để chia sẻ)."),
     ]),
-    ("Bộ công cụ video (F1 – F4)", T.SUCCESS, [
-        ("F1 · Video & hàng đợi", "Kéo thả video vào. Khung hình, tốc độ, âm lượng, khử giọng gốc."),
-        ("F2 · Nhận diện lời thoại", "AI nghe giọng nói ngay trên máy; video có phụ đề in sẵn thì tự đối chiếu chữ."),
-        ("F3 · Lời thoại & phụ đề", "Sửa từng câu, «Nhờ AI sửa», dịch. Kiểu phụ đề mặc định giống TikTok; chỉnh chi tiết khi cần."),
-        ("F4 · Lồng tiếng", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng."),
+    ("Bộ công cụ video (F1 – F3)", T.SUCCESS, [
+        ("F1 · Video & hàng đợi", "Kéo thả video vào. Phóng to, canh nội dung trong khung, tốc độ."),
+        ("F2 · Lời thoại & phụ đề", "Nhận diện lời gốc (AI nghe trên máy, đối chiếu chữ in sẵn), dịch, sửa từng câu, "
+                                    "«Nhờ AI sửa». Kiểu phụ đề mặc định giống TikTok, che chữ cứng tự động."),
+        ("F3 · Lồng tiếng", "Giọng Việt VieNeu, khớp mềm với hình, mỗi người nói một giọng; âm gốc / nền, khử giọng gốc."),
     ]),
-    ("Bộ công cụ video (F5 – F9)", T.WARNING, [
-        ("F5 · Che mờ", "Che chữ cũ, logo… Tự dò phụ đề in sẵn của từng video."),
-        ("F6 · Nhạc nền", "Nhiều đoạn nhạc, tự hạ nhạc khi có giọng."),
-        ("F7 · Logo & chữ", "Logo, chữ, watermark có chuyển động, khung viền."),
-        ("F8 · Cắt", "Cắt đầu / cuối, nhiều đoạn (ghép liền hoặc xuất riêng)."),
-        ("F9 · Hiệu ứng", "Màu, khử rung, hạt phim, Ken Burns, texture."),
+    ("Bộ công cụ video (F4 – F8)", T.WARNING, [
+        ("F4 · Cắt", "Cắt đầu / cuối, nhiều đoạn (ghép liền hoặc xuất riêng)."),
+        ("F5 · Nhạc nền", "Nhiều đoạn nhạc, tự hạ nhạc khi có giọng."),
+        ("F6 · Logo & chữ", "Logo, chữ, watermark có chuyển động, khung viền."),
+        ("F7 · Hiệu ứng", "Màu, khử rung, hạt phim, Ken Burns, texture."),
+        ("F8 · Che mờ (nút «Thêm»)", "Vẽ vùng che tay (chữ cũ, logo…); che chữ cứng tự dò bật ngay ở tab Phụ đề."),
     ]),
-    ("Dựng Truyện AI (F10)", "#F472B6", [
+    ("Dựng Truyện AI (F9 · nút «Thêm»)", "#F472B6", [
         ("Tạo kịch bản phân cảnh tự động", "Nhập ý tưởng, AI viết dàn ý → từng chương → cảnh kèm lời kể và prompt ảnh."),
         ("Sinh ảnh minh hoạ đồng nhất phong cách", "Ảnh cho từng cảnh theo preset phong cách (điện ảnh, anime, màu nước…), giữ nhân vật đồng nhất; clip Veo tuỳ chọn."),
         ("Lồng tiếng đa nhân vật & ghép video", "Gán giọng riêng từng nhân vật, ghép ảnh + giọng + SFX thành MP4, tự tạo SRT và metadata YouTube."),

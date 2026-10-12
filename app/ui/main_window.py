@@ -32,7 +32,6 @@ from app.ui.modules.module_brand import BrandModule
 from app.ui.modules.module_color import ColorModule
 from app.ui.modules.module_srt import SRTModule
 from app.ui.modules.module_story import StoryModule
-from app.ui.modules.module_stt import STTModule
 from app.ui.modules.module_trim import TrimModule
 from app.ui.modules.module_tts import TTSModule
 from app.ui.modules.module_video import VideoModule
@@ -64,16 +63,20 @@ except Exception:  # pragma: no cover
     _HAS_DND = False
 
 RAIL_W = 72                      # thanh tính năng bên trái (gọn: chỉ icon + nhãn ngắn)
-#: tab dựng sẵn (ẩn) lúc người dùng rảnh, theo thứ tự hay dùng — mở lần đầu khỏi đứng hình 0,2–0,7 s (audit_out/perf)
-PREWARM = ["srt", "tts", "stt", "video", "blur", "color", "bgm", "brand", "trim", "story"]
+#: tab dựng sẵn (ẩn) lúc người dùng rảnh, theo thứ tự hay dùng — mở lần đầu khỏi đứng hình 0,2–0,7 s (audit_out/perf);
+#: tab nằm sau «Thêm tính năng» không dựng sẵn (ít dùng — đỡ việc lúc máy rảnh)
+PREWARM = ["srt", "tts", "video", "color", "bgm", "brand", "trim"]
 PREWARM_IDLE = 1.5               # giây không bấm / gõ / cuộn mới dựng sẵn
 #: nhãn ngắn trên thanh bên (tiêu đề đầy đủ vẫn ở đầu bảng tính năng)
-RAIL_LABELS = {"story": "Truyện", "stt": "Nhận diện", "tts": "Lồng tiếng"}
+RAIL_LABELS = {"story": "Truyện", "tts": "Lồng tiếng"}
 #: «Sửa ›» ở tab Duyệt: dòng tóm tắt → khối cần mở trong tab (cuộn tới đúng chỗ, không phải tìm)
-EDIT_SECTIONS = {"Âm thanh gốc": "Âm thanh", "Khung hình": "Khung hình & tốc độ"}
-# «Phụ đề» (kiểu chữ) đã gộp vào «Lời thoại»; vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước
-MODULES: list[type[BaseModule]] = [VideoModule, STTModule, SRTModule, TTSModule, BlurModule,
-                                   BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
+EDIT_SECTIONS = {"Âm thanh gốc": "Âm thanh", "Khung hình": "Khung hình"}
+# «Phụ đề» (kiểu chữ) đã gộp vào «Lời thoại»; vị trí / cỡ chữ nhanh nằm trên thanh khung xem trước; «Nhận diện» gộp vào
+# Lời thoại › «Nguồn & dịch»
+MODULES: list[type[BaseModule]] = [VideoModule, SRTModule, TTSModule, TrimModule, BGMModule, BrandModule, ColorModule,
+                                   BlurModule, StoryModule]
+#: ít dùng → nằm sau nút «Thêm tính năng» cuối thanh bên (vẫn mở bằng phím F, vẫn chạy theo mẫu)
+MORE = ("blur", "story")
 _FKEYS = {f"<F{i + 1}>": m.key for i, m in enumerate(MODULES)}
 
 
@@ -297,8 +300,7 @@ class MainWindow(_Root):
         self.rail.grid_propagate(False)
         self.rail.pack_propagate(False)          # giữ đúng bề rộng RAIL_W dù nhãn nút dài
         ctk.CTkFrame(self.rail, fg_color="transparent", height=4, width=1).pack()     # lề trên nhỏ, không tiêu đề
-        for cls in MODULES:
-            self._add_rail_button(cls)
+        self._add_rail_buttons()
         self.sync_review_rail()
 
         self.panel = ctk.CTkFrame(self, fg_color=T.BG_PANEL, corner_radius=T.RADIUS_CARD, width=470)
@@ -314,6 +316,29 @@ class MainWindow(_Root):
         self._help_open = False
         self.preview = PreviewPanel(self, self)
         self.preview.grid(row=1, column=3, sticky="nsew", padx=(4, 10))
+
+    def _add_rail_buttons(self) -> None:
+        """Mục chính trên thanh bên + nút «Thêm tính năng» (mở các mục ít dùng)."""
+        for cls in MODULES:
+            if cls.key not in MORE:
+                self._add_rail_button(cls)
+        compact = self._compact_rail
+        b = ctk.CTkButton(self.rail, text="Thêm", width=RAIL_W - 10, height=30 if compact else 48, corner_radius=T.RADIUS,
+                          fg_color="transparent", hover_color=T.BG_HOVER, text_color=T.TEXT_DIM, font=T.font(8 if compact else 10),
+                          image=icon("grid", 14 if compact else 18, T.TEXT_DIM), compound="top", command=self._more_menu)
+        b.pack(pady=(0 if compact else 2, 0), padx=5)
+        from app.ui.widgets.ui import Tooltip
+
+        Tooltip(b, "Thêm tính năng: " + " · ".join(c.title for c in MODULES if c.key in MORE))
+        self._rail_buttons["more"] = b
+
+    def _more_menu(self) -> None:
+        from app.ui.widgets.ui import Popover
+
+        keys = [c.key for c in MODULES if c.key in MORE]
+        labels = {c.key: c.title for c in MODULES if c.key in MORE}
+        cur = self._current_module if self._current_module in keys else ""
+        Popover(self._rail_buttons["more"], keys, cur, self.show_module, labels=labels, width=200)
 
     def _add_rail_button(self, cls: type[BaseModule]) -> None:
         compact = self._compact_rail
@@ -368,8 +393,7 @@ class MainWindow(_Root):
             for b in self._rail_buttons.values():
                 b.destroy()
             self._rail_buttons.clear()
-            for cls in MODULES:
-                self._add_rail_button(cls)
+            self._add_rail_buttons()
             self.sync_review_rail()
             if cur:
                 self.show_module(cur)
@@ -423,6 +447,12 @@ class MainWindow(_Root):
             self.show_module("srt")
             self.modules["srt"].open_style()
             return
+        if key == "stt":                        # tab «Nhận diện» cũ → khối «Lời gốc» ở Lời thoại › «Nguồn & dịch»
+            from app.ui.modules.module_srt import TAB_TR
+
+            self.show_module("srt")
+            self.modules["srt"].show_tab(TAB_TR)
+            return
         if key == "review":
             from app.ui.widgets.review_window import ReviewPanel
 
@@ -439,13 +469,14 @@ class MainWindow(_Root):
         self.modules[key].grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
         self.modules[key].on_shown()
         self.after(30, self.modules[key].scroll_top)
-        prev = self._current_module
+        prev = "more" if self._current_module in MORE else self._current_module
+        on = "more" if key in MORE else key            # mục ít dùng đang mở → sáng nút «Thêm»
         for k, b in self._rail_buttons.items():
-            if prev and prev in self._rail_buttons and k not in (prev, key):
+            if prev and prev in self._rail_buttons and k not in (prev, on):
                 continue              # chỉ vẽ lại 2 nút đổi trạng thái (mỗi configure vẽ lại cả nút CTk)
-            b.configure(fg_color=T.ACCENT_SOFT if k == key else "transparent",
-                        text_color=T.ACCENT if k == key else T.TEXT_DIM,
-                        image=icon(MODULE_ICONS.get(k, "grid"), 20, T.ACCENT if k == key else T.TEXT_DIM))
+            b.configure(fg_color=T.ACCENT_SOFT if k == on else "transparent",
+                        text_color=T.ACCENT if k == on else T.TEXT_DIM,
+                        image=icon(MODULE_ICONS.get(k, "grid"), 20, T.ACCENT if k == on else T.TEXT_DIM))
         self._current_module = key
         self._update_scope_strip()
         self.app_state.ui["active_module"] = key
@@ -827,18 +858,6 @@ class MainWindow(_Root):
         from app.services.qwen_asr import is_installed
 
         need = [self.pipeline_for(it).needs(it) for it in items]
-        off = [it for it, n in zip(items, need) if "translate_off" in n]
-        if off:
-            ans = messagebox.askyesnocancel(
-                APP_NAME, f"{len(off)} video cần bản dịch (phụ đề dịch / lồng tiếng đọc bản dịch) nhưng «Tự dịch khi "
-                          "chuẩn bị video» (tab Lời thoại) đang tắt.\n\nCó = bật dịch rồi chạy\nKhông = chạy luôn, "
-                          "dùng lời gốc")
-            if ans is None:
-                return False
-            if ans:
-                self.app_state.set_for(off, "subtitle", "translate_enable", True)
-                self.refresh_modules()
-                need = [self.pipeline_for(it).needs(it) for it in items]
         no_key = not self.app_state.settings.translate_keys() and any("gemini" in n for n in need)
         from app.services.ocr_hardsub import available as ocr_ok
 

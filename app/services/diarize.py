@@ -390,7 +390,7 @@ def diarize(media: str | Path, cues: list[Cue], ffmpeg: FFmpeg, *, n_speakers: i
     if not onnx_available():
         raise RuntimeError("Thiếu thư viện onnxruntime — bản mã nguồn: chạy «pip install onnxruntime»; bản .exe: cài lại bản mới.")
     if not cues:
-        raise RuntimeError("Chưa có phụ đề — nhận diện lời thoại (tab Nhận diện) hoặc chọn SRT trước.")
+        raise RuntimeError("Chưa có phụ đề — nhận diện lời thoại (Lời thoại › «Nguồn & dịch») hoặc chọn SRT trước.")
 
     def check() -> None:
         if cancel is not None and cancel.is_set():

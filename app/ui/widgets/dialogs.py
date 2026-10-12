@@ -134,9 +134,9 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl + ↑ / ↓", "Video trước / sau"),
     ]),
     ("Chuyển module nhanh", [
-        ("F1 – F4", "Video · Nhận diện · Lời thoại · Lồng tiếng"),
-        ("F5 – F9", "Che mờ · Nhạc · Logo · Cắt · Hiệu ứng"),
-        ("F10", "Dựng Truyện AI"),
+        ("F1 – F3", "Video · Lời thoại · Lồng tiếng"),
+        ("F4 – F7", "Cắt · Nhạc · Logo · Hiệu ứng"),
+        ("F8 – F9", "Che mờ · Dựng Truyện AI (nút «Thêm» trên thanh bên)"),
     ]),
 ]
 if sys.platform == "darwin":                 # macOS: phím ⌘ thay Ctrl (Ctrl vẫn dùng được)

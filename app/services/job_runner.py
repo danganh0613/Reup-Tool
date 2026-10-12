@@ -184,7 +184,7 @@ class Pipeline:
         - có Qwen3-ASR: nghe giọng nói; video có phụ đề in sẵn thì đọc chữ song song (CPU, lúc Qwen chạy GPU) rồi sửa
           chữ nghe sai theo chữ trên hình — câu + mốc của Qwen (đúng nhịp nói), chữ đúng như creator gõ (tên riêng);
         - chưa cài Qwen / video không có tiếng: chỉ đọc chữ in sẵn (mốc theo SenseVoice nếu có, AI gộp mẩu chữ thành câu).
-        ``force``: nhận diện lại kể cả khi lần trước đã nghe là «không có lời» (nút ở tab Nhận diện)."""
+        ``force``: nhận diện lại kể cả khi lần trước đã nghe là «không có lời» (nút «Nhận diện lại video này» ở Lời thoại › «Nguồn & dịch»)."""
         from app.services import ocr_hardsub, qwen_asr
 
         src = source_path or item.path
@@ -593,7 +593,7 @@ class Pipeline:
         from app.services.diarize import diarize
 
         if not item.srt_path or not Path(item.srt_path).exists():
-            raise RuntimeError("Chưa có phụ đề gốc — bấm «Tạo phụ đề cho video đang chọn» ở tab Nhận diện hoặc chọn file SRT trước.")
+            raise RuntimeError("Chưa có phụ đề gốc — bấm «Nhận diện lại video này» ở Lời thoại › «Nguồn & dịch» hoặc chọn file SRT trước.")
         sc = self.state.tts.speaker_count
         n = int(sc) if sc.isdigit() else 0
         smap = diarize(item.path, load_srt(item.srt_path), self.ffmpeg, n_speakers=n, on_progress=progress, log=log,
@@ -959,12 +959,14 @@ class Pipeline:
         steps = ["read"]
         until = st.settings.prepare_until
         need_cues = s.enable_subtitle or t.enable_tts
-        want_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or (t.enable_tts and t.tts_source == TTS_SOURCES[0])
-        no_srt = need_cues and not has(item.srt_path) and s.srt_source == SRT_SOURCES[0]
+        held = item.voice_locked and has(item.voice_path)       # giọng có sẵn: lồng tiếng không cần bản dịch
+        want_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or \
+            (t.enable_tts and t.tts_source == TTS_SOURCES[0] and not held)
+        no_srt = need_cues and not has(item.srt_path) and self.sidecar_srt(item) is None
         if no_srt:
             steps.append("stt")
         wait_src = need_cues and want_tr and not has(item.srt_translated_path) and until == "source"
-        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path) and not wait_src
+        no_tr = need_cues and want_tr and not has(item.srt_translated_path) and not wait_src
         if no_tr:
             steps.append("translate")
         locked = item.voice_locked and has(item.voice_path)
@@ -1130,18 +1132,25 @@ class Pipeline:
         if not (sub_on or tts_on):
             return set()
         out = set()
-        if not (item.srt_path and Path(item.srt_path).exists()) and scfg.srt_source == SRT_SOURCES[0]:
+        if not (item.srt_path and Path(item.srt_path).exists()) and self.sidecar_srt(item) is None:
             out.add("qwen")
+        held = bool(item.voice_locked and item.voice_path and Path(item.voice_path).exists())
         want_tr = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
-                  (tts_on and tcfg.tts_source == TTS_SOURCES[0])
+                  (tts_on and tcfg.tts_source == TTS_SOURCES[0] and not held)
         has_tr = bool(item.srt_translated_path and Path(item.srt_translated_path).exists())
         if want_tr and not has_tr and self.state.settings.prepare_until == "source":
             out.add("external")                      # «Đến lời gốc»: nhận diện xong thì dừng chờ dán bản dịch
-        elif want_tr and not has_tr and scfg.translate_enable:
-            out.add("gemini")
         elif want_tr and not has_tr:
-            out.add("translate_off")                 # cần bản dịch nhưng «Tự dịch khi chuẩn bị video» đang tắt
+            out.add("gemini")                        # cần bản dịch → Chuẩn bị luôn dịch (bỏ công tắc «Tự dịch» cũ)
         return out
+
+    def sidecar_srt(self, item: VideoItem) -> Path | None:
+        """Mẫu chọn «Chọn file SRT» (cấu hình cũ): SRT cùng tên cạnh video — không có thì Chuẩn bị tự nhận diện (trước:
+        báo lỗi «Chưa chọn file SRT»)."""
+        if self.state.subtitle.srt_source != SRT_SOURCES[1]:
+            return None
+        guess = Path(item.path).with_suffix(".srt")
+        return guess if guess.exists() else None
 
     def _prepare_assets(self, item: VideoItem, info, trim, *, vcfg, stage, log, cancel, on_update,
                         preview_out: Path | None = None, voice_only: bool = False,
@@ -1157,15 +1166,21 @@ class Pipeline:
         sub_on = scfg.enable_subtitle
         tts_on = tcfg.enable_tts
         need_cues = sub_on or tts_on
+        # giọng có sẵn (đã khoá): lồng tiếng không đọc lại → không cần bản dịch cho giọng (chỉ phụ đề dịch mới cần)
+        held_voice = tts_on and item.voice_locked and bool(item.voice_path) and Path(item.voice_path or "").exists()
         want_translated = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
-                          (tts_on and tcfg.tts_source == TTS_SOURCES[0])
+                          (tts_on and tcfg.tts_source == TTS_SOURCES[0] and not held_voice)
 
         cues_orig: list[Cue] = []
         cues_tr: list[Cue] | None = None
         if need_cues:
             if item.srt_path and Path(item.srt_path).exists():
                 cues_orig = load_srt(item.srt_path)
-            elif scfg.srt_source == SRT_SOURCES[0]:
+            elif (side := self.sidecar_srt(item)) is not None:
+                item.srt_path = str(side)
+                cues_orig = load_srt(side)
+                log(f"Dùng SRT cạnh video: {side.name}")
+            else:
                 try:
                     cues_orig = self.transcribe(item, progress=stage("Nhận diện giọng nói", 0.0, 0.3), log=log,
                                                 cancel=cancel)
@@ -1174,14 +1189,6 @@ class Pipeline:
                     log(f"⚠ {item.name}: {exc} Bỏ phụ đề + lồng tiếng, vẫn xuất video.")
                     sub_on = tts_on = need_cues = want_translated = False
                 on_update(item)
-            else:
-                guess = Path(item.path).with_suffix(".srt")
-                if guess.exists():
-                    item.srt_path = str(guess)
-                    cues_orig = load_srt(guess)
-                    log(f"Dùng SRT cạnh video: {guess.name}")
-                else:
-                    raise RuntimeError("Chưa chọn file SRT cho video này.")
             if not cues_orig and need_cues:
                 raise RuntimeError(f"File phụ đề {Path(item.srt_path or '').name} không đọc được câu nào — mở bằng "
                                    "Notepad, lưu lại dạng UTF-8 rồi Thử lại.")
@@ -1194,7 +1201,7 @@ class Pipeline:
                                              cancel=cancel)
                     raise WaitTranslation("Chờ bản dịch — tab Lời thoại: icon copy lấy lời gốc, dịch bên ngoài, icon dán "
                                           "bản dịch vào, rồi bấm Chuẩn bị (đang chọn «Chạy đến: Đến lời gốc»).")
-                elif scfg.translate_enable:
+                else:
                     cues_tr = self.translate(item, cues_orig, progress=stage("Dịch phụ đề", 0.3, 0.15), log=log,
                                              cancel=cancel)
                     on_update(item)
@@ -1202,9 +1209,6 @@ class Pipeline:
                     if stop_after_translate and tts_on and not voice_only and not held:
                         raise WaitReview("Chờ soát bản dịch — tab Lời thoại: soát / sửa bản dịch (hoặc Nhờ AI sửa), rồi "
                                          "bấm Chuẩn bị để tạo giọng (đang chọn «Chạy đến: Đến bản dịch»).")
-                else:
-                    log("⚠ Cần bản dịch nhưng chưa bật Dịch — dùng phụ đề gốc.")
-                    cues_tr = None
 
         voice_path: Path | None = None
         locked = tts_on and item.voice_locked and bool(item.voice_path) and Path(item.voice_path or "").exists()
@@ -1254,7 +1258,8 @@ class Pipeline:
                        if (b := int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9)) >= 6}
             # bản dịch đã gộp / xoá câu (số câu khác bản gốc) → chỉ số câu không khớp, không rút gọn từng câu
             same_count = bool(cues_tr) and len(cues_tr) == len(cues_orig)
-            if (budgets and same_count and use_tr and preview_out is None and scfg.translate_enable
+            # «Đến lời gốc»: bạn tự dịch bên ngoài → không nhờ AI rút gọn bản dịch của bạn
+            if (budgets and same_count and use_tr and preview_out is None and st.settings.prepare_until != "source"
                     and item.srt_path and Path(item.srt_path).exists()):
                 # đã nén tới trần mà vẫn tràn → câu dịch quá dài: AI rút gọn đúng các câu đó (một lượt) rồi đọc lại
                 from app.services.translate_router import SHORTEN_REQUEST

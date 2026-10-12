@@ -323,7 +323,7 @@ class CueEditor(ctk.CTkFrame):
                 self.head.configure(text=f"Lời gốc · {len(self.cues)} câu" + (
                     " — chưa dịch: icon copy → dịch ngoài → icon dán" if ext else ""))
             else:
-                self.head.configure(text="Chưa có lời thoại — nhận diện ở tab Nhận diện, nạp SRT ở tab «Dịch», hoặc bấm "
+                self.head.configure(text="Chưa có lời thoại — nhận diện / nạp SRT ở tab «Nguồn & dịch», hoặc bấm "
                                          "«Chuẩn bị».")
         self._starts = [c.start for c in self.cues]
         self.texts = [c.text.replace("\n", " ") for c in self.cues]
