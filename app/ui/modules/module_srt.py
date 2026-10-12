@@ -299,6 +299,9 @@ class SRTModule(BaseModule):
             self.file_section.set_subtitle("chưa có")
         if has_tr:
             self.tr_status.ok(f"Đã dịch: {Path(it.srt_translated_path).name}")
+        elif self.state.settings.external_translate:
+            self.tr_status.info("Không dịch (Cài đặt): tab Lời thoại → icon copy lấy lời gốc, dịch bên ngoài, icon dán "
+                                "bản dịch vào.")
         elif no_key:
             self.tr_status.warn(NO_KEY)
         else:
@@ -401,6 +404,10 @@ class SRTModule(BaseModule):
             return
         if not it.srt_path or not Path(it.srt_path).exists():
             messagebox.showinfo("Edit Studio", "Chưa có phụ đề gốc — nhận diện (tab Nhận diện) hoặc chọn file SRT trước.")
+            return
+        if self.state.settings.external_translate and not messagebox.askyesno(
+                "Dịch phụ đề", "Đang chọn «Không dịch — tự dịch bên ngoài» (Cài đặt › AI dùng API key).\n\n"
+                               "Vẫn nhờ AI dịch riêng video này?"):
             return
         old = it.srt_translated_path if it.srt_translated_path and Path(it.srt_translated_path).exists() else None
         if old:

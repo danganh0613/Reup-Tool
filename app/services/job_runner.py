@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 ProgressCb = Callable[[float], None]
 
 
+class WaitTranslation(RuntimeError):
+    """«Không dịch» (Cài đặt): video cần bản dịch mà chưa có → dừng ở «Chờ bản dịch» (không phải lỗi) chờ người dùng dán
+    bản dịch làm bên ngoài vào."""
+
+
 class NoSpeech(RuntimeError):
     """Video không có lời nói (chỉ nhạc / không có luồng tiếng) — bỏ phụ đề + lồng tiếng, vẫn xuất được."""
 LogCb = Callable[[str], None]
@@ -872,7 +877,8 @@ class Pipeline:
         no_srt = need_cues and not has(item.srt_path) and s.srt_source == SRT_SOURCES[0]
         if no_srt:
             steps.append("stt")
-        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path)
+        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path) \
+            and not self.state.settings.external_translate
         if no_tr:
             steps.append("translate")
         locked = item.voice_locked and has(item.voice_path)
@@ -1029,7 +1035,9 @@ class Pipeline:
         want_tr = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
                   (tts_on and tcfg.tts_source == TTS_SOURCES[0])
         has_tr = bool(item.srt_translated_path and Path(item.srt_translated_path).exists())
-        if want_tr and not has_tr and scfg.translate_enable:
+        if want_tr and not has_tr and self.state.settings.external_translate:
+            out.add("external")                      # «Không dịch»: nhận diện xong thì dừng chờ dán bản dịch
+        elif want_tr and not has_tr and scfg.translate_enable:
             out.add("gemini")
         elif want_tr and not has_tr:
             out.add("translate_off")                 # cần bản dịch nhưng «Tự dịch khi chuẩn bị video» đang tắt
@@ -1078,6 +1086,12 @@ class Pipeline:
             if want_translated:
                 if item.srt_translated_path and Path(item.srt_translated_path).exists():
                     cues_tr = load_srt(item.srt_translated_path)
+                elif st.settings.external_translate:
+                    if tts_on and tcfg.multi_voice:      # nhận diện người nói luôn — dán bản dịch xong chỉ còn tạo giọng
+                        self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.3, 0.1), log=log,
+                                             cancel=cancel)
+                    raise WaitTranslation("Chờ bản dịch — tab Lời thoại: icon copy lấy lời gốc, dịch bên ngoài, icon dán "
+                                          "bản dịch vào, rồi bấm Chuẩn bị (đang chọn «Không dịch» ở Cài đặt).")
                 elif scfg.translate_enable:
                     cues_tr = self.translate(item, cues_orig, progress=stage("Dịch phụ đề", 0.3, 0.15), log=log,
                                              cancel=cancel)
@@ -1415,6 +1429,10 @@ class JobRunner:
                         else:
                             pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=ev, bands=bands)
                         ok += 1
+                    except WaitTranslation as exc:
+                        it.status, it.message = "Chờ bản dịch", ""
+                        _ui_update(it)
+                        _ui_log(f"⏸ {it.name}: {exc}")
                     except RenderCancelled:
                         skipped = not self.cancel.is_set()
                         it.status, it.message = ("Đã bỏ qua", "") if skipped else ("Đã huỷ", "")

@@ -322,6 +322,14 @@
     - Dòng trạng thái tự ẩn khi trống (`_AutoHideStatus`). Icon «copy / paste / search»: Segoe E8C8 / E77F / E721; font
       đi kèm macOS chưa có → mượn icon tài liệu / bảng / kính lúp.
 
+42. **«Không dịch — tự dịch bên ngoài»** (test `audit_out/qa/test_external_mode.py` 14):
+    - `Settings.external_translate` (Cài đặt › AI dùng API key › «Cách dịch»: AI tự dịch / Không dịch). Bật: Chuẩn bị /
+      Xuất nhận diện lời gốc (+ người nói) rồi raise `WaitTranslation` → trạng thái hàng đợi «Chờ bản dịch» (màu vàng,
+      không tính lỗi, có trong câu tổng kết). `needs()` trả «external» (không đòi key dịch), `planned_steps` bỏ bước dịch.
+      «Dịch phụ đề» bấm tay vẫn được (hỏi lại). Nhờ AI sửa vẫn dùng AI đang chọn.
+    - Trước đây cần bản dịch mà tắt «Tự dịch» → «dùng phụ đề gốc»: giọng Việt đọc chữ Trung. Chế độ mới dừng thay vì đọc sai.
+    - Tab Lời thoại: tiêu đề «Lời gốc · N câu — chưa dịch: icon copy → dịch ngoài → icon dán»; tab Dịch nhắc cách làm.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

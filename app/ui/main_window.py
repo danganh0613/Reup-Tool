@@ -1291,7 +1291,7 @@ class MainWindow(_Root):
             self.queue_update(it)
         self._render_started = time.time()
         total = len(items)
-        finished = ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua")
+        finished = ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua", "Chờ bản dịch")
         self.pipeline.audio_only = audio_only
         prep = mode == "prepare"
 
@@ -1321,10 +1321,13 @@ class MainWindow(_Root):
                 return
             skipped = sum(1 for it in items if it.status == "Đã bỏ qua")
             skip_note = f", bỏ qua {skipped}" if skipped else ""
+            waiting = sum(1 for it in items if it.status == "Chờ bản dịch")
+            if waiting:                              # «Không dịch» (Cài đặt): nhận diện xong, chờ dán bản dịch
+                skip_note += f", {waiting} chờ bản dịch (copy lời gốc → dịch ngoài → dán)"
             if prep:
                 msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi{skip_note} · {elapsed / 60:.1f} phút"
                 self.log(msg)
-                if ok or fail:                       # bỏ qua hết → không báo «chờ duyệt»
+                if ok or fail or waiting:                # bỏ qua hết → không báo «chờ duyệt»
                     self.add_notification("Chuẩn bị xong — chờ bạn duyệt", msg, "ok" if not fail else "error")
                     notify("Edit Studio — Chờ duyệt", msg, enabled=self.app_state.settings.windows_toast)
                 self.app_state.save_config()

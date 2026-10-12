@@ -416,6 +416,9 @@ class Settings:
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
     deepseek_api_key: str = ""         # DeepSeek (trả phí theo lượng dùng)
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
+    #: «Không dịch» (Cài đặt › AI dùng API key): máy chỉ nhận diện lời gốc (giọng + chữ in sẵn) rồi DỪNG chờ bạn dịch
+    #: bên ngoài và dán bản dịch vào (icon dán ở tab Lời thoại) — không tự dịch, không đọc lời gốc thay bản dịch
+    external_translate: bool = False
 
     @staticmethod
     def split_keys(text: str) -> list[str]:

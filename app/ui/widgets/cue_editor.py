@@ -303,7 +303,9 @@ class CueEditor(ctk.CTkFrame):
                 self.head.configure(text=f"Bản dịch · {len(self.cues)} câu")       # chữ nhỏ trên mỗi ô = câu gốc
             elif orig:
                 self.edit_path, self.cues = orig, load_srt(orig)
-                self.head.configure(text=f"Phụ đề · {len(self.cues)} câu")
+                ext = self.app_state.settings.external_translate
+                self.head.configure(text=f"Lời gốc · {len(self.cues)} câu" + (
+                    " — chưa dịch: icon copy → dịch ngoài → icon dán" if ext else ""))
             else:
                 self.head.configure(text="Chưa có lời thoại — nhận diện ở tab Nhận diện, nạp SRT ở tab «Dịch», hoặc bấm "
                                          "«Chuẩn bị».")
