@@ -425,6 +425,15 @@
     - Bản .exe là app cửa sổ (không stdout) → MCP / CLI chạy bằng python mã nguồn; muốn dùng với bản cài cần thêm một exe
       console riêng (chưa làm).
 
+50. **Duyệt / xuất video đang dừng mà đã đủ lời thoại** (test `test_resume_export.py` 9; lỗi người dùng 12/10 22:24:
+    «Đến lời gốc» → dán bản dịch → lượt Chuẩn bị bị Dừng → «Đã huỷ» → tạo giọng ở tab Lồng tiếng → không Duyệt / Xuất được):
+    - `Pipeline.ready_for_review`: không còn thiếu lời gốc / bản dịch (`needs` không có qwen / gemini / external) — giọng,
+      khử giọng gốc thiếu thì bước xuất tự làm. Tab Duyệt `_ready` dùng nó cho video «Đã huỷ» / dừng chờ bạn (đang chạy,
+      Lỗi vẫn khoá) + dòng «lời thoại đã đủ — Duyệt được»; agent `run(render)` cũng vậy.
+    - Nút «Tạo giọng cho video này» (tab Lồng tiếng): xong mà đủ lời thoại → «Chờ duyệt» (trước: giữ trạng thái cũ).
+    - Nút chính: video «Chờ bản dịch» chưa dán bản dịch (`_needs_paste`) không che «Xuất (n)»; bấm Xuất thì xuất video đã
+      duyệt, không hỏi.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

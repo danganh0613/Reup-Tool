@@ -1293,6 +1293,8 @@ class MainWindow(_Root):
             failed = [it for it in items if not it.review and it.status == "Lỗi"]
             todo = [it for it in items if not it.review and it.status != "Lỗi"]
             ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
+            if ready and todo and all(self._needs_paste(it) for it in todo):
+                todo = []                               # còn chờ bạn dán bản dịch → xuất video đã duyệt, không hỏi
             if not todo and not ready and failed:
                 todo = failed                        # chỉ còn video lỗi → chuẩn bị lại các video đó
             if todo and ready:
@@ -1646,15 +1648,28 @@ class MainWindow(_Root):
         vids = self.app_state.videos
         todo = sum(1 for it in vids if not it.review and it.status != "Lỗi")
         waiting = sum(1 for it in vids if not it.review and it.status in WAITING)
+        blocked = sum(1 for it in vids if not it.review and self._needs_paste(it))
         failed = sum(1 for it in vids if not it.review and it.status == "Lỗi")
         ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
-        text = (f"Tiếp tục ({todo})" if todo == waiting else f"Chuẩn bị ({todo})") if todo else (
-            f"Xuất ({ready})" if ready else (f"Chuẩn bị lại ({failed})" if failed else ("Mở Duyệt" if vids else "Chuẩn bị")))
+        if todo and (todo > blocked or not ready):
+            text = f"Tiếp tục ({todo})" if todo == waiting else f"Chuẩn bị ({todo})"
+        else:                                           # chỉ còn video chờ bạn dán bản dịch → không che việc Xuất
+            text = f"Xuất ({ready})" if ready else (f"Chuẩn bị lại ({failed})" if failed else
+                                                     ("Mở Duyệt" if vids else "Chuẩn bị"))
         if getattr(self, "_render_label", None) != text:
             self._render_label = text
             relabel(self.render_btn, text)
             if hasattr(self, "progress"):
                 self.progress.refresh_idle()
+
+    def _needs_paste(self, it: VideoItem) -> bool:
+        """Video dừng «Chờ bản dịch» mà bạn chưa dán bản dịch — bấm Tiếp tục lúc này cũng chỉ dừng lại chỗ cũ."""
+        if it.status != WAITING[0]:
+            return False
+        try:
+            return "external" in self.pipeline_for(it).needs(it)
+        except Exception:                               # noqa: BLE001
+            return False
 
     def stop_all(self) -> None:
         """Nút Dừng (Esc): dừng TẤT CẢ — video đang chạy, các video còn lại và việc xếp hàng chờ."""

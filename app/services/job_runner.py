@@ -1144,6 +1144,12 @@ class Pipeline:
             out.add("gemini")                        # cần bản dịch → Chuẩn bị luôn dịch (bỏ công tắc «Tự dịch» cũ)
         return out
 
+    def ready_for_review(self, item: VideoItem) -> bool:
+        """Lời thoại đã đủ để duyệt / xuất (có lời gốc, có bản dịch khi phụ đề / giọng cần) — giọng, khử giọng gốc còn
+        thiếu thì bước xuất tự làm. Dùng khi lượt Chuẩn bị bị dừng / dừng chờ bạn mà bạn đã tự làm nốt (dán bản dịch,
+        tạo giọng ở tab Lồng tiếng)."""
+        return not ({"qwen", "gemini", "external"} & self.needs(item))
+
     def sidecar_srt(self, item: VideoItem) -> Path | None:
         """Mẫu chọn «Chọn file SRT» (cấu hình cũ): SRT cùng tên cạnh video — không có thì Chuẩn bị tự nhận diện (trước:
         báo lỗi «Chưa chọn file SRT»)."""

@@ -242,9 +242,12 @@ class ReviewPanel(ctk.CTkFrame):
             bits.append(f"mẫu «{self.app_state.template_name}»")
         if it.status == "Lỗi" and it.message:
             bits.append("Lỗi: " + friendly_error(it.message, it))
-        if it.status in WAITING:
+        ready = self._ready(it)
+        if ready and it.status not in ("Chờ duyệt", "Đã duyệt", "Bỏ qua", "Xong", "Cần xuất lại"):
+            bits.append("lời thoại đã đủ — Duyệt được (giọng chưa tạo thì Xuất tự tạo)")
+        elif it.status in WAITING:
             bits.append("làm tiếp ở tab Lời thoại rồi bấm «Tiếp tục» trên cùng")
-        elif not self._ready(it) and it.status not in ("Đang chuẩn bị", "Đang xử lý"):
+        elif not ready and it.status not in ("Đang chuẩn bị", "Đang xử lý"):
             bits.append("chưa duyệt được — bấm ⋯ › «Chuẩn bị lại video này»")
         self.info_lbl.configure(text="  ·  ".join(bits), text_color=color if it.status == "Lỗi" else T.TEXT_DIM)
         self._fill_summary()
@@ -361,10 +364,18 @@ class ReviewPanel(ctk.CTkFrame):
         ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
         self.status.ok(f"Đã duyệt hết — bấm «Xuất ({ready})» trên cùng để render." if ready else "Đã duyệt hết.")
 
-    @staticmethod
-    def _ready(it: VideoItem) -> bool:
-        """Video đã chuẩn bị xong (chờ duyệt / đã duyệt / đã xuất) — mới duyệt được."""
-        return it.status in ("Chờ duyệt", "Đã duyệt", "Bỏ qua", "Xong", "Cần xuất lại")
+    def _ready(self, it: VideoItem) -> bool:
+        """Duyệt được: đã chuẩn bị xong (chờ duyệt / đã duyệt / đã xuất), hoặc lượt Chuẩn bị bị dừng / dừng chờ bạn mà lời
+        thoại đã đủ (bạn tự dán bản dịch, tạo giọng ở tab Lồng tiếng) — giọng còn thiếu thì Xuất tự tạo. Đang chạy / lỗi
+        thì chưa (Duyệt lúc đó xoá nhãn Lỗi hoặc bị lượt chạy ghi đè)."""
+        if it.status in ("Chờ duyệt", "Đã duyệt", "Bỏ qua", "Xong", "Cần xuất lại"):
+            return True
+        if it.status in ("Đang chuẩn bị", "Đang xử lý", "Lỗi"):
+            return False
+        try:
+            return self.window.pipeline_for(it).ready_for_review(it)
+        except Exception:                                # noqa: BLE001 — đọc file lỗi thì coi như chưa
+            return False
 
     def approve(self) -> None:
         """Ctrl+Enter ở bất kỳ tab nào khi đang duyệt."""

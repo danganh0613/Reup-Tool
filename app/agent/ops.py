@@ -185,7 +185,8 @@ def run(host: GuiHost, ids="all", action: str = "prepare", until: str | None = N
                 if it.status == "Lỗi":
                     it.review = ""
             return w._run_queue(items, mode="prepare", quiet=True), [vid(it) for it in items]
-        ready = [it for it in items if it.status in ("Chờ duyệt", "Cần xuất lại", "Đã duyệt") or it.review == "approved"]
+        ready = [it for it in items if it.status in ("Chờ duyệt", "Cần xuất lại", "Đã duyệt") or it.review == "approved"
+                 or (it.status not in (*_RUNNING, "Lỗi") and w.pipeline_for(it).ready_for_review(it))]
         if not ready:
             return "chưa có video nào chuẩn bị xong để xuất — run(action='prepare') trước", []
         for it in ready:

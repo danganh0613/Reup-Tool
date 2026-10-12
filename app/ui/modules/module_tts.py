@@ -479,6 +479,11 @@ class TTSModule(BaseModule):
             if error:
                 self.track_status.error(f"Lỗi: {friendly_error(str(error))}")
             else:
+                # video đang dừng (Đã huỷ / chờ bản dịch / chờ soát bản dịch…) mà giờ đã đủ lời thoại + giọng → Chờ duyệt
+                if (item.review not in ("approved", "skipped") and item.status not in ("Đang chuẩn bị", "Đang xử lý")
+                        and pipe.ready_for_review(item)):
+                    item.status, item.review = "Chờ duyệt", "pending"
+                    self.window.update_render_button()
                 self.on_active_changed()
                 self.state.mark_dirty()
                 self.window.queue_update(item)
