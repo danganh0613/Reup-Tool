@@ -12,7 +12,10 @@ Làm theo VideoLingo bản 01f8434 (core/asr_backend/qwen_asr_local.py, speech_e
 Silero VAD chỉ cắt biên ngoài (đệm 1 s) · cửa sổ ≤ 180 s cắt ở 100 ms lặng nhất trong 30 s cuối · Qwen3-ASR-1.7B, ngân
 sách token 13/giây + 32 · Qwen3-ForcedAligner-0.6B → mốc từng chữ, gắn dấu câu · spaCy tách câu theo dấu → dấu phẩy →
 liên từ → câu > 60 token. Edit Studio thêm: căn mốc «sụp» (một chữ bị kéo > 1 s rồi ≥ 3 chữ dồn < 0,05 s/chữ — gặp ở
-video thử: «保» 3 s rồi 15 chữ trong 0,08 s; «这个能抓回家养吗» 8 chữ trong 0,6 s sau khoảng trống giả 2 s) → chia đều lại vùng đó; cửa sổ đọc lặp → chia đôi đọc lại một lần.
+video thử: «保» 3 s rồi 15 chữ trong 0,08 s; «这个能抓回家养吗» 8 chữ trong 0,6 s sau khoảng trống giả 2 s) → chia đều lại vùng đó;
+căn mốc 2 lượt: lượt 1 cả cửa sổ (biết chỗ hết câu) → lượt 2 căn lại từng đoạn ≤ 20 s cắt ở cuối câu (đo ở video thử: lệch
+trung bình 0,40 → 0,06 s, hết câu bị dồn), đoạn nào lượt 2 lệch chữ / dồn nhiều hơn thì giữ lượt 1; cửa sổ đọc lặp →
+chia đôi đọc lại một lần.
 In ra stdout: «PROGRESS k x» (video thứ k, 0..1) · «JOB k» (bắt đầu làm video k) · «DONE k» · «FAIL k lý do» ·
 «SKIP k» · dòng log «[ 12s] …». Kết quả JSON mỗi video: language, text, words[{word,start,end}], sentences[{text,tokens}]."""
 
@@ -41,6 +44,8 @@ QWEN_TO_ISO = {v: k for k, v in ISO_TO_QWEN.items()}
 QWEN_TO_ISO["Cantonese"] = "zh"
 _REPEATED = re.compile(r"(.{1,40}?)\1{3,}", re.S)
 T0 = time.perf_counter()
+CHUNK_SECONDS = 20                  # căn mốc lượt 2: đoạn ≤ 20 s (căn cả cửa sổ dài một lượt dễ «sụp»)
+_SENT_END = ("。", "？", "！", "?", "!", ".", "；", ";", "…")
 COLLAPSED = 0.05                    # < 0,05 s/chữ = căn mốc sụp (bộ căn mốc chia khung 0,08 s; người nói nhanh ~0,12 s/chữ)
 NEED_VRAM_GB = 5.0                  # Qwen3-ASR-1.7B bf16 + bộ nhớ chạy (đo trên RTX 3060 Ti: ~4,7 GB)
 _OUT = threading.Lock()
@@ -171,32 +176,43 @@ def attach_words(text, items, offset=0.0, limit=None):
     return words
 
 
+def _chars(w) -> int:
+    return max(1, len(re.sub(r"[^\w]", "", w["word"])))
+
+
+def _rate(w) -> float:
+    """Số giây / chữ của một mục căn mốc."""
+    return (w["end"] - w["start"]) / _chars(w)
+
+
+def collapsed_words(words: list[dict]) -> int:
+    return sum(1 for w in words if _rate(w) < COLLAPSED)
+
+
 def repair_collapsed(words: list[dict]) -> int:
     """Căn mốc «sụp»: ≥ 3 chữ dồn (< ``COLLAPSED`` s/chữ — không ai nói nhanh vậy). Lùi ≤ 10 chữ tìm chỗ thời gian bị «nuốt»:
     chữ bị kéo > 1 s hoặc khoảng trống > 1 s giữa hai chữ (gặp cả hai kiểu ở video thử) → chia đều lại từ đó tới hết
     loạt dồn. Không thấy thì mượn khoảng lặng ngay trước loạt dồn nếu đủ ~0,1 s/chữ."""
-    def chars(w):
-        return max(1, len(re.sub(r"[^\w]", "", w["word"])))
     fixed, i = 0, 0
     while i < len(words):
         j = i
-        while j < len(words) and (words[j]["end"] - words[j]["start"]) / chars(words[j]) < COLLAPSED:
+        while j < len(words) and _rate(words[j]) < COLLAPSED:
             j += 1
         if j - i >= 3:
             a_idx = next((k for k in range(i - 1, max(-1, i - 11), -1)
                           if words[k]["end"] - words[k]["start"] > 1.0 or words[k + 1]["start"] - words[k]["end"] > 1.0),
                          None)
             if a_idx is None and i > 0:
-                n_run = sum(chars(w) for w in words[i:j])
+                n_run = sum(_chars(w) for w in words[i:j])
                 if words[j - 1]["end"] - words[i - 1]["end"] >= 0.1 * n_run:
                     a_idx = i                                # mượn khoảng lặng trước loạt dồn
                     words[i]["start"] = words[i - 1]["end"]
             if a_idx is not None:
                 a, b = words[a_idx]["start"], words[j - 1]["end"]
-                n = sum(chars(w) for w in words[a_idx:j])
+                n = sum(_chars(w) for w in words[a_idx:j])
                 t = a
                 for w in words[a_idx:j]:
-                    d = (b - a) * chars(w) / n
+                    d = (b - a) * _chars(w) / n
                     w["start"], w["end"] = round(t, 3), round(t + d, 3)
                     t += d
                 fixed += 1
@@ -204,6 +220,60 @@ def repair_collapsed(words: list[dict]) -> int:
             continue
         i += 1
     return fixed
+
+
+def _quiet(audio, t0: float, t1: float) -> int:
+    """Mẫu giữa khung 20 ms lặng nhất trong [t0 − 0,1 s, t1 + 0,1 s] — chỗ cắt đoạn cho lượt căn mốc 2."""
+    lo, hi = max(0, int((t0 - 0.1) * SR)), min(len(audio), int((t1 + 0.1) * SR))
+    frame = SR // 50
+    k = (hi - lo) // frame
+    if k < 1:
+        return (lo + hi) // 2
+    energy = np.sqrt(np.mean(audio[lo:lo + k * frame].reshape(k, frame) ** 2, axis=1))
+    return lo + int(np.argmin(energy)) * frame + frame // 2
+
+
+def chunk_spans(words: list[dict], audio, a: int, b: int) -> list[tuple[int, int, int, int]]:
+    """Cửa sổ [a, b) đã căn lượt 1 → đoạn ≤ ``CHUNK_SECONDS`` cắt ở cuối câu: [(mẫu đầu, mẫu cuối, chữ đầu, chữ cuối + 1)].
+    Chỉ cắt ở chỗ lượt 1 tin được (hai chữ quanh chỗ cắt không «dồn», nghỉ < 1 s), tại khung lặng nhất ở đó."""
+    out: list[tuple[int, int, int, int]] = []
+    first, start, cut = 0, a, None
+    for k in range(len(words) - 1):
+        w, nx = words[k], words[k + 1]
+        if (w["word"].rstrip().endswith(_SENT_END) and min(_rate(w), _rate(nx)) >= COLLAPSED
+                and 0 <= nx["start"] - w["end"] < 1.0):
+            cut = k
+        if cut is not None and nx["end"] - start / SR > CHUNK_SECONDS:
+            pos = _quiet(audio, words[cut]["end"], words[cut + 1]["start"])
+            if start < pos < b:
+                out.append((start, pos, first, cut + 1))
+                first, start = cut + 1, pos
+            cut = None
+    out.append((start, b, first, len(words)))
+    return out
+
+
+def realign(aligner, audio, words: list[dict], spans, qlang: str, joiner: str) -> tuple[list[dict], int]:
+    """Căn mốc lượt 2 từng đoạn ngắn. Đoạn lỗi / ra khác chữ / dồn nhiều hơn lượt 1 → giữ lượt 1. → (chữ, số đoạn dùng)."""
+    out: list[dict] = []
+    used = 0
+    for s0, s1, i, j in spans:
+        old = words[i:j]
+        new = None
+        if old:
+            text = _join([w["word"] for w in old], joiner)
+            try:
+                items = [(it.text, it.start_time, it.end_time)
+                         for it in aligner.align(audio=(audio[s0:s1], SR), text=text, language=qlang)[0]]
+                new = attach_words(text, items, s0 / SR, limit=(s1 - s0) / SR)
+            except Exception:                            # noqa: BLE001 — lượt 2 chỉ để chỉnh, lỗi thì giữ lượt 1
+                new = None
+        if new and [w["word"] for w in new] == [w["word"] for w in old] and collapsed_words(new) <= collapsed_words(old):
+            out += new
+            used += 1
+        else:
+            out += old
+    return out, used
 
 
 def _join(tokens, joiner: str) -> str:
@@ -472,16 +542,24 @@ def align_job(k: int, aligner, pieces: list) -> None:
     say(f"Nhận diện xong ({lang_iso}) — căn mốc từng chữ…")
     words: list[dict] = []
     todo = [p for p in pieces if p[3]]
+    joiner = "" if lang_iso in ("zh", "ja", "yue") else " "
+    chunks = used = 0
     for w, (a, b, lang, text) in enumerate(todo):
         phase("căn mốc từng chữ", 0.63 + 0.29 * w / len(todo), 0.63 + 0.29 * (w + 1) / len(todo),
-              max(5.0, (b - a) / SR * 0.05), job=k)
+              max(5.0, (b - a) / SR * 0.08), job=k)
         own = str(lang).split(",")[0].strip()
         qlang = own if own in QWEN_TO_ISO else (ISO_TO_QWEN.get(lang_iso) or "Chinese")
         items = [(it.text, it.start_time, it.end_time)
                  for it in aligner.align(audio=(audio[a:b], SR), text=text, language=qlang)[0]]
-        words += attach_words(text, items, a / SR, limit=(b - a) / SR)
+        part = [x for x in attach_words(text, items, a / SR, limit=(b - a) / SR) if len(x["word"]) <= 30]
+        spans = chunk_spans(part, audio, a, b)
+        if len(spans) > 1:                               # lượt 2: căn lại từng đoạn ngắn
+            part, n_used = realign(aligner, audio, part, spans, qlang, joiner)
+            chunks, used = chunks + len(spans), used + n_used
+        words += part
         progress(0.63 + 0.29 * (w + 1) / len(todo))
-    words = [w for w in words if len(w["word"]) <= 30]
+    if chunks:
+        say(f"Căn mốc lượt 2: {used}/{chunks} đoạn ≤ {CHUNK_SECONDS} s")
     fixed = repair_collapsed(words)
     if fixed:
         say(f"Sửa {fixed} vùng căn mốc sụp")
@@ -489,7 +567,8 @@ def align_job(k: int, aligner, pieces: list) -> None:
     sentences = segment(words, lang_iso)
     progress(1.0)
     json.dump({"language": lang_iso, "text": "".join(p[3] for p in pieces), "words": words, "sentences": sentences,
-               "repaired": fixed}, open(job["out"], "w", encoding="utf-8"), ensure_ascii=False)
+               "repaired": fixed, "chunks": chunks, "realigned": used},
+              open(job["out"], "w", encoding="utf-8"), ensure_ascii=False)
     say(f"Xong: {len(sentences)} câu")
 
 

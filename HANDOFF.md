@@ -348,6 +348,15 @@
       sụp» `COLLAPSED` 0,03 → 0,05 s/chữ (bộ căn mốc chia khung 0,08 s; quét các kết quả nhận diện có sẵn: chỉ bắt đúng
       chỗ này). Có hiệu lực khi nhận diện lại.
 
+44. **Căn mốc 2 lượt** (`qwen_asr_worker.py`; test `test_brief.py` 23; thí nghiệm `audit_out/repeat_fit/`):
+    - Lượt 1 căn cả cửa sổ (≤ 180 s) như cũ → `chunk_spans` chia đoạn ≤ `CHUNK_SECONDS` = 20 s, chỉ cắt ở cuối câu chỗ
+      lượt 1 tin được (hai chữ quanh không dồn, nghỉ < 1 s), tại khung 20 ms lặng nhất → `realign` căn lại từng đoạn;
+      đoạn lỗi / ra khác chữ / dồn nhiều hơn lượt 1 → giữ lượt 1. `repair_collapsed` vẫn chạy sau cùng làm lưới an toàn.
+      JSON có thêm `chunks` / `realigned`, log «Căn mốc lượt 2: k/n đoạn».
+    - Đo «tải xuống» (16 câu hỏi lặp, mốc thật từ giọng tách): 1 lượt cũ lệch TB 0,24 s / lớn nhất 1,44 s; 1 lượt + ngưỡng
+      mới 0,16 / 0,52 s; 2 lượt 0,08 / 0,19 s, không còn vùng dồn. «tải xuống (2)»: lượt 1 có 3 vùng dồn, 2 lượt 0; số câu
+      giữ nguyên. Tốn thêm ~0,5 s / 100 s âm thanh. Video đã nhận diện phải bấm Nhận diện lời thoại lại.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

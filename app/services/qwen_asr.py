@@ -269,6 +269,7 @@ def _finish(data: dict, *, settings: Settings, log: Callable[[str], None] | None
     cues = sentence_cues(data["words"], sents)
     if log:
         log(f"Qwen3-ASR{' · ' + name if name else ''}: {len(cues)} câu"
+            + (f" · căn mốc 2 lượt {data['realigned']}/{data['chunks']} đoạn" if data.get("chunks") else "")
             + (f" · sửa {data['repaired']} vùng căn mốc sụp" if data.get("repaired") else ""))
     return STTResult(cues=cues, language=data.get("language", ""), language_probability=1.0)
 
