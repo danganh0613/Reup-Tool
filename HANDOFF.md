@@ -281,6 +281,19 @@
     của CI: venv riêng, FFmpeg arm64, PyInstaller, LSMinimumSystemVersion, ký ad-hoc, selftest với dữ liệu tạm, DMG →
     `release/mac/`). CI GitHub vẫn bị chặn vì billing (repo riêng tư).
 
+39. **Nhờ AI sửa biết suy luận + nhắn tiếp kiểu chat; nút «Lưu phụ đề»** (test `test_ai_edit.py` 22,
+    `test_ai_edit_ui.py` 11; thử thật `audit_out/qa/try_ai_reason.py`):
+    - Lời nhắc bắt AI viết `analysis` TRƯỚC `edits` (ghi log «AI phân tích»), luật nhất quán: câu cùng SOURCE đọc giống
+      nhau, một người nghe một đại từ (không lẫn bạn / mày), câu hỏi đổi sang X thì câu trả lời theo X.
+    - `edit_context(history, changes)`: editor gửi kèm các lượt trước (yêu cầu + trả lời của AI + ví dụ câu đã đổi,
+      `CueEditor._ai_history`, quên khi đổi video) và các câu đã đổi chưa lưu — «by the AI» / «by the user by hand»
+      (`_ai_after`: chữ AI đặt; người dùng gõ đè → tính là tự sửa). Thử thật trên video «tải xuống (2)»: có ngữ cảnh →
+      đồng bộ cả 22 câu hỏi / đáp sang «chó nhà mày»; không ngữ cảnh → còn 11 câu «Bạn mày».
+    - «sửa X thành Y» với X là MỘT chữ («bạn»): không thay máy móc nữa (đã ra «Mày mày» từ «Bạn mày» = bạn bè); hỏi lại
+      AI chỉ đổi chỗ cùng nghĩa, còn lại báo số câu. Cụm ≥ 2 chữ vẫn thay trực tiếp như cũ.
+    - Khung sửa lời thoại: hàng nút riêng [Lưu phụ đề] [Lưu & tạo lại giọng] chia đều (bảng hẹp vẫn đủ chỗ). «Lưu phụ đề»
+      = `save(regen=False)`, báo giọng chưa tạo lại.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

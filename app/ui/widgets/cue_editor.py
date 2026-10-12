@@ -51,6 +51,10 @@ class CueEditor(ctk.CTkFrame):
         self._tick_id: str | None = None
         self._ai_marks: set[int] = set()          # câu AI vừa sửa (tô vàng tới khi lưu / đổi video)
         self._ai_before: dict[int, str] = {}      # câu trước khi AI sửa (↶ / Hoàn tác)
+        self._ai_after: dict[int, str] = {}       # chữ AI đặt vào câu — người dùng gõ đè thì tính là tự sửa
+        #: các lượt «Nhờ AI sửa» của video đang sửa (yêu cầu, trả lời của AI kèm ví dụ câu đã đổi) — gửi kèm lượt sau
+        #: để AI hiểu ý người dùng đang theo hướng nào (nhắn tiếp kiểu chat «còn câu 37 nữa» vẫn hiểu)
+        self._ai_history: list[tuple[str, str]] = []
         self._src_sig: tuple = ()                 # file phụ đề lúc nạp — đổi (Chuẩn bị / dịch lại xong) → nạp lại
         self._ticks = 0
         self._noread: list[float] = []            # mốc bắt đầu các câu «không đọc» (lưu riêng, không nằm trong SRT)
@@ -110,21 +114,31 @@ class CueEditor(ctk.CTkFrame):
         self.next_btn = ctk.CTkButton(nav, text="›", width=30, height=30, command=lambda: self.show_page(self.page + 1),
                                       **T.secondary_button())
         self.next_btn.pack(side="left")
-        self.save_btn = button(nav, "Lưu & tạo lại giọng", icon_name="save", variant="primary", size="sm",
+        # hai nút lưu một hàng riêng, chia đều — bảng tính năng hẹp (laptop) vẫn đủ chỗ cả hai
+        saves = ctk.CTkFrame(self, fg_color="transparent")
+        saves.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        saves.grid_columnconfigure((0, 1), weight=1, uniform="save")
+        self.save_sub_btn = button(saves, "Lưu phụ đề", icon_name="save", size="sm", command=lambda: self.save(regen=False),
+                                   tip="Chỉ lưu chữ phụ đề, chưa tạo lại giọng (giọng tự tạo lại ở lần Chuẩn bị / Xuất sau, "
+                                       "hoặc bấm «Lưu & tạo lại giọng»)")
+        self.save_sub_btn.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self.save_btn = button(saves, "Lưu & tạo lại giọng", icon_name="save", variant="primary", size="sm",
                                command=self.save,
                                tip="Lưu các câu đã sửa; video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
-        self.save_btn.pack(side="right")
+        self.save_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
         # ── Nhờ AI sửa (kiểu chat): AI tự tìm câu liên quan tới yêu cầu và chỉ sửa đúng những câu đó ──
         ai = ctk.CTkFrame(self, fg_color="transparent")
-        ai.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ai.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         ai.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(ai, fg_color="transparent")
         head.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
         ctk.CTkLabel(head, text="Nhờ AI sửa", font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
-        info_icon(head, "Gõ yêu cầu bằng lời, vd «xưng anh – em», «văn nói tự nhiên hơn», «sửa tên Lý Tiểu Long». AI tự "
-                        "tìm đúng các câu cần sửa trong cả video, câu khác giữ nguyên. Câu sửa tô vàng, chưa lưu — "
-                        "↶ trả lại từng câu.").pack(side="left", padx=(4, 0))
+        info_icon(head, "Gõ yêu cầu bằng lời, vd «xưng anh – em», «sửa bạn mày thành chó nhà mày», «rà lại cả kịch bản cho "
+                        "thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), câu khác giữ "
+                        "nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các yêu cầu trước và các câu vừa "
+                        "đổi chưa lưu (cả câu bạn tự sửa). Câu sửa tô vàng, chưa lưu — ↶ trả lại từng câu.").pack(
+            side="left", padx=(4, 0))
         self.find_btn = button(head, "Tìm & thay", icon_name="edit", variant="ghost", size="sm", command=self.find_replace,
                                tip="Đổi một chữ / tên riêng ở mọi câu của video (chưa lưu — xem rồi bấm Lưu)")
         self.find_btn.pack(side="right")
@@ -140,7 +154,7 @@ class CueEditor(ctk.CTkFrame):
         self.ai_undo.grid(row=1, column=2, padx=(4, 0))
         self.ai_undo.grid_remove()
         self.status = StatusLabel(self, "")
-        self.status.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.status.grid(row=5, column=0, sticky="ew", pady=(6, 0))
 
     def destroy(self) -> None:
         self.stop_tick()
@@ -169,6 +183,8 @@ class CueEditor(ctk.CTkFrame):
             self.show_page(page, sync=False)
 
     def load(self, it: VideoItem | None) -> None:
+        if it is not self.item:
+            self._ai_history = []
         self.item = it
         self._src_sig = self._file_sig(it)
         self._cur = -1
@@ -246,6 +262,7 @@ class CueEditor(ctk.CTkFrame):
         self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
         self.save_btn.configure(state="normal" if self.cues else "disabled")
+        self.save_sub_btn.configure(state="normal" if self.cues else "disabled")
         self.find_btn.configure(state="normal" if self.cues else "disabled")
         self.ai_send.configure(state="normal" if self.cues else "disabled")
 
@@ -409,6 +426,9 @@ class CueEditor(ctk.CTkFrame):
         if st.tts.enable_tts and regen:
             self.status.warn(f"Đã lưu {changed} câu — đang tạo lại giọng (câu không đổi dùng lại)…")
             self._regenerate(it)
+        elif st.tts.enable_tts:
+            self.status.ok(f"Đã lưu {changed} câu phụ đề — giọng chưa tạo lại: bấm «Lưu & tạo lại giọng» khi muốn nghe, "
+                           "hoặc Chuẩn bị / Xuất sẽ tự tạo lại.")
         else:
             self.status.ok(f"Đã lưu {changed} câu — bấm ▶ Phát để xem lại.")
         self.window.preview.schedule_refresh(0)
@@ -574,6 +594,7 @@ class CueEditor(ctk.CTkFrame):
     def _clear_ai_marks(self) -> None:
         self._ai_marks = set()
         self._ai_before = {}
+        self._ai_after = {}
         self.ai_undo.grid_remove()
 
     def _apply_ai(self, edits: dict[int, str], expect: list[str] | None = None) -> list[int]:
@@ -589,6 +610,7 @@ class CueEditor(ctk.CTkFrame):
                 continue
             self._ai_before.setdefault(i, self.texts[i])
             self.texts[i] = t
+            self._ai_after[i] = t
             self._ai_marks.add(i)
             changed.append(i)
         if self._ai_marks:
@@ -601,6 +623,7 @@ class CueEditor(ctk.CTkFrame):
             return
         self._sync()
         self.texts[i] = self._ai_before.pop(i)
+        self._ai_after.pop(i, None)
         self._ai_marks.discard(i)
         self._update_dirty_mark()
         if not self._ai_before:
@@ -617,10 +640,14 @@ class CueEditor(ctk.CTkFrame):
         if not req:
             self.status.info("Gõ yêu cầu trước, vd «câu hỏi bắt về nuôi thêm 'Con này' ở đầu», «sửa tên Lý Tiểu Long».")
             return
-        from app.services.translate_router import ai_edit
+        from app.services.translate_router import ai_edit, edit_context
 
         self._sync()
         current = list(self.texts)
+        # câu đã đổi mà chưa lưu (AI hay người dùng tự gõ) + các lượt trước → AI hiểu hướng sửa đang theo
+        changes = [(i, o, t, "AI" if self._ai_after.get(i, "").strip() == t.strip() else "user")
+                   for i, (t, o) in enumerate(zip(self.texts, self._orig_texts)) if t.strip() != o.strip()]
+        context = edit_context(self._ai_history, changes)
         source = [c.plain for c in self.ref] if self.is_translation else None
         st = self.app_state.state_for(it)
         win = self.window
@@ -629,7 +656,7 @@ class CueEditor(ctk.CTkFrame):
 
         def work(cancel):
             return ai_edit(current, source, req, settings=st.settings, target=st.subtitle.translate_target,
-                           style=st.subtitle.translate_style, log=win.log_bg, cancel=cancel)
+                           style=st.subtitle.translate_style, context=context, log=win.log_bg, cancel=cancel)
 
         def done(result, error):
             if not self.winfo_exists():
@@ -642,6 +669,8 @@ class CueEditor(ctk.CTkFrame):
                 return
             edits, note = result
             changed = self._apply_ai(edits, current)     # câu người dùng sửa tiếp trong lúc chờ: giữ chữ của họ
+            done_ex = "; ".join(f"câu {i + 1}: «{current[i]}» → «{self.texts[i]}»" for i in changed[:2])
+            self._ai_history.append((req, (note + (f" (vd {done_ex})" if done_ex else "")).strip()))
             if not changed:
                 self.status.info(f"AI không thấy câu nào cần sửa. {note}".strip())
                 return

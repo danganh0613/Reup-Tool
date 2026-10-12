@@ -652,7 +652,10 @@ def cut_off(new: str, old: str) -> bool:
 EDIT_CHUNK = 220          # số câu mỗi lần gửi (phụ đề rất dài → chia lô, mỗi lô thấy cùng yêu cầu)
 
 
-def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str, style: str, glossary: str) -> str:
+def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str, style: str, glossary: str,
+                 context: str = "") -> str:
+    """``context``: những gì đã xảy ra trong lượt sửa này (yêu cầu trước + câu AI / người dùng đã đổi, chưa lưu) — AI
+    hiểu ý người dùng đang đi theo hướng nào, nhắn tiếp kiểu chat («còn câu 37 nữa») vẫn hiểu."""
     lines = []
     for n, src, cur in rows:
         lines.append(f"{n}. CURRENT: {cur}" + (f"\n   SOURCE: {src}" if src and src != cur else ""))
@@ -660,8 +663,16 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
     return (
         f"You are editing on-screen subtitles in {target} for a video. Each numbered line shows the CURRENT subtitle "
         "(and the original SOURCE line when it is a translation).\n"
-        f"The user asks: «{instruction.strip()}»\n"
+        + (f"Earlier in this editing session (shows what the user wants — follow the same direction):\n{context}\n"
+           if context.strip() else "")
+        + f"The user now asks: «{instruction.strip()}»\n"
         "Rules:\n"
+        "- Think before editing: in \"analysis\" work out what the user really wants (use the earlier session too), "
+        "then go through the lines and list which ones must change and why.\n"
+        "- Keep the whole dialogue consistent: lines with the same SOURCE read the same way (same wording for the same "
+        "meaning); the same person / animal / thing is called the same way everywhere; one listener is addressed with "
+        "one pronoun (do not mix «bạn» and «mày»); a question and its answers are about the same subject — if a question "
+        "now asks about X, the answers that follow must talk about X too.\n"
         "- First read ALL the lines — the whole dialogue, from the first line to the last.\n"
         "- Apply the request to EVERY line it concerns: questions AND answers, early lines AND late lines. If the "
         "request names words to change, every line that contains those words (any capitalization) must be changed.\n"
@@ -681,8 +692,10 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
         f"- {QUOTE_RULE}\n"
         + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
         + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
-        + "- Return ONLY JSON: {\"edits\": [{\"n\": <line number>, \"text\": \"<new line>\"}], "
-        "\"note\": \"<one short sentence in Vietnamese saying what you changed, or why nothing matched>\"}\n\n"
+        + "- Return ONLY JSON, keys in this order: {\"analysis\": \"<a few short sentences: what the user wants, which "
+        "lines must change and why>\", \"edits\": [{\"n\": <line number>, \"text\": \"<new line>\"}], "
+        "\"note\": \"<one or two short sentences in Vietnamese for the user: what you changed, or why nothing needed "
+        "changing>\"}\n\n"
         "Lines:\n" + "\n".join(lines)
     )
 
@@ -718,11 +731,24 @@ def _phrase(old: str) -> str:
     return r"(?<!\w)" + re.escape(old) + r"(?!\w)"
 
 
+def edit_context(history: list[tuple[str, str]], changes: list[tuple[int, str, str, str]], limit: int = 40) -> str:
+    """Ngữ cảnh cho «Nhờ AI sửa»: các yêu cầu trước (kèm trả lời của AI) + câu đã đổi chưa lưu
+    (số câu 0-based, trước, sau, ai đổi: "AI" / "user")."""
+    out = [f"- The user asked: «{req}»" + (f" — AI replied: {note}" if note else "") for req, note in history[-6:]]
+    for i, before, after, who in changes[:limit]:
+        out.append(f"- Line {i + 1} changed {'by the AI' if who == 'AI' else 'by the user by hand'}: "
+                   f"«{before.replace(chr(10), ' ')}» → «{after.replace(chr(10), ' ')}»")
+    if len(changes) > limit:
+        out.append(f"- … and {len(changes) - limit} more changed lines")
+    return "\n".join(out)
+
+
 def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, settings: Settings, target: str,
-            style: str = "", log: Callable[[str], None] | None = None,
+            style: str = "", context: str = "", log: Callable[[str], None] | None = None,
             cancel: threading.Event | None = None) -> tuple[dict[int, str], str]:
-    """Sửa phụ đề theo một yêu cầu tự do: AI đọc hết thoại, sửa mọi câu liên quan (câu hỏi lẫn câu trả lời) rồi rà
-    lại cho nhất quán, chỉ trả về những câu đổi. Yêu cầu «sửa X thành Y»: AI trả xong mà còn câu chứa X → hỏi lại AI
+    """Sửa phụ đề theo một yêu cầu tự do: AI suy luận trước («analysis»), đọc hết thoại, sửa mọi câu liên quan (câu hỏi
+    lẫn câu trả lời) rồi rà lại cho nhất quán, chỉ trả về những câu đổi. ``context``: yêu cầu trước + câu đã đổi trong
+    lượt sửa này (``edit_context``) — nhắn tiếp kiểu chat vẫn hiểu. Yêu cầu «sửa X thành Y»: AI trả xong mà còn câu chứa X → hỏi lại AI
     riêng những câu đó (kèm ví dụ AI vừa sửa); vẫn sót → máy thay trực tiếp. Trả ({chỉ số 0-based: câu mới}, ghi chú)."""
     if not instruction.strip():
         return {}, ""
@@ -739,7 +765,10 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
             part = idx[a:a + EDIT_CHUNK]
             rows = [(i + 1, (source[i] if source and i < len(source) else "").replace("\n", " "),
                      edits.get(i, current[i]).replace("\n", " ")) for i in part]
-            data = _load_json(router.call(_edit_prompt(rows, request, target_en, style, settings.glossary))) or {}
+            data = _load_json(router.call(_edit_prompt(rows, request, target_en, style, settings.glossary,
+                                                       context))) or {}
+            if isinstance(data, dict) and data.get("analysis"):
+                logger.info("Nhờ AI sửa — AI phân tích: %s", as_text(data["analysis"])[:600])
             for e in (data.get("edits") or []) if isinstance(data, dict) else []:
                 try:
                     k = int(e.get("n")) - 1
@@ -764,13 +793,20 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
             done = [f"«{current[i]}» → «{edits[i]}»" for i in sorted(edits)[:3]]
             if log:
                 log(f"Nhờ AI sửa: còn {len(rest)} câu chứa «{old}» → hỏi lại AI riêng các câu đó")
-            ask(rest, f"{instruction}. These lines still contain «{old}» — change every one of them the same way, "
-                      "keep the rest of each line natural." + (" Already changed like this: " + "; ".join(done)
-                                                                if done else ""))
+            how = ("change every one of them the same way" if len(old.split()) >= 2 else
+                   f"change it where «{old}» has the same meaning as in the request; keep it where it means "
+                   "something else (e.g. a noun vs a pronoun)")
+            ask(rest, f"{instruction}. These lines still contain «{old}» — {how}, keep the rest of each line natural."
+                + (" Already changed like this: " + "; ".join(done) if done else ""))
             rest = left()
-        for i in rest:                    # vẫn sót → thay trực tiếp đúng chữ người dùng yêu cầu
-            edits[i] = replace_phrase(edits.get(i, current[i]), old, new)
-        if rest:
+        if rest and len(old.split()) >= 2:
+            # vẫn sót → thay trực tiếp đúng cụm người dùng yêu cầu. CHỈ với cụm ≥ 2 chữ: một chữ đơn hay gặp («bạn»)
+            # có thể khác nghĩa ở câu khác («Bạn mày» = bạn bè) — thay máy móc ra «Mày mày»
+            for i in rest:
+                edits[i] = replace_phrase(edits.get(i, current[i]), old, new)
             notes.append(f"{len(rest)} câu còn «{old}» — máy thay trực tiếp thành «{new}».")
+        elif rest:
+            notes.append(f"{len(rest)} câu còn «{old}» (câu {', '.join(str(i + 1) for i in rest[:8])}) — AI giữ nguyên vì "
+                         "có thể khác nghĩa, xem lại giúp.")
     edits = {k: v for k, v in edits.items() if v.strip() != current[k].strip()}
     return edits, " ".join(notes)[:300]
