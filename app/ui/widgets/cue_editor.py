@@ -3,11 +3,12 @@
 Bấm vào ô câu → khung xem trước nhảy tới cảnh câu đó · ▶ phát đúng câu đó (có giọng lồng) rồi tự dừng · đang phát thì
 câu đang đọc được tô sáng · ↻ AI dịch lại một câu · ô «Nhờ AI sửa» (gõ yêu cầu, AI chỉ sửa đúng các câu liên quan — cả
 video). Câu AI sửa tô vàng, ↶ trả lại từng câu, «Hoàn tác» trả lại hết · ⊘ «không đọc câu này» (lời bài hát, câu
-trích: giữ âm gốc, vẫn hiện phụ đề) · «Tìm & thay» cho cả video · «Lưu & tạo lại giọng» (câu không đổi dùng lại giọng cũ
-nên rất nhanh; không sửa chữ mà giọng đã cũ thì vẫn tạo lại).
+trích: giữ âm gốc, vẫn hiện phụ đề) · «Tìm & thay» cho cả video · icon loa = tạo lại giọng (câu không đổi dùng lại giọng
+cũ nên rất nhanh; không sửa chữ mà giọng đã cũ thì vẫn tạo lại).
 
-Bố cục kiểu chatbot: danh sách TẤT CẢ câu chiếm hết chiều cao còn lại, một thanh cuộn, không chia trang; hai nút lưu; ô
-«Nhờ AI sửa» neo dưới cùng kèm lịch sử. Danh sách ẢO: chỉ có ``POOL`` dòng widget (đủ lấp khung nhìn), cuộn tới đâu đổ
+Bố cục kiểu chatbot: thanh icon nhỏ trên cùng (copy cho AI ngoài · dán bản dịch · tìm & thay · tạo lại giọng), danh
+sách TẤT CẢ câu chiếm hết chiều cao còn lại (một thanh cuộn, không chia trang), ô «Nhờ AI sửa» neo dưới cùng kèm lịch
+sử. Chữ sửa TỰ LƯU (ngừng gõ ~1 s / rời ô / AI sửa xong) — tạo giọng luôn đọc đúng chữ đang thấy. Danh sách ẢO: chỉ có ``POOL`` dòng widget (đủ lấp khung nhìn), cuộn tới đâu đổ
 chữ câu đó vào — video 300 câu nhẹ như 30 câu (dựng mỗi dòng CTk ~45 ms: dựng đủ 300 dòng mất ~14 s). Nơi đặt editor phải cho nó một chiều cao (tab «Lời thoại»
 đặt trang cao đúng bằng khung nhìn).
 """
@@ -15,6 +16,7 @@ chữ câu đó vào — video 300 câu nhẹ như 30 câu (dựng mỗi dòng C
 from __future__ import annotations
 
 import bisect
+import logging
 import re
 import tkinter as tk
 from collections.abc import Callable
@@ -26,21 +28,39 @@ import customtkinter as ctk
 from app.config import theme as T
 from app.core.state import VideoItem
 from app.services.job_runner import error_line
-from app.services.srt_utils import format_ts, load_srt, save_srt, wrap_lines
+from app.services.srt_utils import Cue, format_ts, load_srt, save_srt, wrap_lines
 from app.ui.widgets.common import StatusLabel, auto_wrap, info_icon
 from app.ui.widgets.ui import Tooltip, button
 from app.ui.progress_panel import friendly_error
+
+logger = logging.getLogger(__name__)
+
+
+class _AutoHideStatus(StatusLabel):
+    """Dòng trạng thái chỉ chiếm chỗ khi có chữ (không để khoảng trống giữa danh sách và ô chat)."""
+
+    def configure(self, require_redraw=False, **kwargs):
+        super().configure(require_redraw=require_redraw, **kwargs)
+        if "text" in kwargs:
+            if kwargs["text"]:
+                self.grid()
+            else:
+                self.grid_remove()
 
 
 class CueEditor(ctk.CTkFrame):
     POOL = 18                   # số dòng widget (đủ lấp khung nhìn cao ~1100 px) — dùng lại khi cuộn, mọi video
     WHEEL = 2                   # số câu cuộn mỗi nấc chuột
 
-    def __init__(self, master, window, *, on_saved: Callable[[VideoItem], None] | None = None) -> None:
+    AUTOSAVE_MS = 1000          # ngừng gõ bấy lâu thì tự lưu
+
+    def __init__(self, master, window, *, on_saved: Callable[[VideoItem], None] | None = None,
+                 on_import: Callable[[str], bool] | None = None) -> None:
         super().__init__(master, fg_color="transparent")
         self.window = window
         self.app_state = window.app_state
         self.on_saved = on_saved
+        self.on_import = on_import      # dán SRT bản dịch (AI ngoài trả về) → nhập, giữ mốc thời gian gốc
         self.item: VideoItem | None = None
         self.cues: list = []
         self.ref: list = []
@@ -66,11 +86,32 @@ class CueEditor(ctk.CTkFrame):
         self._ticks = 0
         self._noread: list[float] = []            # mốc bắt đầu các câu «không đọc» (lưu riêng, không nằm trong SRT)
         self._dirty_mark = False
+        self._autosave_id: str | None = None
+        self._base_texts: list[str] = []          # chữ lúc mở video — mốc «đã đổi gì» cho ngữ cảnh Nhờ AI sửa
         self.grid_columnconfigure(0, weight=1)
 
-        self.head = auto_wrap(ctk.CTkLabel(self, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        bar.grid_columnconfigure(0, weight=1)
+        tools = ctk.CTkFrame(bar, fg_color="transparent")
+        tools.grid(row=0, column=1, sticky="e", padx=(6, 0))
+        self.copy_btn = button(tools, "", icon_name="copy", variant="ghost", size="sm", width=34, command=self._copy_menu,
+                               tip="Copy để dán cho AI bên ngoài (ChatGPT, Gemini web…): lời gốc / song ngữ kèm lời dặn, "
+                                   "hoặc SRT đang sửa")
+        self.paste_btn = button(tools, "", icon_name="paste", variant="ghost", size="sm", width=34,
+                                command=self._paste_import,
+                                tip="Dán SRT bản dịch AI bên ngoài trả về (vừa copy) — giữ mốc thời gian gốc")
+        self.find_btn = button(tools, "", icon_name="search", variant="ghost", size="sm", width=34,
+                               command=self.find_replace, tip="Tìm & thay một chữ / tên riêng ở mọi câu của video")
+        self.voice_btn = button(tools, "", icon_name="speaker", variant="ghost", size="sm", width=34,
+                                command=self.regen_voice,
+                                tip="Tạo lại giọng theo lời thoại đang thấy (câu không đổi dùng lại giọng cũ — nhanh). Nút "
+                                    "sáng màu = giọng chưa khớp chữ vừa sửa.")
+        for b in (self.copy_btn, self.paste_btn, self.find_btn, self.voice_btn):
+            b.pack(side="left", padx=1)
+        self.head = auto_wrap(ctk.CTkLabel(bar, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
                                            justify="left", wraplength=400))
-        self.head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.head.grid(row=0, column=0, sticky="ew")
         # danh sách câu: chiếm hết chiều cao còn lại, tự cuộn bên trong
         self.grid_rowconfigure(1, weight=1)
         self.rows_frame = ctk.CTkFrame(self, fg_color=T.BG_INPUT, corner_radius=8)
@@ -91,39 +132,24 @@ class CueEditor(ctk.CTkFrame):
         self._rows: list[dict] = []
         self._build_rows(self.POOL)
 
-        # hai nút lưu một hàng riêng, chia đều — bảng tính năng hẹp (laptop) vẫn đủ chỗ cả hai
-        saves = ctk.CTkFrame(self, fg_color="transparent")
-        saves.grid(row=3, column=0, sticky="ew", pady=(6, 0))
-        saves.grid_columnconfigure((0, 1), weight=1, uniform="save")
-        self.save_sub_btn = button(saves, "Lưu phụ đề", icon_name="save", size="sm", command=lambda: self.save(regen=False),
-                                   tip="Chỉ lưu chữ phụ đề, chưa tạo lại giọng (giọng tự tạo lại ở lần Chuẩn bị / Xuất sau, "
-                                       "hoặc bấm «Lưu & tạo lại giọng»)")
-        self.save_sub_btn.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.save_btn = button(saves, "Lưu & tạo lại giọng", icon_name="save", variant="primary", size="sm",
-                               command=self.save,
-                               tip="Lưu các câu đã sửa; video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
-        self.save_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
-
-        self.status = StatusLabel(self, "")
-        self.status.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+        self.status = _AutoHideStatus(self, "")
+        self.status.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self.status.grid_remove()
 
         # ── Nhờ AI sửa (kiểu chatbot, neo dưới cùng): lịch sử hỏi – đáp + ô nhập; AI tự tìm câu liên quan ──
         ai = ctk.CTkFrame(self, fg_color=T.BG_INPUT, corner_radius=8)
-        ai.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        ai.grid(row=3, column=0, sticky="ew", pady=(6, 0))
         ai.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(ai, fg_color="transparent")
         head.grid(row=0, column=0, columnspan=3, sticky="ew", padx=8, pady=(6, 2))
         ctk.CTkLabel(head, text="Nhờ AI sửa", font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
         info_icon(head, "Gõ yêu cầu bằng lời, vd «xưng anh – em», «sửa bạn mày thành chó nhà mày», «rà lại cả kịch bản cho "
                         "thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), câu khác giữ "
-                        "nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các yêu cầu trước và các câu vừa "
-                        "đổi chưa lưu (cả câu bạn tự sửa). Câu sửa tô vàng, chưa lưu — ↶ trả lại từng câu.").pack(
+                        "nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các yêu cầu trước và các câu đã đổi "
+                        "(cả câu bạn tự sửa). Câu AI sửa tô vàng (tự lưu) — ↶ trả lại từng câu, «Hoàn tác» trả lại hết.").pack(
             side="left", padx=(4, 0))
-        self.find_btn = button(head, "Tìm & thay", icon_name="edit", variant="ghost", size="sm", command=self.find_replace,
-                               tip="Đổi một chữ / tên riêng ở mọi câu của video (chưa lưu — xem rồi bấm Lưu)")
-        self.find_btn.pack(side="right")
         self.ai_undo = button(head, "Hoàn tác", icon_name="undo", variant="ghost", size="sm", command=self.ai_revert,
-                              tip="Trả lại mọi câu AI đã sửa (chưa lưu) như cũ")
+                              tip="Trả lại mọi câu AI đã sửa như cũ")
         self.ai_undo.pack(side="right", padx=(0, 4))
         self.ai_undo.pack_forget()
         # lịch sử hỏi – đáp của video đang sửa (hiện khi đã nhắn) — như khung chat
@@ -156,6 +182,7 @@ class CueEditor(ctk.CTkFrame):
             ent = ctk.CTkEntry(self.rows_area, height=30, font=T.font(12))
             ent.bind("<FocusIn>", lambda _e, r=r: self._focus_row(r))
             ent.bind("<KeyRelease>", lambda _e: self._update_dirty_mark(), add="+")
+            ent.bind("<FocusOut>", lambda _e: self._schedule_autosave(250), add="+")
             ent.bind("<Return>", lambda _e, r=r: self._move(r, 1))
             ent.bind("<Down>", lambda _e, r=r: self._move(r, 1))
             ent.bind("<Up>", lambda _e, r=r: self._move(r, -1))
@@ -195,6 +222,11 @@ class CueEditor(ctk.CTkFrame):
         return "break"
 
     def destroy(self) -> None:
+        if self._autosave_id is not None:
+            try:
+                self.after_cancel(self._autosave_id)
+            except Exception:                          # noqa: BLE001
+                pass
         self.stop_tick()
         super().destroy()
 
@@ -248,6 +280,7 @@ class CueEditor(ctk.CTkFrame):
         self.chat.grid_remove()
 
     def load(self, it: VideoItem | None) -> None:
+        self._flush_autosave()                          # chữ đang gõ dở của video trước → lưu trước khi đổi
         if it is not self.item:
             self._ai_history = []
             self._chat_clear()
@@ -267,16 +300,17 @@ class CueEditor(ctk.CTkFrame):
                 self.edit_path, self.cues = tr, load_srt(tr)
                 self.ref = load_srt(orig) if orig else []
                 self.is_translation = len(self.ref) == len(self.cues)
-                self.head.configure(text=f"Bản dịch · {len(self.cues)} câu — chữ nhỏ là câu gốc")
+                self.head.configure(text=f"Bản dịch · {len(self.cues)} câu")       # chữ nhỏ trên mỗi ô = câu gốc
             elif orig:
                 self.edit_path, self.cues = orig, load_srt(orig)
                 self.head.configure(text=f"Phụ đề · {len(self.cues)} câu")
             else:
-                self.head.configure(text="Video này chưa có lời thoại — nhận diện ở tab Nhận diện, chọn file SRT bên dưới, "
-                                         "hoặc bấm «Chuẩn bị».")
+                self.head.configure(text="Chưa có lời thoại — nhận diện ở tab Nhận diện, nạp SRT ở tab «Dịch», hoặc bấm "
+                                         "«Chuẩn bị».")
         self._starts = [c.start for c in self.cues]
         self.texts = [c.text.replace("\n", " ") for c in self.cues]
         self._orig_texts = list(self.texts)
+        self._base_texts = list(self.texts)
         self._noread = self.window.pipeline.load_noread(it) if it is not None else []
         self._first = 0                                 # video mới → về đầu danh sách
         self.show_page(0, sync=False)
@@ -343,10 +377,8 @@ class CueEditor(ctk.CTkFrame):
         self._painted = -1
         self._paint_current(follow=False)
         self.after_idle(self._update_bar)
-        self.save_btn.configure(state="normal" if self.cues else "disabled")
-        self.save_sub_btn.configure(state="normal" if self.cues else "disabled")
-        self.find_btn.configure(state="normal" if self.cues else "disabled")
-        self.ai_send.configure(state="normal" if self.cues else "disabled")
+        for b in (self.copy_btn, self.paste_btn, self.find_btn, self.voice_btn, self.ai_send):
+            b.configure(state="normal" if self.cues else "disabled")
 
     # ── Cuộn (danh sách ảo) ──────────────────────────────────────────────
     def _update_bar(self) -> None:
@@ -505,7 +537,7 @@ class CueEditor(ctk.CTkFrame):
     def dirty(self) -> bool:
         return self._text_dirty()
 
-    def save(self, regen: bool = True) -> None:
+    def save(self, regen: bool = True, quiet: bool = False) -> None:
         """``regen``: tạo lại giọng ngay (False khi sắp chạy Chuẩn bị / Render — lượt chạy tự tạo lại)."""
         it = self.item
         if it is None or not self.cues or not self.edit_path:
@@ -549,6 +581,16 @@ class CueEditor(ctk.CTkFrame):
             it.status = "Cần xuất lại"
             self.window.queue_update(it)
             self.window.update_render_button()
+        if quiet:                                      # tự lưu: giữ tô vàng + ↶ của câu AI sửa tới khi đổi video
+            logger.debug("%s: tự lưu %d câu lời thoại", it.name, changed)
+            st = self.app_state.state_for(it)
+            self.status.info("✓ Đã tự lưu" + (" — bấm 🔊 (icon loa) để tạo lại giọng, hoặc Chuẩn bị / Xuất tự tạo lại."
+                                               if st.tts.enable_tts else "."))
+            self._refresh_voice_btn()
+            self.window.preview.schedule_refresh(0)
+            if self.on_saved:
+                self.on_saved(it)
+            return
         if self._ai_marks or self._ai_before:          # đã lưu → bỏ tô vàng
             self._clear_ai_marks()
             self.show_page(self.page, sync=False)
@@ -558,8 +600,9 @@ class CueEditor(ctk.CTkFrame):
             self.status.warn(f"Đã lưu {changed} câu — đang tạo lại giọng (câu không đổi dùng lại)…")
             self._regenerate(it)
         elif st.tts.enable_tts:
-            self.status.ok(f"Đã lưu {changed} câu phụ đề — giọng chưa tạo lại: bấm «Lưu & tạo lại giọng» khi muốn nghe, "
-                           "hoặc Chuẩn bị / Xuất sẽ tự tạo lại.")
+            self.status.ok(f"Đã lưu {changed} câu phụ đề — giọng chưa tạo lại: bấm 🔊 khi muốn nghe, hoặc Chuẩn bị / "
+                           "Xuất sẽ tự tạo lại.")
+            self._refresh_voice_btn()
         else:
             self.status.ok(f"Đã lưu {changed} câu — bấm ▶ Phát để xem lại.")
         self.window.preview.schedule_refresh(0)
@@ -577,13 +620,129 @@ class CueEditor(ctk.CTkFrame):
         return path is not None and not fresh
 
     def _update_dirty_mark(self) -> None:
-        """Nút Lưu ghi «●» khi còn câu sửa chưa lưu — bấm Xuất / Chuẩn bị app cũng tự lưu trước."""
-        from app.ui.widgets.ui import relabel
+        """Có câu sửa chưa lưu → hẹn tự lưu (ngừng gõ ``AUTOSAVE_MS``)."""
+        self._dirty_mark = bool(self.cues) and self._text_dirty()
+        if self._dirty_mark:
+            self._schedule_autosave()
 
-        dirty = bool(self.cues) and self._text_dirty()
-        if dirty != self._dirty_mark:
-            self._dirty_mark = dirty
-            relabel(self.save_btn, ("● " if dirty else "") + "Lưu & tạo lại giọng")
+    # ── Tự lưu ───────────────────────────────────────────────────────────
+    def _schedule_autosave(self, ms: int | None = None) -> None:
+        if self._autosave_id is not None:
+            try:
+                self.after_cancel(self._autosave_id)
+            except Exception:                          # noqa: BLE001
+                pass
+        self._autosave_id = self.after(self.AUTOSAVE_MS if ms is None else ms, self._autosave)
+
+    def _autosave(self) -> None:
+        self._autosave_id = None
+        if self.item is not None and self.winfo_exists() and self.cues and self._text_dirty():
+            self.save(regen=False, quiet=True)
+
+    def _flush_autosave(self) -> None:
+        """Lưu ngay chữ đang chờ tự lưu (đổi video / đóng)."""
+        if self._autosave_id is not None:
+            try:
+                self.after_cancel(self._autosave_id)
+            except Exception:                          # noqa: BLE001
+                pass
+            self._autosave_id = None
+        if self.item is not None and self.cues and self._text_dirty():
+            self.save(regen=False, quiet=True)
+
+    # ── Giọng ────────────────────────────────────────────────────────────
+    def _voice_state(self, it: VideoItem) -> tuple[bool, bool]:
+        """(có track giọng, track khớp chữ + cấu hình hiện tại)."""
+        try:
+            path, fresh, _cut = self.window.pipeline_for(it).current_voice_track(it)
+        except Exception:                            # noqa: BLE001
+            return False, False
+        return path is not None, bool(fresh)
+
+    def _refresh_voice_btn(self) -> None:
+        """Icon loa sáng màu khi video có lồng tiếng mà giọng chưa khớp chữ vừa sửa."""
+        from app.ui.widgets.ui import set_variant
+
+        it = self.item
+        stale = False
+        if it is not None and self.cues and not it.voice_locked and self.app_state.state_for(it).tts.enable_tts:
+            has, fresh = self._voice_state(it)
+            stale = has and not fresh
+        set_variant(self.voice_btn, "primary" if stale else "ghost")
+
+    def regen_voice(self) -> None:
+        """Icon loa: lưu chữ (nếu còn dở) rồi tạo lại giọng — câu không đổi dùng lại giọng cũ."""
+        it = self.item
+        if it is None or not self.cues:
+            return
+        self._flush_autosave()
+        st = self.app_state.state_for(it)
+        if not st.tts.enable_tts:
+            self.status.info("Video này chưa bật lồng tiếng — bật ở tab Lồng tiếng.")
+            return
+        if it.voice_locked:
+            self.status.info("Giọng của video này đang khoá (giọng có sẵn) — mở khoá ở tab Lồng tiếng để tạo lại.")
+            return
+        has, fresh = self._voice_state(it)
+        if has and fresh:
+            self.status.info("Giọng đã khớp lời thoại hiện tại — không cần tạo lại.")
+            return
+        self.status.warn("Đang tạo lại giọng (câu không đổi dùng lại)…")
+        self._regenerate(it)
+
+    # ── Copy / dán cho AI bên ngoài ──────────────────────────────────────
+    def _copy_menu(self) -> None:
+        import tkinter as tkm
+
+        has_tr = self.is_translation
+        m = tkm.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER, activeforeground=T.TEXT,
+                     bd=0)
+        m.add_command(label="Lời gốc + lời dặn dịch — dán cho AI dịch", command=lambda: self._copy("translate"))
+        if has_tr:
+            m.add_command(label="Song ngữ + lời dặn rà soát — dán cho AI soát bản dịch", command=lambda: self._copy("review"))
+        m.add_separator()
+        m.add_command(label="Chỉ SRT đang sửa" + (" (bản dịch)" if has_tr else ""), command=lambda: self._copy("srt"))
+        m.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def _copy(self, kind: str) -> None:
+        """Chép vào clipboard để dán thẳng vào khung chat AI: lời dặn + SRT trong khối ```srt (hoặc chỉ SRT)."""
+        from app.services import external_ai as X
+
+        it = self.item
+        if it is None or not self.cues:
+            return
+        self._sync()
+        st = self.app_state.state_for(it)
+        cur = [Cue(c.index, c.start, c.end, t) for c, t in zip(self.cues, self.texts)]
+        if kind == "srt":
+            text = X.export_source(cur).lstrip(X.BOM)
+            msg = f"Đã copy SRT đang sửa ({len(cur)} câu)."
+        else:
+            src = self.ref if self.is_translation else self.cues
+            srt = (X.export_bilingual(src, cur) if kind == "review" else X.export_source(src)).lstrip(X.BOM)
+            ask = X.prompt(kind, len(src), X.source_name(st.subtitle.stt_language, " ".join(c.plain for c in src[:20])),
+                           X.target_name(st.subtitle.translate_target), st.subtitle.translate_style,
+                           st.settings.glossary, inline=True)
+            text = f"{ask}\n```srt\n{srt.strip()}\n```\n"
+            msg = (f"Đã copy {'lời gốc' if kind == 'translate' else 'song ngữ'} + lời dặn ({len(src)} câu) — dán vào khung "
+                   "chat AI; AI trả về thì copy phần SRT rồi bấm icon dán.")
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.status.ok(msg)
+
+    def _paste_import(self) -> None:
+        """Icon dán: SRT bản dịch vừa copy từ khung chat AI → nhập (giữ mốc thời gian gốc của từng câu)."""
+        try:
+            text = self.clipboard_get()
+        except Exception:                              # noqa: BLE001
+            text = ""
+        if "-->" not in text and not re.search(r"^\s*\[?\d+\]?\s*[.:|)\]-]\s*\S", text, re.M):
+            self.status.warn("Clipboard chưa có SRT — copy phần SRT AI trả về (cả số thứ tự và mốc thời gian) rồi bấm lại.")
+            return
+        if self.on_import is None or self.item is None:
+            return
+        self._flush_autosave()
+        self.on_import(text)
 
     # ── Câu «không đọc» ──────────────────────────────────────────────────
     def _is_noread(self, i: int) -> bool:
@@ -745,7 +904,7 @@ class CueEditor(ctk.CTkFrame):
             self._ai_marks.add(i)
             changed.append(i)
         if self._ai_marks:
-            self.ai_undo.pack(side="right", padx=(0, 4), after=self.find_btn)
+            self.ai_undo.pack(side="right", padx=(0, 4))
         return changed
 
     def _revert_row(self, r: int) -> None:
@@ -777,7 +936,7 @@ class CueEditor(ctk.CTkFrame):
         current = list(self.texts)
         # câu đã đổi mà chưa lưu (AI hay người dùng tự gõ) + các lượt trước → AI hiểu hướng sửa đang theo
         changes = [(i, o, t, "AI" if self._ai_after.get(i, "").strip() == t.strip() else "user")
-                   for i, (t, o) in enumerate(zip(self.texts, self._orig_texts)) if t.strip() != o.strip()]
+                   for i, (t, o) in enumerate(zip(self.texts, self._base_texts)) if t.strip() != o.strip()]
         context = edit_context(self._ai_history, changes)
         source = [c.plain for c in self.ref] if self.is_translation else None
         st = self.app_state.state_for(it)
@@ -812,8 +971,8 @@ class CueEditor(ctk.CTkFrame):
             self._see_row(changed[0])
             self._update_dirty_mark()
             nums = ", ".join(f"#{i + 1}" for i in changed[:12]) + ("…" if len(changed) > 12 else "")
-            self._chat_add("ai", f"{note} — sửa {len(changed)} câu ({nums}), tô vàng, chưa lưu.".strip(" —"))
-            self.status.info("Xem các câu tô vàng rồi bấm «Lưu phụ đề» hoặc «Lưu & tạo lại giọng».")
+            self._chat_add("ai", f"{note} — sửa {len(changed)} câu ({nums}), tô vàng (↶ để trả lại).".strip(" —"))
+            self._schedule_autosave(300)
 
         win.run_task("AI sửa lời thoại", work, done)
 
@@ -827,7 +986,8 @@ class CueEditor(ctk.CTkFrame):
         n = len(self._ai_before)
         self._clear_ai_marks()
         self.show_page(self.page, sync=False)
-        self.status.info(f"Đã hoàn tác {n} câu AI đã sửa (chưa lưu).")
+        self.status.info(f"Đã hoàn tác {n} câu AI đã sửa.")
+        self._schedule_autosave(300)
 
     def _retranslate(self, idxs: list[int]) -> None:
         it = self.item
@@ -852,7 +1012,8 @@ class CueEditor(ctk.CTkFrame):
             changed = len(self._apply_ai(result, previous))
             self.show_page(self.page, sync=False)
             if changed:
-                self.status.ok(f"AI đã dịch lại {changed} câu (tô vàng, chưa lưu) — xem rồi bấm «Lưu & tạo lại giọng».")
+                self.status.ok(f"AI đã dịch lại {changed} câu (tô vàng, ↶ để trả lại).")
+                self._schedule_autosave(300)
             else:
                 self.status.info("AI trả về giống bản cũ — thử ô «Nhờ AI sửa» với yêu cầu cụ thể hơn.")
 

@@ -62,19 +62,22 @@ def _by_time(c: Cue, tr: list[Cue]) -> str:
     return best.plain if best is not None and min(c.end, best.end) > max(c.start, best.start) else ""
 
 
-def prompt(kind: str, n: int, src_lang: str, tgt_lang: str, style: str = "", glossary: str = "") -> str:
-    """Lời dặn dán cho AI ngoài cùng file. ``kind``: "translate" | "review"."""
+def prompt(kind: str, n: int, src_lang: str, tgt_lang: str, style: str = "", glossary: str = "",
+           inline: bool = False) -> str:
+    """Lời dặn dán cho AI ngoài cùng file. ``kind``: "translate" | "review". ``inline``: SRT dán ngay bên dưới (copy
+    vào khung chat) thay vì file đính kèm."""
+    what = "Phụ đề SRT bên dưới" if inline else "File SRT đính kèm"
     keep = (f"- Giữ NGUYÊN số thứ tự và mốc thời gian của từng câu. Không gộp, không tách, không thêm, không bỏ câu nào "
             f"— trả về đủ {n} câu (để phụ đề khớp video).\n"
             "- Mỗi câu dịch đủ ý, độ dài xấp xỉ câu gốc (được đọc lồng tiếng đúng thời gian của câu).\n"
             "- Trả về đúng định dạng SRT, toàn bộ trong MỘT khối code, không giải thích gì thêm.\n")
     if kind == "review":
-        head = (f"File SRT đính kèm là phụ đề video, {n} câu. Mỗi câu có 2 dòng: dòng 1 là lời gốc {src_lang}, dòng 2 là "
+        head = (f"{what} là phụ đề video, {n} câu. Mỗi câu có 2 dòng: dòng 1 là lời gốc {src_lang}, dòng 2 là "
                 f"bản dịch {tgt_lang}.\nHãy rà soát bản dịch: sửa câu sai nghĩa so với lời gốc, sai chính tả, lỗi kỹ "
                 f"thuật, xưng hô / tên gọi không nhất quán, câu đọc chưa tự nhiên. Câu đã ổn thì giữ nguyên.\n"
                 f"Trả về SRT chỉ còn dòng bản dịch {tgt_lang} (bỏ dòng lời gốc).\nYêu cầu bắt buộc:\n")
     else:
-        head = (f"File SRT đính kèm là phụ đề video, {n} câu, lời gốc {src_lang}. Hãy dịch sang {tgt_lang}.\n"
+        head = (f"{what} là phụ đề video, {n} câu, lời gốc {src_lang}. Hãy dịch sang {tgt_lang}.\n"
                 "Yêu cầu bắt buộc:\n")
     gl = "\n".join(ln.strip() for ln in (glossary or "").splitlines() if "=" in ln)
     return (head + keep

@@ -1653,12 +1653,7 @@ class MainWindow(_Root):
             self.stop_all()
         srt = self.modules.get("srt")
         if srt is not None and srt.editor.item is not None and srt.editor.dirty():
-            ans = messagebox.askyesnocancel(APP_NAME, f"Còn câu lời thoại sửa chưa lưu ({srt.editor.item.name}).\n\n"
-                                                      "Lưu trước khi thoát?")
-            if ans is None:
-                return
-            if ans:
-                srt.editor.save(regen=False)
+            srt.editor.save(regen=False, quiet=True)  # lời thoại tự lưu — chữ còn chờ tự lưu thì lưu luôn, không hỏi
         self.preview.stop_play()
         self.app_state.save_config()
         self.player.stop()

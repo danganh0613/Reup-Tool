@@ -54,7 +54,8 @@ class SRTModule(BaseModule):
         from app.ui.widgets.cue_editor import CueEditor
 
         self.editor = CueEditor(page, self.window, on_saved=lambda it: (self.on_active_changed(),
-                                                                       self.window.queue_update(it)))
+                                                                       self.window.queue_update(it)),
+                                on_import=lambda text: self.import_translation_text(self.state.active, text))
         self.editor.pack(fill="both", expand=True, pady=(2, 0))
         tk.Misc.bind(self._parent_canvas, "<Configure>", lambda _e: self._fit_text_page(), add="+")
         tk.Misc.bind(page, "<Map>", lambda _e: self.after_idle(self._fit_text_page), add="+")    # vừa hiện ra mới đo được
@@ -257,8 +258,9 @@ class SRTModule(BaseModule):
         self._ask_save()
 
     def _ask_save(self) -> None:
-        if self.editor.dirty() and messagebox.askyesno("Edit Studio", "Lưu các câu lời thoại vừa sửa?"):
-            self.editor.save()
+        """Lời thoại tự lưu — chữ còn chờ tự lưu thì lưu ngay (không hỏi)."""
+        if self.editor.dirty():
+            self.editor.save(regen=False, quiet=True)
 
     def on_active_changed(self) -> None:
         it = self.state.active

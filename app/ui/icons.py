@@ -35,7 +35,7 @@ GLYPHS: dict[str, int] = {
     "skipback": 0xE892, "back10": 0xED3C, "fwd10": 0xED3D, "mute": 0xE74F, "export": 0xEDE1, "info": 0xE946,
     "save": 0xE74E, "download": 0xE896, "lock": 0xE72E, "headphone": 0xE7F6, "edit": 0xE70F, "tag": 0xE8EC,
     "bulb": 0xEA80, "warning": 0xE7BA, "refresh": 0xE72C, "openfolder": 0xE8DA, "list": 0xEA37, "translate": 0xE8C1,
-    "eyedropper": 0xEF3C,
+    "eyedropper": 0xEF3C, "copy": 0xE8C8, "paste": 0xE77F, "search": 0xE721,
 }
 
 #: cùng tên icon → mã ký tự trong font đi kèm (Fluent UI System Icons, bản 24 px regular)
@@ -54,6 +54,8 @@ FLUENT_GLYPHS: dict[str, int] = {
     "download": 0xF151, "lock": 0xE790, "headphone": 0xF472, "edit": 0xF3DE, "tag": 0xF77D,
     "bulb": 0xF4D7, "warning": 0xF86A, "refresh": 0xF13E, "openfolder": 0xF42F, "list": 0xECDA,
     "translate": 0xF834, "eyedropper": 0xE5FE,
+    # font rút gọn không có copy / dán / tìm → mượn icon gần nghĩa (tài liệu, bảng, kính lúp)
+    "copy": 0xF379, "paste": 0xECDA, "search": 0xF8C5,
 }
 
 #: Emoji màu trong nhãn cũ → icon đơn sắc (giữ giao diện thống nhất, không dùng emoji làm icon)

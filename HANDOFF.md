@@ -311,6 +311,17 @@
       (giữ mốc gốc) / vẫn thay lời gốc»; đè lời gốc luôn giữ `.srt.bak`. Bản dựng lại lời gốc của video đó:
       `audit_out/khoi_phuc/tải xuống (2).loi-goc-tieng-trung.srt`.
 
+41. **Lời thoại tự lưu + thanh icon** (test `test_ai_edit_ui.py` 23, `test_qa_m.py` cập nhật):
+    - Bỏ hàng [Lưu phụ đề][Lưu & tạo lại giọng]. Chữ TỰ LƯU: ngừng gõ `AUTOSAVE_MS` = 1 s, rời ô (250 ms), AI sửa /
+      ↻ dịch lại / ↶ / Hoàn tác / Tìm & thay (300 ms), đổi video / đóng app (`_flush_autosave`) — `save(regen=False,
+      quiet=True)` giữ tô vàng + ↶ của câu AI sửa tới khi đổi video. Đóng app không còn hỏi «lưu trước khi thoát?».
+      Ngữ cảnh Nhờ AI sửa tính từ `_base_texts` (lúc mở video), không từ lần lưu cuối.
+    - Thanh icon cạnh «Bản dịch · N câu»: copy (menu: lời gốc + lời dặn dịch / song ngữ + lời dặn rà soát / chỉ SRT
+      đang sửa — lời dặn `inline=True` + khối ```srt, dán thẳng vào chat AI), dán (`on_import` → `import_translation_text`,
+      giữ mốc gốc), tìm & thay, loa (`regen_voice`: tạo lại giọng; sáng màu khi giọng chưa khớp chữ — `_voice_state`).
+    - Dòng trạng thái tự ẩn khi trống (`_AutoHideStatus`). Icon «copy / paste / search»: Segoe E8C8 / E77F / E721; font
+      đi kèm macOS chưa có → mượn icon tài liệu / bảng / kính lúp.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

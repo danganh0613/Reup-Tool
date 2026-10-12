@@ -41,8 +41,8 @@ TOPICS: list[dict] = [
                          "máy tự tạo giọng cho đoạn đó. Dùng để nghiệm thu trước khi xuất cả video."),
             ("Xoá · phím Delete", "Xoá ô che hoặc ô chữ đang chọn. Lỡ tay thì bấm Ctrl+Z để lấy lại."),
         ]),
-        ("tip", "Cấu hình và hàng đợi tự lưu — tắt máy mở lại vẫn còn. Riêng câu lời thoại đang sửa: bấm «Lưu & tạo lại "
-                "giọng» (nút có dấu ● là còn câu chưa lưu; đóng app lúc đó máy sẽ hỏi)."),
+        ("tip", "Cấu hình, hàng đợi và câu lời thoại đang sửa đều tự lưu — tắt máy mở lại vẫn còn. Sửa lời thoại xong, "
+                "bấm icon loa trên danh sách câu để tạo lại giọng (hoặc để Chuẩn bị / Xuất tự tạo lại)."),
         ("h", "Mẫu: làm hàng loạt video giống nhau"),
         ("steps", [
             "Chọn mẫu có sẵn ở ô «Mẫu» trên cùng (Review phim dọc 9:16, Thuyết minh ngang 16:9, Reup nhanh không lời…), "
@@ -64,7 +64,7 @@ TOPICS: list[dict] = [
             "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa xuất). "
             "Xong tự mở tab «Duyệt» (thanh bên trái) — khung xem trước vẫn ở ngay cạnh.",
             "Tab Duyệt: ‹ › hoặc ô chọn để đổi video, ▶ Phát để xem. Thấy câu sai: bấm «Sửa ›» ở dòng «Lời thoại» → sửa ở "
-            "tab Lời thoại → «Lưu & tạo lại giọng» (câu không đổi dùng lại, rất nhanh) → «‹ Về Duyệt».",
+            "tab Lời thoại (tự lưu) → icon loa để tạo lại giọng (câu không đổi dùng lại, rất nhanh) → «‹ Về Duyệt».",
             "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video chờ kế), không dùng thì «Bỏ qua».",
             "Bấm «Xuất (n)» trên cùng: chỉ xuất video đã duyệt, dùng lại phụ đề / giọng đã chuẩn bị. Sửa video đã xuất "
             "→ nó thành «Cần xuất lại», bấm «Duyệt» lại rồi «Xuất».",
@@ -193,8 +193,8 @@ TOPICS: list[dict] = [
             "Ô «Phong cách» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
             "Bấm «Dịch phụ đề». AI dịch 2 bước: dịch sát nghĩa rồi tự đọc lại, viết cho tự nhiên; có lồng tiếng thì rút gọn "
             "câu đọc không kịp. Khoảng 10–15 lượt gọi AI mỗi video ngắn.",
-            "Đọc lại ở tab «Lời thoại» (cả bảng là danh sách câu, lăn chuột để cuộn). Sửa trực tiếp, bấm «Lưu phụ đề» "
-            "(chỉ lưu chữ) hoặc «Lưu & tạo lại giọng» — chỉ câu nào sửa mới đọc lại giọng.",
+            "Đọc lại ở tab «Lời thoại» (cả bảng là danh sách câu, lăn chuột để cuộn). Sửa trực tiếp — tự lưu; bấm icon loa "
+            "trên danh sách để tạo lại giọng (chỉ câu nào sửa mới đọc lại).",
         ]),
         ("h", "Dịch chưa hay — nhờ AI sửa"),
         ("steps", [
@@ -202,8 +202,10 @@ TOPICS: list[dict] = [
             "mày», «rà lại cả kịch bản cho thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), "
             "câu khác giữ nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các lượt trước và các câu vừa đổi.",
             "Chỉ một câu dở: bấm ↻ cạnh câu đó để AI dịch lại riêng câu ấy.",
-            "Câu AI sửa được tô vàng, dòng nhỏ ghi câu cũ; bấm ↶ cạnh câu để trả lại, «Hoàn tác» trả lại hết, ưng thì "
-            "«Lưu & tạo lại giọng».",
+            "Câu AI sửa được tô vàng (đã tự lưu), dòng nhỏ ghi câu cũ; bấm ↶ cạnh câu để trả lại, «Hoàn tác» trả lại hết; "
+            "ưng thì bấm icon loa để tạo lại giọng.",
+            "Dịch / soát bằng AI bên ngoài: icon copy (trên danh sách câu) chép lời gốc hoặc song ngữ kèm lời dặn → dán vào "
+            "ChatGPT / Gemini web → copy phần SRT AI trả về → icon dán. Máy giữ mốc thời gian gốc nên không lệch video.",
             "Đang duyệt: từ tab Duyệt bấm «Sửa ›» ở dòng Lời thoại để tới đây.",
             "Bản sửa được nhớ lại: lần sau dịch video có câu giống vậy sẽ dùng bản mới.",
         ]),
