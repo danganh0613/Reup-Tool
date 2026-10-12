@@ -1,9 +1,9 @@
 """Đóng gói bộ cài Edit Studio bằng WinRAR SFX (máy build cần WinRAR; máy nhận KHÔNG cần gì).
 
-    python tools\\make_installer.py            → release\\EditStudio-<ver>-Setup.exe (đủ, có CUDA)
-                                                 release\\EditStudio-<ver>-Setup-Lite.exe (không có cuda\\)
-    python tools\\make_installer.py --lite     → chỉ bản Lite
-    python tools\\make_installer.py --full     → chỉ bản đủ
+    python tools\\make_installer.py            → release\\EditStudio-<ver>-Setup-Lite.exe (không có cuda\\ — mặc định:
+                                                 Whisper dùng chung CUDA của bộ nghe Qwen, khỏi đóng gói thêm ~1,7 GB)
+    python tools\\make_installer.py --full     → chỉ bản đủ (có cuda\\: máy NVIDIA chưa cài bộ nghe Qwen)
+    python tools\\make_installer.py --both     → cả hai bản
 
 Bộ cài = file .exe tự giải nén: mở lên có hộp thoại chọn thư mục (mặc định %LocalAppData%\\Programs\\Edit Studio),
 tự tạo lối tắt Desktop + Start Menu. Yêu cầu dist\\EditStudio đã build (build.bat).
@@ -54,8 +54,9 @@ CÀI ĐẶT
   4. Mở bằng lối tắt "Edit Studio" trên Desktop hoặc Start Menu.
 
 HAI BẢN
-  • Setup.exe (đủ, ~1.1 GB): có sẵn CUDA runtime → máy có card NVIDIA nhận dạng giọng nói (Whisper) nhanh gấp 5–10 lần.
-  • Setup-Lite.exe (~300 MB): không có CUDA. Máy nào cũng chạy được, Whisper chạy bằng CPU (chậm hơn, vẫn đúng).
+  • Setup-Lite.exe (~450 MB, khuyên dùng): không kèm CUDA. Đã cài bộ nghe lời thoại (Qwen3-ASR) thì Whisper kiểm
+    giọng đọc dùng chung CUDA của bộ đó → máy card NVIDIA vẫn chạy GPU, không phải tải thêm.
+  • Setup.exe (đủ, ~1.3 GB): kèm CUDA runtime — chỉ cần khi máy có card NVIDIA mà KHÔNG cài bộ nghe Qwen.
     Máy có card NVIDIA vẫn dùng được GPU để RENDER video (NVENC) ở cả hai bản.
 
 MÁY KHÁC CẦN GÌ?
@@ -140,9 +141,9 @@ def build(flavor: str) -> Path:
 
 
 def main() -> None:
-    flavors = ["full", "lite"]
-    if "--lite" in sys.argv:
-        flavors = ["lite"]
+    flavors = ["lite"]                                  # Whisper dùng chung CUDA của bộ nghe Qwen → bản gọn là đủ
+    if "--both" in sys.argv:
+        flavors = ["full", "lite"]
     elif "--full" in sys.argv:
         flavors = ["full"]
     check_dist()

@@ -53,6 +53,53 @@ def _add_cuda_dll_dirs() -> None:
             except OSError:
                 pass
             os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+    _share_qwen_cuda()
+
+
+#: cuBLAS 12 + cuDNN 9 mà bộ nghe Qwen (torch cu12) đã mang sẵn — Whisper dùng chung, khỏi tải / đóng gói thêm ~1,7 GB
+_QWEN_CUDA = ("cudart64_12.dll", "cublasLt64_12.dll", "cublas64_12.dll", "cudnn_graph64_9.dll",
+              "cudnn_engines_precompiled64_9.dll", "cudnn_engines_runtime_compiled64_9.dll", "cudnn_heuristic64_9.dll",
+              "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll", "cudnn_adv64_9.dll", "cudnn64_9.dll")
+_qwen_cuda: bool | None = None
+
+
+def qwen_cuda_dir() -> Path:
+    from app.config.paths import MODELS_DIR
+
+    return MODELS_DIR / "qwen_asr_env" / "Lib" / "site-packages" / "torch" / "lib"
+
+
+def _share_qwen_cuda() -> bool:
+    """Chưa có cuBLAS / cuDNN ở chỗ nào khác → nạp sẵn đúng các DLL CUDA của bộ Qwen theo đường dẫn đầy đủ (ctranslate2
+    gọi tên nào đã nạp thì Windows dùng luôn). KHÔNG thêm cả thư mục torch\\lib vào đường tìm DLL: trong đó có
+    libiomp5md.dll riêng của torch → xung đột OpenMP với PaddleOCR / ctranslate2."""
+    global _qwen_cuda
+    import ctypes
+    import os
+
+    if os.name != "nt" or _qwen_cuda is not None:
+        return bool(_qwen_cuda)
+    try:
+        ctypes.WinDLL("cublas64_12.dll")
+        ctypes.WinDLL("cudnn64_9.dll")
+        _qwen_cuda = False                              # đã có sẵn (đóng gói / pip / CUDA Toolkit) → không cần
+        return False
+    except OSError:
+        pass
+    lib = qwen_cuda_dir()
+    if not (lib / "cublas64_12.dll").exists() or not (lib / "cudnn64_9.dll").exists():
+        _qwen_cuda = False
+        return False
+    try:
+        for name in _QWEN_CUDA:
+            if (lib / name).exists():
+                ctypes.WinDLL(str(lib / name))
+        _qwen_cuda = True
+        logger.info("Whisper dùng chung CUDA của bộ nghe Qwen: %s", lib)
+    except OSError:
+        logger.warning("Không nạp được CUDA của bộ nghe Qwen", exc_info=True)
+        _qwen_cuda = False
+    return _qwen_cuda
 
 
 def cuda_ready() -> bool:
