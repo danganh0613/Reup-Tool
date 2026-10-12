@@ -89,6 +89,10 @@ TTS_SOURCE_LABELS = {TTS_SOURCES[0]: "Bản dịch", TTS_SOURCES[1]: "Lời gố
 SPEAKER_COUNTS = ["Tự động", "1", "2", "3", "4", "5", "6", "8"]
 
 
+#: «Dung lượng file xuất» (``VideoConfig.size_mode``): đăng mạng xã hội = H.264 có trần bitrate (nền tảng tự nén lại
+#: sau khi đăng, bitrate cao hơn không đẹp hơn) · nhẹ nhất = H.265 trần ½ · giữ chất lượng tối đa = không giới hạn
+SIZE_MODES = {"social": "Đăng mạng xã hội (khuyên dùng)", "small": "Nhẹ nhất — H.265", "max": "Giữ chất lượng tối đa"}
+
 # ── Dataclass cấu hình ───────────────────────────────────────────────────
 
 @dataclass
@@ -98,6 +102,7 @@ class VideoConfig:
     resolution: str = RESOLUTIONS[0]
     fps: str = FPS_OPTIONS[0]
     zoom: int = 100
+    size_mode: str = "social"           # ``SIZE_MODES``
     #: canh nội dung trong khung ra (−50…50 %, 0 = giữa): nền mờ / viền đen → dời video lên-xuống / trái-phải;
     #: cắt vừa khung → chọn phần giữ lại; phóng to → chọn vùng phóng. Dương = sang phải / xuống dưới
     offset_x: int = 0

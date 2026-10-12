@@ -9,7 +9,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.core.state import ENCODE_PRESETS, GPU_BACKENDS, RATIO_VALUES, VIDEO_CODECS
+from app.core.state import ENCODE_PRESETS, GPU_BACKENDS, RATIO_VALUES, SIZE_MODES, VIDEO_CODECS
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
 from app.ui.queue_panel import QueuePanel
@@ -74,6 +74,19 @@ class VideoModule(BaseModule):
         pack_rows(sec.body, [self.zoom, self.off_x, self.off_y, self.speed])
         self.flip = SwitchRow(sec.body, "Lật ngang video (soi gương)", on_change=s(cfg, "flip_h"))
         self.flip.pack(fill="x", pady=3)
+
+        # dung lượng file xuất: nền tảng tự nén lại sau khi đăng → bitrate cao hơn không đẹp hơn, chỉ nặng file
+        sec = self.size_sec = Section(self, "Dung lượng file xuất",
+                                      info="TikTok / Reels / Shorts / Facebook tự nén lại video sau khi đăng — file "
+                                           "bitrate cao không đẹp hơn trên mạng, chỉ nặng và tải lên lâu. «Đăng mạng "
+                                           "xã hội»: giới hạn bitrate (1080p ~6 Mbps, gần như không thấy khác). «Nhẹ "
+                                           "nhất»: H.265, file còn ~½ (nền tảng lớn đều nhận). «Giữ chất lượng tối "
+                                           "đa»: không giới hạn (file có thể gấp 3–4 lần video gốc).")
+        sec.pack(fill="x", pady=4)
+        self.size = OptionRow(sec.body, "Xuất để", list(SIZE_MODES), labels=SIZE_MODES, on_change=self._size_changed)
+        self.size.pack(fill="x", pady=3)
+        self.size_hint = hint(sec.body, "")
+        self.size_hint.pack(fill="x")
 
         sec = Section(self, "Cấu hình của video đang chọn",
                       info="Mọi video dùng chung mẫu ở thanh trên cùng. Bật «Chỉnh riêng» khi video này cần khác (vd chữ "
@@ -167,6 +180,7 @@ class VideoModule(BaseModule):
         self._loading = True
         try:
             self.zoom.set(_label_for(ZOOM_LABELS, int(cfg.zoom)))
+            self.size.set(cfg.size_mode if cfg.size_mode in SIZE_MODES else "social")
             self.off_x.set(int(getattr(cfg, "offset_x", 0)))
             self.off_y.set(int(getattr(cfg, "offset_y", 0)))
             self.speed.set(_label_for(SPEED_LABELS, int(cfg.speed)))
@@ -187,6 +201,7 @@ class VideoModule(BaseModule):
             self._loading = False
         self.update_fit_hint()
         self.update_own()
+        self._size_summary()
         self._update_gpu_hint()
         self._name_example()
         self._refresh_watch()
@@ -195,6 +210,7 @@ class VideoModule(BaseModule):
         self.update_fit_hint()
         self.update_own()
         self._name_example()
+        self._size_summary()
 
     def _name_example(self) -> None:
         """Ví dụ tên file xuất theo mẫu tên đang nhập + thư mục xuất đang dùng."""
@@ -375,6 +391,32 @@ class VideoModule(BaseModule):
             return available_encoders(ff)
 
         self.window.run_bg(work, done)
+
+    def _size_changed(self, mode: str) -> None:
+        self.set_value(self.state.video, "size_mode", mode if mode in SIZE_MODES else "social", preview=False)
+        self._size_summary()
+
+    def _size_summary(self) -> None:
+        """Ước lượng dung lượng mỗi phút theo khung ra (độ phân giải / video đang chọn) và trần bitrate."""
+        from app.services.render_pipeline import audio_bitrate, bitrate_cap
+
+        cfg = self.state.video
+        it = self.state.active
+        short = {"720p": 720, "1080p": 1080, "1440p": 1440, "4K": 2160}.get(cfg.resolution) or (
+            min(it.width, it.height) if it is not None and it.width and it.height else 1080)
+        fps = float(cfg.fps) if str(cfg.fps).isdigit() else (it.fps if it is not None and it.fps else 30.0)
+        cap = bitrate_cap(cfg, short, short, fps)
+        if cap is None:
+            text = "Không giới hạn bitrate — thường 60–90 MB mỗi phút ở 1080p (gấp 3–4 lần video tải về)."
+            sub = "tối đa"
+        else:
+            mb = (cap + int(audio_bitrate(cfg).rstrip("k")) / 1000) * 60 / 8
+            codec = "H.265" if cfg.size_mode == "small" or cfg.video_codec == VIDEO_CODECS[1] else "H.264"
+            text = (f"{codec} · tối đa {cap:g} Mbps ở {short}p · ≈ {mb:.0f} MB mỗi phút (cảnh tĩnh nhẹ hơn)."
+                    + (" «Nhẹ nhất» luôn dùng H.265 (bỏ qua «Chuẩn nén»)." if cfg.size_mode == "small" else ""))
+            sub = f"≈ {mb:.0f} MB / phút"
+        self.size_hint.configure(text=text)
+        self.size_sec.set_subtitle(sub)
 
     def _zoom_changed(self, label: str) -> None:
         val = next((k for k, v in ZOOM_LABELS.items() if v == label), 100)

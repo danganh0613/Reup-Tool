@@ -647,11 +647,43 @@ def cpu_fallback(ffmpeg: FFmpeg, enc_args: list[str], exc: BaseException,
     return True
 
 
-def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | None = None) -> list[str]:
-    hevc = cfg.video_codec == VIDEO_CODECS[1]
+#: trần bitrate hình H.264 (Mbps) theo cạnh ngắn của khung ra — đo trên video review 1080×1920 (audit_out/bitrate):
+#: trần 6 Mbps giữ VMAF 98,5 so với bản không giới hạn (10–12 Mbps), file nhẹ ~½; TikTok / Reels / Shorts / Facebook
+#: nén lại sau khi đăng nên bitrate cao hơn không đẹp hơn
+_CAP_H264 = ((720, 3.5), (1080, 6.0), (1440, 10.0), (100000, 20.0))
+AUDIO_SOCIAL, AUDIO_MAX = "128k", "192k"
+
+
+def bitrate_cap(cfg: VideoConfig, width: int, height: int, fps: float = 30.0) -> float | None:
+    """Trần bitrate hình (Mbps) theo «Dung lượng file xuất»; None = không giới hạn (giữ chất lượng tối đa)."""
+    mode = getattr(cfg, "size_mode", "social")
+    if mode == "max":
+        return None
+    short = min(width, height) if width and height else 1080
+    cap = next(c for s, c in _CAP_H264 if short <= s)
+    if fps and fps > 31:
+        cap *= 1.5
+    if cfg.video_codec == "AV1":
+        cap *= 0.45
+    elif mode == "small" or cfg.video_codec == VIDEO_CODECS[1]:
+        cap *= 0.5                                       # H.265 cùng chất lượng ~½ bitrate (đo: 3 Mbps VMAF 95)
+    return round(cap, 2)
+
+
+def audio_bitrate(cfg: VideoConfig) -> str:
+    return AUDIO_MAX if getattr(cfg, "size_mode", "social") == "max" else AUDIO_SOCIAL
+
+
+def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | None = None,
+                 cap: float | None = None) -> list[str]:
+    """``cap``: trần bitrate hình (Mbps, ``bitrate_cap``) — None = chỉ theo chất lượng (như cũ)."""
     av1 = cfg.video_codec == "AV1"
+    hevc = not av1 and (cfg.video_codec == VIDEO_CODECS[1] or getattr(cfg, "size_mode", "") == "small")
     q = max(1, min(51, int(cfg.quality)))
     preset_idx = ENCODE_PRESETS.index(cfg.encode_preset) if cfg.encode_preset in ENCODE_PRESETS else 1
+    # chất lượng theo q nhưng không vượt trần (VBR có trần / CRF có trần); bộ đệm 2 giây
+    rate = ["-maxrate", f"{cap:.2f}M", "-bufsize", f"{2 * cap:.2f}M"] if cap else []
+    avg = f"{0.8 * cap:.2f}M" if cap else ""
 
     order: list[str] = []
     if cfg.use_gpu:
@@ -671,23 +703,28 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
         opts = ffmpeg.encoder_options(enc)
         if backend == "nvenc":
             p = ["p3", "p5", "p7"][preset_idx]
-            args = ["-c:v", enc, "-preset", p, "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0"]
+            args = ["-c:v", enc, "-preset", p, "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0", *rate]
             for names in (("spatial-aq", "spatial_aq"), ("temporal-aq", "temporal_aq")):
                 name = _option(opts, *names)
                 if name:                                 # bản ffmpeg không có (hay không dò được) → bỏ, không lỗi
                     args += [f"-{name}", "1"]
         elif backend == "qsv":
             p = ["veryfast", "medium", "slower"][preset_idx]
-            args = ["-c:v", enc, "-preset", p, "-global_quality", str(q)]
+            # ICQ (global_quality) không nhận trần → có trần thì chạy VBR
+            args = ["-c:v", enc, "-preset", p, *(["-b:v", avg, *rate] if cap else ["-global_quality", str(q)])]
         elif backend == "videotoolbox":
-            # -q:v 1–100 (cao = đẹp): quy đổi gần đúng từ thang CRF — 18 → 65, 23 → 55, 28 → 45
-            args = ["-c:v", enc, "-q:v", str(max(1, min(100, 101 - 2 * q))), "-allow_sw", "1"]
+            # -q:v 1–100 (cao = đẹp): quy đổi gần đúng từ thang CRF — 18 → 65, 23 → 55, 28 → 45; có trần → bitrate
+            args = ["-c:v", enc, *(["-b:v", avg] if cap else ["-q:v", str(max(1, min(100, 101 - 2 * q)))]),
+                    "-allow_sw", "1"]
             if not hevc:
                 args += ["-profile:v", "high"]
         else:
             p = ["speed", "balanced", "quality"][preset_idx]
-            args = ["-c:v", enc, "-quality", p, "-rc", "cqp", f"-{_option(opts, 'qp_i', 'qp-i') or 'qp_i'}", str(q),
-                    f"-{_option(opts, 'qp_p', 'qp-p') or 'qp_p'}", str(q)]
+            if cap:                                      # CQP không nhận trần → VBR đỉnh
+                args = ["-c:v", enc, "-quality", p, "-rc", "vbr_peak", "-b:v", avg, *rate]
+            else:
+                args = ["-c:v", enc, "-quality", p, "-rc", "cqp", f"-{_option(opts, 'qp_i', 'qp-i') or 'qp_i'}", str(q),
+                        f"-{_option(opts, 'qp_p', 'qp-p') or 'qp_p'}", str(q)]
         if hevc:
             args += ["-tag:v", "hvc1"]
         return args
@@ -695,10 +732,11 @@ def pick_encoder(ffmpeg: FFmpeg, cfg: VideoConfig, log: Callable[[str], None] | 
         log("Encoder CPU: " + ("libx265" if hevc else "libx264"))
     p = ["veryfast", "medium", "slow"][preset_idx]
     if av1:
-        return ["-c:v", "libsvtav1", "-preset", ["10", "8", "6"][preset_idx], "-crf", str(min(63, q + 8))]
+        return ["-c:v", "libsvtav1", "-preset", ["10", "8", "6"][preset_idx], "-crf", str(min(63, q + 8)), *rate]
     if hevc:
-        return ["-c:v", "libx265", "-preset", p, "-crf", str(q), "-tag:v", "hvc1", "-x265-params", "log-level=error"]
-    return ["-c:v", "libx264", "-preset", p, "-crf", str(q), "-profile:v", "high"]
+        return ["-c:v", "libx265", "-preset", p, "-crf", str(q), *rate, "-tag:v", "hvc1", "-x265-params",
+                "log-level=error"]
+    return ["-c:v", "libx264", "-preset", p, "-crf", str(q), *rate, "-profile:v", "high"]
 
 
 # ── Kế hoạch render ───────────────────────────────────────────────────────
@@ -823,16 +861,21 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
     # FFmpeg ≥ 7: "-/option file" đọc giá trị option từ file (thay cho -filter_complex_script đã bỏ)
     cmd += ["-/filter_complex", script.name, "-map", vg.vout]
     if m_idx is not None:
-        cmd += ["-map", f"{m_idx}:a", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+        cmd += ["-map", f"{m_idx}:a", "-c:a", "aac", "-b:a", audio_bitrate(vcfg), "-ar", "48000"]
     else:
         cmd += ["-an"]
     tail = ["-g", str(int(vcfg.gop_size)), "-keyint_min", str(max(1, int(vcfg.gop_size) // 2))]         if vcfg.gop_size and vcfg.gop_size > 0 else []
     tail += ["-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_path)]
-    enc = pick_encoder(ffmpeg, vcfg, log)
+    fps_out = float(vcfg.fps) if str(vcfg.fps).isdigit() else (info.fps or 30.0)
+    cap = bitrate_cap(vcfg, vg.ctx.width, vg.ctx.height, fps_out)        # «Dung lượng file xuất»
+    enc = pick_encoder(ffmpeg, vcfg, log, cap=cap)
+    if log and cap:
+        log(f"Dung lượng file: trần hình {cap:g} Mbps · tiếng {audio_bitrate(vcfg)} "
+            f"({'nhẹ nhất, H.265' if vcfg.size_mode == 'small' else 'đăng mạng xã hội'})")
     cpu_cmd = None
     if hw_encoder_of(enc):
         from dataclasses import replace as _replace
-        cpu_cmd = cmd + pick_encoder(ffmpeg, _replace(vcfg, use_gpu=False)) + tail
+        cpu_cmd = cmd + pick_encoder(ffmpeg, _replace(vcfg, use_gpu=False), cap=cap) + tail
     return RenderPlan(cmd=cmd + enc + tail, cwd=job_dir, duration=dur, out_path=out_path, audio_cmd=audio_cmd,
                       mix_path=mix_path, master_path=master_path, loudness=target, enc_args=enc, cpu_cmd=cpu_cmd)
 

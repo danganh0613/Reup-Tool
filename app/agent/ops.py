@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from app.core.state import FIT_MODES, PREPARE_UNTIL, RATIOS, VideoItem
+from app.core.state import FIT_MODES, PREPARE_UNTIL, RATIOS, SIZE_MODES, VideoItem
 
 RATIO_KEYS = {"goc": RATIOS[0], "21:9": RATIOS[1], "16:9": RATIOS[2], "4:3": RATIOS[3], "1:1": RATIOS[4],
               "3:4": RATIOS[5], "4:5": RATIOS[6], "9:16": RATIOS[7]}
@@ -346,7 +346,8 @@ def _regen_voice(host: GuiHost, it: VideoItem, wait_s: int) -> str:
 # ── 5. settings ────────────────────────────────────────────────────────────
 def settings(host: GuiHost, template: str | None = None, ratio: str | None = None, fit: str | None = None,
              offset_x: int | None = None, offset_y: int | None = None, zoom: int | None = None,
-             target: str | None = None, style: str | None = None, until: str | None = None) -> dict:
+             target: str | None = None, style: str | None = None, until: str | None = None,
+             size: str | None = None) -> dict:
     from app.core.state import TRANSLATE_TARGETS
     from app.services import templates as TP
 
@@ -373,6 +374,10 @@ def settings(host: GuiHost, template: str | None = None, ratio: str | None = Non
             v.offset_y = max(-50, min(50, int(offset_y)))
         if zoom is not None:
             v.zoom = max(100, min(400, int(zoom)))
+        if size is not None:
+            if size not in SIZE_MODES:
+                raise ValueError(f"size: {' | '.join(SIZE_MODES)}")
+            v.size_mode = size
         if target is not None:
             if target not in TRANSLATE_TARGETS:
                 raise ValueError(f"target: {' | '.join(TRANSLATE_TARGETS)}")
@@ -383,17 +388,17 @@ def settings(host: GuiHost, template: str | None = None, ratio: str | None = Non
             if until not in PREPARE_UNTIL:
                 raise ValueError(f"until: {' | '.join(PREPARE_UNTIL)}")
             w._set_prepare_until(until)
-        if any(x is not None for x in (ratio, fit, offset_x, offset_y, zoom)):
+        if any(x is not None for x in (ratio, fit, offset_x, offset_y, zoom, size)):
             st.config_changed("video")
         if target is not None or style is not None:
             st.config_changed("subtitle")
-        if any(x is not None for x in (template, ratio, fit, offset_x, offset_y, zoom, target, style)):
+        if any(x is not None for x in (template, ratio, fit, offset_x, offset_y, zoom, target, style, size)):
             w.refresh_modules()
             w.preview.schedule_refresh(0)
         rkey = next((k for k, x in RATIO_KEYS.items() if x == v.ratio), v.ratio)
         fkey = next((k for k, x in FIT_KEYS.items() if x == v.fit_mode), v.fit_mode)
         return {"template": st.template_name or "", "ratio": rkey, "fit": fkey, "offset_x": v.offset_x,
-                "offset_y": v.offset_y, "zoom": v.zoom, "target": sub.translate_target,
+                "offset_y": v.offset_y, "zoom": v.zoom, "size": v.size_mode, "target": sub.translate_target,
                 "style": _clip(sub.translate_style, 160), "until": st.settings.prepare_until,
                 "templates": [t.name for t in TP.list_templates()]}
 

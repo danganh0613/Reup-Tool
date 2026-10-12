@@ -34,13 +34,15 @@ TOOLS: list[dict] = [
          "request": {"type": "string"}, "voice": {"type": "boolean"}, "wait_s": {"type": "integer"}}}},
     {"name": "settings",
      "description": "Get/set shared settings: template, output frame (ratio, fit, offset_x/offset_y -50..50, zoom "
-                    "100..400), translation target + style, until. No args = read only.",
+                    "100..400), file size (size), translation target + style, until. No args = read only.",
      "inputSchema": {"type": "object", "properties": {
          "template": {"type": "string"},
          "ratio": {"type": "string", "enum": ["goc", "9:16", "16:9", "1:1", "4:5", "3:4", "4:3", "21:9"]},
          "fit": {"type": "string", "enum": ["nen_mo", "vien_den", "cat"],
                  "description": "nen_mo = blurred bars above/below, vien_den = black bars, cat = crop to fill"},
          "offset_x": {"type": "integer"}, "offset_y": {"type": "integer"}, "zoom": {"type": "integer"},
+         "size": {"type": "string", "enum": ["social", "small", "max"],
+                  "description": "social = capped bitrate for TikTok/Reels/Shorts/FB, small = H.265 half, max = no cap"},
          "target": {"type": "string"}, "style": {"type": "string"},
          "until": {"type": "string", "enum": ["all", "source", "translation"]}}}},
 ]

@@ -434,6 +434,17 @@
     - Nút chính: video «Chờ bản dịch» chưa dán bản dịch (`_needs_paste`) không che «Xuất (n)»; bấm Xuất thì xuất video đã
       duyệt, không hỏi.
 
+51. **Dung lượng file xuất** (test `test_size.py` 17; người dùng: video vào 52 MB, xuất ra 180 MB):
+    - Nguyên nhân: NVENC `-rc vbr -cq 23 -b:v 0` không trần → ~11,6 Mbps (video tải về ~3 Mbps). Đo VMAF
+      (`audit_out/bitrate/probe_bitrate.py`): trần H.264 6 Mbps → ~95 MB, VMAF 98,5 so với bản không trần; HEVC 3 Mbps → ~49 MB,
+      VMAF 95,3.
+    - `VideoConfig.size_mode` (`SIZE_MODES`): `social` (mặc định) = giữ CQ nhưng `-maxrate/-bufsize` theo cạnh ngắn khung ra
+      (720p 3,5 · 1080p 6 · 1440p 10 · 4K 20 Mbps; > 31 khung/giây ×1,5; H.265 ×½, AV1 ×0,45) + tiếng 128k; `small` = luôn
+      H.265, trần ½; `max` = như cũ (không trần, tiếng 192k). `render_pipeline.bitrate_cap` / `audio_bitrate`.
+    - `pick_encoder(cap=)`: NVENC / CPU thêm trần; QSV (ICQ) và AMF (CQP) không nhận trần → có trần thì chạy VBR
+      (`-b:v` 0,8 × trần); VideoToolbox có trần → `-b:v`. Nhật ký xuất ghi «Dung lượng file: trần hình … · tiếng …».
+    - Tab Video: khối «Dung lượng file xuất» (sau Khung hình) — «Xuất để» + ước lượng MB mỗi phút; agent `settings(size)`.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).
