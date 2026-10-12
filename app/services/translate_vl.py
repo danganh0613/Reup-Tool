@@ -40,7 +40,7 @@ MIN_FILL = 0.7                           # câu dịch nên đọc ≥ 70 % th�
 MIN_MEANING = 0.6                        # câu phóng tác < 60 % số âm tiết bản dịch sát → nhiều khả năng đã bỏ ý → bù lại
 TOLERANCE = 1.5                          # config tolerance: câu được mượn tối đa 1,5 s khoảng lặng sau nó
 MAX_SPLIT_TOKENS = 20                    # config max_split_length
-STYLE_TAG = "|vl-motluot2"              # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
+STYLE_TAG = "|vl-hoso1"                 # khoá bộ nhớ dịch / tiến độ riêng cho cách dịch này (đổi lời nhắc → đổi khoá)
 
 
 # ── Lời nhắc (nguyên văn VideoLingo core/prompts.py) ──────────────────────
@@ -459,11 +459,15 @@ def _free_broken(free, direct: str) -> bool:
 
 
 def whole_prompt(rows: list[str], budgets: list[tuple[int, int]] | None, src_lang: str, tgt_lang: str, style: str,
-                 custom_terms: list[dict], before: list[str], known_terms: list[dict] | None = None) -> str:
+                 custom_terms: list[dict], before: list[str], known_terms: list[dict] | None = None,
+                 brief: str = "", speakers: list[str] | None = None) -> str:
     """Cả video (hoặc một phần dài) trong một lượt: AI đọc hết câu chuyện rồi mới dịch — xưng hô, tên gọi nhất quán,
     hiểu câu đùa / biệt danh theo cả video. Mỗi câu trả cả dịch sát lẫn dịch thoát (vừa số âm tiết của câu)."""
-    numbered = "\n".join(f"{n}. " + (f"[{budgets[n - 1][0]}-{budgets[n - 1][1]} syllables] " if budgets else "") + t
+    numbered = "\n".join(f"{n}. " + (f"[{budgets[n - 1][0]}-{budgets[n - 1][1]} syllables] " if budgets else "")
+                          + (f"[{speakers[n - 1]}] " if speakers and speakers[n - 1] else "") + t
                           for n, t in enumerate(rows, 1))
+    brief_sec = ("## Script brief — decided for the whole video, follow it exactly (who speaks, pronoun pair, names, "
+                 "repeated lines word for word)\n" + brief.strip() + "\n\n") if brief.strip() else ""
     fit = (", with a number of syllables inside its [min-max syllables] range (one syllable = one spoken word / "
            "Vietnamese syllable): long enough to fill the speaking time, short enough to fit") if budgets else ""
     terms = ("### Terms the user requires (always use these)\n"
@@ -493,7 +497,7 @@ Exactly one output per line number, in the same order; never merge, split or ski
 
 {source_note(src_lang)}
 
-{transcreation_section(tgt_lang)}{style_section(style)}{terms}{ctx}## Lines ({len(rows)} lines)
+{transcreation_section(tgt_lang)}{style_section(style)}{brief_sec}{terms}{ctx}## Lines ({len(rows)} lines)
 {numbered}
 
 ## Output in only JSON format and no other text
@@ -504,6 +508,163 @@ Exactly one output per line number, in the same order; never merge, split or ski
 Note: Start you answer with ```json and end with ```, do not add any other text.
 {QUOTE_RULE}
 '''.strip()
+
+
+# ── Hồ sơ kịch bản: AI đọc cả video MỘT lần, chốt người nói + xưng hô, tên riêng, bản dịch câu lặp — mọi phần dịch sau
+#    (và Nhờ AI sửa) theo đúng hồ sơ này → cả video nhất quán. Lưu thành chữ (người dùng xem / sửa được) ──────────
+BRIEF_PEOPLE, BRIEF_TERMS, BRIEF_REPEAT = "Người nói:", "Tên riêng / thuật ngữ:", "Câu lặp (dùng đúng bản này ở mọi chỗ):"
+
+
+def _norm_src(s: str) -> str:
+    """Lời gốc rút gọn để so câu lặp (bỏ dấu câu, khoảng trắng)."""
+    return re.sub(r"[\s\W_]+", "", s or "").lower()
+
+
+def repeated_groups(lines: list[str]) -> dict[str, list[int]]:
+    """Câu gốc xuất hiện ≥ 2 lần (vd câu hỏi lặp mỗi đoạn review) → {lời gốc rút gọn: [chỉ số câu]}."""
+    groups: dict[str, list[int]] = {}
+    for i, t in enumerate(lines):
+        k = _norm_src(t)
+        if len(k) >= 2:
+            groups.setdefault(k, []).append(i)
+    return {k: v for k, v in groups.items() if len(v) >= 2}
+
+
+def brief_prompt(lines: list[str], speakers: list[str] | None, src_lang: str, tgt_lang: str, style: str,
+                 custom_terms: list[dict], repeats: list[tuple[str, int, tuple[int, int] | None]]) -> str:
+    numbered = "\n".join(f"{n}. " + (f"[{speakers[n - 1]}] " if speakers and speakers[n - 1] else "") + t
+                         for n, t in enumerate(lines, 1))
+    rep_rows = "\n".join(f"- {src} (x{cnt}" + (f", {r[0]}-{r[1]} syllables" if r else "") + ")" for src, cnt, r in repeats)
+    terms = ("### Terms the user requires (always use these)\n"
+             + "\n".join(f"- {t['src']} → {t['tgt']}" for t in custom_terms) + "\n\n") if custom_terms else ""
+    sample = json.dumps({"summary": "…", "tone": "…",
+                         "people": [{"speaker": "Người 1", "who": "nam, người hỏi", "self": "tao", "calls": "mày"}],
+                         "terms": [{"src": f"{src_lang} name", "tgt": f"{tgt_lang} rendering"}],
+                         "repeated": [{"src": "repeated source line", "tgt": f"one {tgt_lang} line for every occurrence"}]},
+                        ensure_ascii=False, indent=2)
+    return f'''
+## Role
+You are the lead localizer writing the SCRIPT BRIEF for translating a short video from {src_lang} into {tgt_lang}.
+Translators of every part of the video will follow this brief, so it must make the whole video consistent.
+
+## Whole transcript (read ALL of it first; [Speaker · gender] = who is talking, detected from the audio)
+{numbered}
+
+## Repeated lines (the same {src_lang} line said several times)
+{rep_rows or "(none)"}
+
+## Write the brief — every text value in Vietnamese
+1. "summary": what the video is about, 1–2 sentences.
+2. "tone": the voice to use (fun / serious, slang level, rhythm).
+3. "people": one entry per speaker label (or the narrator if there are no labels): "who" (gender, role in the
+   video), "self" = how they call themselves in {tgt_lang}, "calls" = how they address the listener / the other
+   speaker. Pick ONE pronoun pair and keep it for the whole video. Questions and their answers must stay about the
+   same subject.
+4. "terms": names / terms (people, animals, places, nicknames) → the {tgt_lang} rendering viewers know (at most 20).
+5. "repeated": for EACH repeated line above, ONE final {tgt_lang} line to use at every occurrence — natural, inside its
+   syllable range, consistent with "people".
+{style_section(style)}{terms}
+## Output only JSON
+```json
+{sample}
+```
+{QUOTE_RULE}
+'''.strip()
+
+
+def render_brief(d: dict) -> str:
+    """Hồ sơ AI trả (JSON) → chữ để đọc / sửa và để gửi kèm mọi lượt dịch / sửa."""
+    out: list[str] = []
+    if as_text(d.get("summary")).strip():
+        out.append(f"Nội dung: {as_text(d['summary']).strip()}")
+    if as_text(d.get("tone")).strip():
+        out.append(f"Giọng điệu: {as_text(d['tone']).strip()}")
+    people = [x for x in d.get("people") or [] if isinstance(x, dict)]
+    if people:
+        out.append(BRIEF_PEOPLE)
+        for x in people:
+            name = as_text(x.get("speaker") or x.get("name")).strip() or "Người kể"
+            who = as_text(x.get("who")).strip()
+            me, you = as_text(x.get("self")).strip(), as_text(x.get("calls")).strip()
+            bits = [b for b in (f"xưng «{me}»" if me else "", f"gọi người nghe «{you}»" if you else "") if b]
+            out.append(f"- {name}" + (f" ({who})" if who else "") + (": " + ", ".join(bits) if bits else ""))
+    for head, key in ((BRIEF_TERMS, "terms"), (BRIEF_REPEAT, "repeated")):
+        rows = [(as_text(t.get("src")).strip(), as_text(t.get("tgt")).strip()) for t in d.get(key) or []
+                if isinstance(t, dict)]
+        rows = [(a, b) for a, b in rows if a and b]
+        if rows:
+            out.append(head)
+            out += [f"- {a} = {b}" for a, b in rows]
+    return "\n".join(out)
+
+
+def parse_brief(text: str) -> tuple[list[dict], dict[str, str]]:
+    """Chữ hồ sơ (có thể người dùng đã sửa) → (thuật ngữ, {lời gốc rút gọn: bản dịch chốt của câu lặp})."""
+    terms: list[dict] = []
+    reps: dict[str, str] = {}
+    sec = ""
+    for ln in (text or "").splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        if not t.startswith("-"):
+            sec = "terms" if t.startswith(BRIEF_TERMS[:9]) else "rep" if t.startswith(BRIEF_REPEAT[:7]) else ""
+            continue
+        if sec not in ("terms", "rep") or "=" not in t:
+            continue
+        a, b = (x.strip(" «»\"'") for x in t[1:].split("=", 1))
+        if a and b:
+            if sec == "terms":
+                terms.append({"src": a, "tgt": b})
+            else:
+                reps[_norm_src(a)] = b
+    return terms, reps
+
+
+def make_brief(router: Router, cues: list[Cue], lines: list[str], speakers: list[str] | None, fit: dict | None, *,
+               src_lang: str, tgt_lang: str, style: str, custom_terms: list[dict],
+               log: Callable[[str], None] | None = None) -> str:
+    """Một lượt gọi: AI đọc cả kịch bản → hồ sơ (chữ). Lỗi định dạng → "" (vẫn dịch như cũ, không hồ sơ)."""
+    repeats = []
+    for idx in repeated_groups(lines).values():
+        r = None
+        if fit:
+            rs = [syllable_range(cues, i, fit) for i in idx]
+            r = (min(a for a, _b in rs), min(b for _a, b in rs))
+        repeats.append((lines[idx[0]], len(idx), r))
+    try:
+        d = _ask(router, brief_prompt(lines, speakers, src_lang, tgt_lang, style, custom_terms, repeats),
+                 lambda d: isinstance(d.get("people", []), list) and isinstance(d.get("repeated", []), list), tries=2)
+    except ValueError as exc:
+        logger.warning("Không soạn được hồ sơ kịch bản: %s", exc)
+        if log:
+            log("⚠ Chưa soạn được hồ sơ kịch bản — vẫn dịch như thường.")
+        return ""
+    text = render_brief(d)
+    if log:
+        people = sum(1 for x in d.get("people") or [] if isinstance(x, dict))
+        log(f"Hồ sơ kịch bản: {people} người nói · {len(d.get('terms') or [])} tên riêng · "
+            f"{len(d.get('repeated') or [])} câu lặp chốt một bản dịch")
+    return text
+
+
+def unify_repeats(lines: list[str], texts: list[str], canon: dict[str, str], skip: set[int]) -> list[int]:
+    """Câu cùng lời gốc → cùng một bản dịch: bản hồ sơ chốt, không có thì bản dùng nhiều nhất (hoà → câu đầu).
+    Trả các câu đã đổi."""
+    changed: list[int] = []
+    for k, idx in repeated_groups(lines).items():
+        idx = [i for i in idx if i not in skip and texts[i].strip()]
+        if len(idx) < 2:
+            continue
+        target = canon.get(k)
+        if not target:
+            seen = [texts[i].strip() for i in idx]
+            target = max(seen, key=lambda t: (seen.count(t), -seen.index(t)))
+        for i in idx:
+            if texts[i].strip() != target:
+                texts[i] = target
+                changed.append(i)
+    return sorted(changed)
 
 
 def _windows(idx: list[int], lines: list[str]) -> list[list[int]]:
@@ -523,7 +684,8 @@ def _windows(idx: list[int], lines: list[str]) -> list[list[int]]:
 def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: list[tuple[int, int]] | None, *,
                      src_lang: str, tgt_lang: str, style: str, custom_terms: list[dict],
                      known_terms: list[dict] | None = None,
-                     done: dict[int, str] | None = None) -> tuple[list[dict], dict[int, tuple]]:
+                     done: dict[int, str] | None = None, brief: str = "",
+                     speakers: list[str] | None = None) -> tuple[list[dict], dict[int, tuple]]:
     """Một lượt cho cả phần ``idx`` → (thuật ngữ, {câu: (dịch sát, dịch thoát)}). Thiếu câu / dịch sát cụt → ValueError
     (``_ask`` hỏi lại 3 lần; nơi gọi chuyển phần đó sang dịch từng lô)."""
     keys = [str(n) for n in range(1, len(idx) + 1)]
@@ -536,7 +698,7 @@ def _translate_whole(router: Router, idx: list[int], lines: list[str], budgets: 
                                              for k in keys)
 
     d = _ask(router, whole_prompt([lines[i] for i in idx], budgets, src_lang, tgt_lang, style, custom_terms, before,
-                                  known_terms), ok)
+                                  known_terms, brief, [speakers[i] for i in idx] if speakers else None), ok)
     terms = [t for t in d.get("terms") or [] if isinstance(t, dict) and str(t.get("src", "")).strip()
              and str(t.get("tgt", "")).strip()]
     return terms, {i: (as_text(d["lines"][k]["direct"]).replace("\n", " ").strip(), as_text(d["lines"][k].get("free")))
@@ -571,8 +733,11 @@ def _note(terms: list[dict], chunk: str):
 def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, source_hint: str = "", style: str = "",
                       srt_path: str | Path | None = None, fit: dict | None = None,
                       on_progress: Callable[[float], None] | None = None, log: Callable[[str], None] | None = None,
-                      cancel: threading.Event | None = None) -> list[Cue]:
-    """``fit``: {"tts_speed", "video_speed", "min_gap"} khi có lồng tiếng → rút gọn câu đọc không kịp (None = bỏ qua)."""
+                      cancel: threading.Event | None = None, speakers: list[str] | None = None,
+                      brief: str | None = None, on_brief: Callable[[str], None] | None = None) -> list[Cue]:
+    """``fit``: {"tts_speed", "video_speed", "min_gap"} khi có lồng tiếng → rút gọn câu đọc không kịp (None = bỏ qua).
+    ``speakers``: nhãn người nói từng câu («Người 1 · Nam», "" = chưa rõ) — AI biết ai nói để xưng hô đúng.
+    ``brief``: hồ sơ kịch bản đã có (người dùng có thể đã sửa); None → AI soạn (1 lượt gọi) rồi ``on_brief(chữ)``."""
     router = Router(settings, log, cancel)
     lines = [c.plain.replace("\n", " ").strip() or "…" for c in cues]
     total = len(lines)
@@ -595,6 +760,20 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         return cancel is not None and cancel.is_set()
 
     custom = _custom_terms(settings.glossary)
+    if brief is None and len(results) < total and not stopped():
+        if log:
+            log("Dịch: AI đọc cả kịch bản, soạn hồ sơ (người nói, xưng hô, tên riêng, câu lặp)…")
+        try:
+            brief = make_brief(router, cues, lines, speakers, fit, src_lang=src_lang, tgt_lang=tgt_lang, style=style,
+                               custom_terms=custom, log=log)
+        except (ModelUnavailable, RenderCancelled):
+            raise
+        if brief and on_brief:
+            on_brief(brief)
+    brief = brief or ""
+    brief_terms, canon = parse_brief(brief)
+    # lời dặn kèm hồ sơ cho các bước phụ (dịch từng lô, khớp độ dài) — khoá bộ nhớ dịch vẫn theo lời dặn gốc
+    style_b = (style + "\n\nScript brief (follow it — pronouns, names, repeated lines):\n" + brief).strip() if brief else style
     unsure: set[int] = set()                            # câu AI không trả nổi → giữ lời gốc, không ghi bộ nhớ dịch
     weak: set[int] = set()                              # câu dùng tạm bản dịch sát → không nhớ, lần sau dịch thoát lại
     directs: dict[int, str] = {}                        # bản dịch sát từng câu — chuẩn «đủ ý» cho bước khớp độ dài
@@ -626,8 +805,9 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
         try:
             terms_got, got = _translate_whole(router, idx, lines, budgets, src_lang=src_lang, tgt_lang=tgt_lang,
                                               style=style, custom_terms=custom,
-                                              known_terms=[t for t in ckpt.extra.get("terms", []) if t not in custom],
-                                              done=results)
+                                              known_terms=[t for t in ckpt.extra.get("terms", []) + brief_terms
+                                                           if t not in custom],
+                                              done=results, brief=brief, speakers=speakers)
         except (ModelUnavailable, RenderCancelled):
             halt()
             raise
@@ -717,7 +897,7 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
                 if any(i in unsure for i in idx):
                     raise ValueError("lô có câu chưa dịch được")
                 budgets = {k: syllable_range(cues, i, fit) for i, k in zip(idx, keys)} if fit else None
-                expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style, budgets),
+                expr = _ask(router, express_prompt(faith, chunk, sp, src_lang, tgt_lang, style_b, budgets),
                             lambda d: all(isinstance(d.get(k), dict) for k in keys))
                 out = []
                 for k in keys:
@@ -767,9 +947,18 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
     if kept and log:
         log(f"⚠ {len(kept)} câu AI dịch không ra, đang giữ lời gốc: câu {', '.join(map(str, kept[:12]))}"
             + ("…" if len(kept) > 12 else "") + " — sửa tay ở tab Lời thoại.")
-    # 4) khớp thời lượng lồng tiếng
+    # 4) câu lặp (cùng lời gốc) → cùng một bản dịch (bản hồ sơ chốt / bản dùng nhiều nhất) — không còn 4 cách dịch
+    #    cho cùng một câu hỏi lặp lại
+    same = unify_repeats(lines, texts, canon, unsure)
+    if same:
+        for i in same:
+            if i not in weak:
+                memory.put(target, lines[i], texts[i], key_style)
+        if log:
+            log(f"Dịch: đồng bộ {len(same)} câu lặp lại (cùng lời gốc → cùng bản dịch).")
+    # 5) khớp thời lượng lồng tiếng
     if fit and not stopped():
-        texts = fit_texts(cues, texts, router, fit, log, style=style, tgt_lang=tgt_lang, directs=directs)
+        texts = fit_texts(cues, texts, router, fit, log, style=style_b, tgt_lang=tgt_lang, directs=directs)
     memory.save()
     ckpt.finish()
     # câu gốc bị ngắt ở dấu phẩy (Qwen tách câu dài) → bản dịch cũng kết thúc bằng «,» → giọng đọc lên giọng lửng lơ,

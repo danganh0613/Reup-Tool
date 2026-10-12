@@ -653,7 +653,7 @@ EDIT_CHUNK = 220          # số câu mỗi lần gửi (phụ đề rất dài 
 
 
 def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str, style: str, glossary: str,
-                 context: str = "") -> str:
+                 context: str = "", brief: str = "") -> str:
     """``context``: những gì đã xảy ra trong lượt sửa này (yêu cầu trước + câu AI / người dùng đã đổi, chưa lưu) — AI
     hiểu ý người dùng đang đi theo hướng nào, nhắn tiếp kiểu chat («còn câu 37 nữa») vẫn hiểu."""
     lines = []
@@ -691,6 +691,8 @@ def _edit_prompt(rows: list[tuple[int, str, str]], instruction: str, target: str
         "user asks for shorter lines. Never merge or split lines, no quotes or explanations inside the text.\n"
         f"- {QUOTE_RULE}\n"
         + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
+        + (f"- Script brief of this video (who speaks, pronoun pair, names, repeated lines) — keep to it unless the user "
+           f"asks to change it:\n{brief.strip()}\n" if brief.strip() else "")
         + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
         + "- Return ONLY JSON, keys in this order: {\"analysis\": \"<a few short sentences: what the user wants, which "
         "lines must change and why>\", \"edits\": [{\"n\": <line number>, \"text\": \"<new line>\"}], "
@@ -744,7 +746,7 @@ def edit_context(history: list[tuple[str, str]], changes: list[tuple[int, str, s
 
 
 def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, settings: Settings, target: str,
-            style: str = "", context: str = "", log: Callable[[str], None] | None = None,
+            style: str = "", context: str = "", brief: str = "", log: Callable[[str], None] | None = None,
             cancel: threading.Event | None = None) -> tuple[dict[int, str], str]:
     """Sửa phụ đề theo một yêu cầu tự do: AI suy luận trước («analysis»), đọc hết thoại, sửa mọi câu liên quan (câu hỏi
     lẫn câu trả lời) rồi rà lại cho nhất quán, chỉ trả về những câu đổi. ``context``: yêu cầu trước + câu đã đổi trong
@@ -766,7 +768,7 @@ def ai_edit(current: list[str], source: list[str] | None, instruction: str, *, s
             rows = [(i + 1, (source[i] if source and i < len(source) else "").replace("\n", " "),
                      edits.get(i, current[i]).replace("\n", " ")) for i in part]
             data = _load_json(router.call(_edit_prompt(rows, request, target_en, style, settings.glossary,
-                                                       context))) or {}
+                                                       context, brief))) or {}
             if isinstance(data, dict) and data.get("analysis"):
                 logger.info("Nhờ AI sửa — AI phân tích: %s", as_text(data["analysis"])[:600])
             for e in (data.get("edits") or []) if isinstance(data, dict) else []:

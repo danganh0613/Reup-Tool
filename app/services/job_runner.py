@@ -327,6 +327,7 @@ class Pipeline:
         save_srt(res.cues, out)
         item.srt_path = str(out)
         item.srt_translated_path = None
+        self.brief_path(item).unlink(missing_ok=True)  # hồ sơ kịch bản theo lời gốc cũ
         try:
             self.speakers_path(item).unlink()          # người nói theo phụ đề cũ không còn khớp
         except OSError:
@@ -359,9 +360,15 @@ class Pipeline:
         t = self.state.tts
         fit = ({"tts_speed": t.tts_speed, "video_speed": self.state.video.speed / 100, "min_gap": t.min_gap}
                if t.enable_tts else None)
+        if t.enable_tts and t.multi_voice:
+            # nhận diện người nói TRƯỚC khi dịch: AI biết ai đang nói (nam / nữ, người hỏi / người đáp) để xưng hô đúng
+            self.ensure_speakers(item, log=log, cancel=cancel)
+        brief = self.load_brief(item)
         out_cues = translate_cues_vl(cues, settings=self.state.settings, target=cfg.translate_target,
                                      source_hint=cfg.source_hint, style=cfg.translate_style,
-                                     srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel)
+                                     srt_path=item.srt_path, fit=fit, on_progress=progress, log=log, cancel=cancel,
+                                     speakers=self.speaker_labels(item, cues), brief=brief or None,
+                                     on_brief=lambda text: self.save_brief(item, text))
         out = self.translated_path(item)
         save_srt(out_cues, out)
         item.srt_translated_path = str(out)
@@ -375,6 +382,7 @@ class Pipeline:
         item.srt_path = str(path)
         item.srt_translated_path = None
         item.voice_locked = False
+        self.brief_path(item).unlink(missing_ok=True)
         try:
             self.speakers_path(item).unlink()
         except OSError:
@@ -414,6 +422,9 @@ class Pipeline:
         from app.services.translate_vl import memory_style
 
         style = "" if instruction.strip() == cfg.translate_style.strip() else cfg.translate_style   # khỏi lặp 2 lần
+        brief = self.load_brief(item)
+        if brief:                                     # dịch lại cũng theo hồ sơ kịch bản (xưng hô, tên, câu lặp)
+            style = (style + "\n\nScript brief (follow it — pronouns, names, repeated lines):\n" + brief).strip()
         new = retranslate(orig, previous, idxs, settings=self.state.settings, target=cfg.translate_target,
                           source_hint=cfg.source_hint, style=style, instruction=instruction,
                           on_progress=progress, log=log, cancel=cancel, budgets=budgets,
@@ -429,6 +440,40 @@ class Pipeline:
             if log:
                 log(f"Dịch lại xong {len(new)} câu → {dst.name}")
         return new
+
+    # ── Hồ sơ kịch bản (AI soạn khi dịch, người dùng xem / sửa ở tab Dịch) ──
+    def brief_path(self, item: VideoItem) -> Path:
+        h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
+        return SUBS_DIR / f"{_safe_stem(item.stem)[:60]}_{h}.brief.txt"
+
+    def load_brief(self, item: VideoItem) -> str:
+        try:
+            return self.brief_path(item).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def save_brief(self, item: VideoItem, text: str) -> None:
+        p = self.brief_path(item)
+        try:
+            if text.strip():
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text.strip() + "\n", encoding="utf-8")
+            else:
+                p.unlink(missing_ok=True)              # xoá trắng → lần dịch sau AI soạn lại
+        except OSError:
+            logger.warning("Không ghi được hồ sơ kịch bản %s", p, exc_info=True)
+
+    def speaker_labels(self, item: VideoItem, cues: list[Cue]) -> list[str] | None:
+        """Nhãn người nói từng câu («Người 1 · Nam») cho bước dịch — chỉ khi đã nhận diện người nói."""
+        smap = self.speaker_map(item) if self.state.tts.multi_voice else None
+        if smap is None or not smap.speakers:
+            return None
+        out = []
+        for c in cues:
+            name = smap.speaker_at(c.start, c.end)
+            g = smap.speakers[name].gender if name in smap.speakers else ""
+            out.append(f"{name} · {g}" if name and g else name)
+        return out if any(out) else None
 
     # ── Người nói (lồng tiếng nhiều giọng) ────────────────────────────────
     def speakers_path(self, item: VideoItem) -> Path:

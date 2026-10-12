@@ -330,6 +330,18 @@
     - Trước đây cần bản dịch mà tắt «Tự dịch» → «dùng phụ đề gốc»: giọng Việt đọc chữ Trung. Chế độ mới dừng thay vì đọc sai.
     - Tab Lời thoại: tiêu đề «Lời gốc · N câu — chưa dịch: icon copy → dịch ngoài → icon dán»; tab Dịch nhắc cách làm.
 
+43. **Hồ sơ kịch bản** (test `audit_out/qa/test_brief.py` 11, `test_whole.py` mục 8):
+    - Người nói TRƯỚC khi dịch: `Pipeline.translate` gọi `ensure_speakers` khi bật lồng tiếng nhiều giọng; `speaker_labels`
+      gửi nhãn «Người 1 · Nam» từng câu → dòng lời nhắc `n. [lo-hi syllables] [Người 1 · Nam] …`.
+    - `make_brief` (thêm 1 lượt AI / video, chỉ khi chưa có hồ sơ): JSON nội dung, giọng điệu, người nói + xưng hô, tên
+      riêng, bản chốt cho câu lặp → `render_brief` thành chữ đọc được, lưu `SUBS_DIR/{stem}_{hash}.brief.txt`
+      (`on_brief` → `save_brief`). Hồ sơ đi vào mọi phần dịch (`whole_prompt` «## Script brief»), khớp độ dài / dịch sát
+      (`style_b`), ↻ dịch lại (`retranslate` nối vào style) và Nhờ AI sửa (`_edit_prompt(brief=)`).
+    - `unify_repeats`: câu gốc lặp (so `_norm_src`) dùng đúng một bản dịch — bản hồ sơ chốt, không có thì bản dùng nhiều
+      nhất — trước bước khớp độ dài. `parse_brief` đọc lại hồ sơ người dùng sửa (tên riêng + câu lặp).
+    - Tab Dịch › «Hồ sơ kịch bản»: xem / sửa (rời ô là lưu), xoá trắng = lần dịch sau AI soạn lại. Nhận diện lại / nạp SRT
+      lời gốc khác / «Xoá phụ đề & giọng» → bỏ hồ sơ. `STYLE_TAG` = `|vl-hoso1` (bộ nhớ dịch cũ không dùng lại).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

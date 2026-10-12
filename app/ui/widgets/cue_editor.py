@@ -940,6 +940,7 @@ class CueEditor(ctk.CTkFrame):
         changes = [(i, o, t, "AI" if self._ai_after.get(i, "").strip() == t.strip() else "user")
                    for i, (t, o) in enumerate(zip(self.texts, self._base_texts)) if t.strip() != o.strip()]
         context = edit_context(self._ai_history, changes)
+        brief = self.window.pipeline_for(self.item).load_brief(self.item)     # hồ sơ kịch bản: xưng hô, tên, câu lặp
         source = [c.plain for c in self.ref] if self.is_translation else None
         st = self.app_state.state_for(it)
         win = self.window
@@ -951,7 +952,8 @@ class CueEditor(ctk.CTkFrame):
 
         def work(cancel):
             return ai_edit(current, source, req, settings=st.settings, target=st.subtitle.translate_target,
-                           style=st.subtitle.translate_style, context=context, log=win.log_bg, cancel=cancel)
+                           style=st.subtitle.translate_style, context=context, brief=brief, log=win.log_bg,
+                           cancel=cancel)
 
         def done(result, error):
             if not self.winfo_exists():

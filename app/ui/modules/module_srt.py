@@ -100,6 +100,21 @@ class SRTModule(BaseModule):
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
+        # hồ sơ kịch bản: AI soạn khi dịch (người nói + xưng hô, tên riêng, câu lặp) — mọi lượt dịch / Nhờ AI sửa theo
+        sec = Section(page, "Hồ sơ kịch bản", info="AI đọc cả video một lần khi dịch rồi ghi ra đây: nội dung, người nói "
+                                                   "và cách xưng hô, tên riêng, bản dịch chốt cho câu lặp lại. Mọi lượt "
+                                                   "dịch và «Nhờ AI sửa» đều theo hồ sơ này nên cả video nhất quán. Sửa "
+                                                   "thẳng ở đây (vd đổi «mày – tao» thành «anh – em») rồi bấm «Dịch phụ đề» "
+                                                   "để dịch lại theo hồ sơ mới. Xoá trắng = lần dịch sau AI soạn lại.")
+        sec.pack(fill="x", pady=4)
+        self.brief_section = sec
+        self.brief = ctk.CTkTextbox(sec.body, height=150, font=T.font(12), wrap="word")
+        self.brief.pack(fill="x", pady=(2, 2))
+        self.brief.bind("<FocusOut>", lambda _e: self._brief_changed())
+        self.brief_hint = hint(sec.body, "")
+        self.brief_hint.pack(fill="x")
+        self._brief_for = None                   # (video, chữ lúc nạp) — chỉ ghi khi người dùng sửa
+
         # tệp phụ đề: đem ra AI bên ngoài (ChatGPT / Gemini web…) dịch / rà soát rồi nạp lại — giữ mốc thời gian gốc
         sec = Section(page, "Tệp phụ đề", info="Dịch bằng AI bên ngoài: «Xuất SRT › Lời gốc» → gửi file cho ChatGPT / "
                                                "Gemini / Claude / DeepSeek → chép SRT AI trả về → «Nhập bản dịch › Dán SRT…». "
@@ -276,6 +291,7 @@ class SRTModule(BaseModule):
         set_variant(self.tr_btn, "secondary" if has_tr else "primary")     # đã dịch → nút chính là «Lưu» ở trên
         no_key = not self.state.settings.translate_keys()
         if it is None:
+            self._load_brief(None)
             self.file_status.info("Chưa có video được chọn.")
             self.file_section.set_subtitle("")
             if no_key:
@@ -297,6 +313,7 @@ class SRTModule(BaseModule):
         else:
             self.file_status.info("Chưa có phụ đề — chọn file SRT hoặc tạo ở tab Nhận diện.")
             self.file_section.set_subtitle("chưa có")
+        self._load_brief(it)
         if has_tr:
             self.tr_status.ok(f"Đã dịch: {Path(it.srt_translated_path).name}")
         elif self.state.settings.external_translate:
@@ -384,6 +401,7 @@ class SRTModule(BaseModule):
             files += [str(Path(it.voice_path).with_suffix(ext)) for ext in (".wav", ".json", ".srt", ".cues.csv",
                                                                              ".words.json")]
         files.append(str(self.window.pipeline.noread_path(it)))
+        files.append(str(self.window.pipeline.brief_path(it)))
         for p in files:
             if p and Path(p).exists() and (Path(p).parent in (SUBS_DIR, VOICE_DIR)):
                 try:
@@ -398,6 +416,31 @@ class SRTModule(BaseModule):
         self.window.log(f"Đã xoá {removed} file cache của {it.name}.")
 
     # ── Dịch ─────────────────────────────────────────────────────────────
+    # ── Hồ sơ kịch bản ───────────────────────────────────────────────────
+    def _load_brief(self, it) -> None:
+        text = self.window.pipeline_for(it).load_brief(it) if it is not None else ""
+        if self._brief_for == (it, text):
+            return
+        self._brief_changed()                        # chữ đang sửa của video trước → lưu trước khi đổi
+        self.brief.delete("1.0", "end")
+        self.brief.insert("1.0", text)
+        self._brief_for = (it, text)
+        self.brief_section.set_subtitle(f"{len(text.splitlines())} dòng" if text else "chưa có")
+        self.brief_hint.configure(text="" if text else "Chưa có — AI soạn ở lần «Dịch phụ đề» / Chuẩn bị tới.")
+
+    def _brief_changed(self) -> None:
+        """Rời ô hồ sơ → lưu (chỉ khi người dùng đã sửa)."""
+        if self._brief_for is None:
+            return
+        it, old = self._brief_for
+        text = self.brief.get("1.0", "end-1c").strip()
+        if it is None or text == old.strip():
+            return
+        self.window.pipeline_for(it).save_brief(it, text)
+        self._brief_for = (it, text)
+        self.brief_section.set_subtitle(f"{len(text.splitlines())} dòng" if text else "chưa có")
+        self.window.log(f"{it.name}: đã lưu hồ sơ kịch bản" + ("" if text else " (xoá trắng — lần dịch sau AI soạn lại)"))
+
     def _translate_now(self) -> None:
         it = self._need_item()
         if it is None:
