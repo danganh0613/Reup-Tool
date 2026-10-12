@@ -294,6 +294,23 @@
     - Khung sửa lời thoại: hàng nút riêng [Lưu phụ đề] [Lưu & tạo lại giọng] chia đều (bảng hẹp vẫn đủ chỗ). «Lưu phụ đề»
       = `save(regen=False)`, báo giọng chưa tạo lại.
 
+40. **Tab Lời thoại kiểu chatbot + 3 tab + chống ghi đè lời gốc** (test `test_cue_list.py` 12, `test_external_ai.py` 27,
+    `test_ai_edit_ui.py` 11, `smoke_sub_ui.py` 24; ảnh `audit_out/qa/shot_3tab.py`; đo `perf_cue_list.py`):
+    - Mục Lời thoại: [Lời thoại | Dịch | Phụ đề]. «Lời thoại» = trang cao đúng khung nhìn (`_fit_text_page`, đo lại khi
+      `<Map>` / đổi cỡ) chỉ có `CueEditor`: danh sách TẤT CẢ câu (không chia trang), [Lưu phụ đề][Lưu & tạo lại giọng],
+      dòng trạng thái, ô chat «Nhờ AI sửa» neo đáy có lịch sử «Bạn › / AI ›» (CTkTextbox `chat`, quên khi đổi video).
+    - Danh sách ẢO: `POOL` = 18 dòng widget + CTkScrollbar, `_first` = câu đầu khung; lăn chuột `WHEEL` = 2 câu
+      (bind trên từng dòng, trả "break" để bảng không cuộn theo), `_see_row` cuộn tới câu khuất (đang phát / ↑↓ / AI
+      sửa), `_set` chỉ configure phần đổi. Đo: 300 câu hiện 0,14 s, mỗi nấc cuộn ~25 ms (dựng hết 300 dòng CTk: 14 s).
+    - Tab «Dịch»: thẻ Dịch (bỏ hàng «AI bên ngoài») + «Tệp phụ đề» mở sẵn: [Xuất SRT ▾: bản dịch / lời gốc / song ngữ /
+      chép lời dặn dịch | rà soát] [Nhập bản dịch ▾: từ file / dán SRT từ chat / dịch tay từng câu], [Nạp SRT lời gốc…]
+      [Xem / sửa SRT…], [Mở bằng app khác] [Xoá…]. Xuất chỉ ghi SRT (không còn tự chép lời dặn + .txt — người dùng nhầm).
+    - Sự cố thật 12/10 13:52: lời gốc tiếng Trung của «tải xuống (2)» bị ghi đè bằng bản tiếng Việt (dán bản dịch vào hộp
+      «Xem / Sửa SRT» — mặc định lưu vào «Gốc», không .bak). Nay: `import_translation_text` dùng chung; `looks_translated`
+      (lời gốc ≥ 50 % câu chữ Hán, nội dung mới ≤ 10 %) → «Nạp SRT lời gốc» và hộp Xem / sửa SRT hỏi «nhập làm bản dịch
+      (giữ mốc gốc) / vẫn thay lời gốc»; đè lời gốc luôn giữ `.srt.bak`. Bản dựng lại lời gốc của video đó:
+      `audit_out/khoi_phuc/tải xuống (2).loi-goc-tieng-trung.srt`.
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

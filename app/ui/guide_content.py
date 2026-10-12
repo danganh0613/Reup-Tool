@@ -193,12 +193,14 @@ TOPICS: list[dict] = [
             "Ô «Phong cách» (không bắt buộc): chọn gợi ý hoặc gõ ý bạn muốn, ví dụ «xưng tôi – các bạn, ngắn gọn».",
             "Bấm «Dịch phụ đề». AI dịch 2 bước: dịch sát nghĩa rồi tự đọc lại, viết cho tự nhiên; có lồng tiếng thì rút gọn "
             "câu đọc không kịp. Khoảng 10–15 lượt gọi AI mỗi video ngắn.",
-            "Đọc lại ngay ở mục «Lời thoại của video đang chọn» đầu tab. Sửa trực tiếp, bấm «Lưu & tạo lại giọng» — chỉ câu nào sửa mới đọc lại giọng.",
+            "Đọc lại ở tab «Lời thoại» (cả bảng là danh sách câu, lăn chuột để cuộn). Sửa trực tiếp, bấm «Lưu phụ đề» "
+            "(chỉ lưu chữ) hoặc «Lưu & tạo lại giọng» — chỉ câu nào sửa mới đọc lại giọng.",
         ]),
         ("h", "Dịch chưa hay — nhờ AI sửa"),
         ("steps", [
-            "Gõ yêu cầu vào ô «Nhờ AI sửa», ví dụ «xưng anh – em, văn nói», «ngắn gọn hơn», «sửa tên Lý Tiểu Long». AI tự tìm "
-            "đúng các câu cần sửa trong cả video, câu khác giữ nguyên.",
+            "Nhắn vào ô chat «Nhờ AI sửa» ở đáy tab «Lời thoại», ví dụ «xưng anh – em, văn nói», «sửa bạn mày thành chó nhà "
+            "mày», «rà lại cả kịch bản cho thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), "
+            "câu khác giữ nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các lượt trước và các câu vừa đổi.",
             "Chỉ một câu dở: bấm ↻ cạnh câu đó để AI dịch lại riêng câu ấy.",
             "Câu AI sửa được tô vàng, dòng nhỏ ghi câu cũ; bấm ↶ cạnh câu để trả lại, «Hoàn tác» trả lại hết, ưng thì "
             "«Lưu & tạo lại giọng».",
@@ -209,7 +211,10 @@ TOPICS: list[dict] = [
             ("Tìm & thay", "Đổi một tên / chữ ở mọi câu một lần (nút cạnh «Nhờ AI sửa»)."),
             ("⊘ Không đọc câu này", "Lời bài hát, câu trích muốn giữ tiếng gốc: bấm ⊘ ở câu đó — câu không lồng tiếng, chỗ "
                                     "đó giữ âm gốc (kể cả khi khử giọng), phụ đề vẫn hiện."),
-            ("Dán bản dịch ngoài", "Bảng từng câu để bạn tự gõ / dán bản dịch, không cần AI."),
+            ("Dịch bằng AI bên ngoài", "Tab «Dịch» › Tệp phụ đề: «Xuất SRT › Lời gốc» → gửi cho ChatGPT / Gemini web… "
+                                       "(«Xuất SRT › Chép lời dặn» để kèm lời dặn) → chép SRT AI trả về → «Nhập bản dịch "
+                                       "› Dán SRT…». Máy giữ mốc thời gian gốc nên không lệch video. Gõ tay từng câu: "
+                                       "«Nhập bản dịch › Dịch tay từng câu»."),
             ("Dịch dở giữa chừng", "Mất mạng hay model hết lượt? Mỗi lô dịch đều được lưu — bấm «Thử lại» là dịch tiếp phần "
                                    "còn lại, không dịch lại từ đầu."),
             ("Từ điển tên riêng (trong Cài đặt)", "Gõ «tên gốc=tên Việt» mỗi dòng để AI dịch đúng tên riêng, ví dụ 松下=Panasonic."),

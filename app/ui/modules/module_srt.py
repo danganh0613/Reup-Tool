@@ -1,5 +1,7 @@
-"""Module Lời thoại — hai tab trên cùng:
-- «Lời thoại»: sửa từng câu (+ Nhờ AI sửa), dịch AI, tệp phụ đề (chọn / sửa thời gian / xuất / dán bản dịch ngoài);
+"""Module Lời thoại — ba tab trên cùng:
+- «Lời thoại»: cả bảng là danh sách câu của video đang chọn (tự cuộn) + ô «Nhờ AI sửa» neo dưới cùng kiểu chatbot;
+- «Dịch»: dịch AI (ngôn ngữ, lời dặn, lượt dùng) + tệp phụ đề (xuất / nhập bản dịch cho AI bên ngoài, nạp lời gốc, sửa
+  thời gian, xoá);
 - «Phụ đề»: chữ hiện trên video — bật, kiểu dựng sẵn, chữ hiện; chỉnh tay (chữ, nền & chữ nổi, khung, thời gian) bấm
   mới mở."""
 
@@ -25,7 +27,7 @@ from app.core.platform import open_path
 from app.ui.progress_panel import friendly_error
 
 MODE_LABELS = SRT_MODE_LABELS
-TAB_TEXT, TAB_SUB = "Lời thoại", "Phụ đề"
+TAB_TEXT, TAB_TR, TAB_SUB = "Lời thoại", "Dịch", "Phụ đề"
 NO_KEY = "Chưa có API key của model dịch đang chọn — nhập ở Cài đặt › AI dùng API key."
 
 
@@ -40,22 +42,25 @@ class SRTModule(BaseModule):
         s = self.setter
 
         self.tab_var = tk.StringVar(value=TAB_TEXT)
-        self.tabs = ctk.CTkSegmentedButton(self, values=[TAB_TEXT, TAB_SUB], variable=self.tab_var,
+        self.tabs = ctk.CTkSegmentedButton(self, values=[TAB_TEXT, TAB_TR, TAB_SUB], variable=self.tab_var,
                                            command=self.show_tab, font=T.font(12))
         self.tabs.pack(fill="x", pady=(0, 6))
-        self.pages = {k: ctk.CTkFrame(self, fg_color="transparent") for k in (TAB_TEXT, TAB_SUB)}
+        self.pages = {k: ctk.CTkFrame(self, fg_color="transparent") for k in (TAB_TEXT, TAB_TR, TAB_SUB)}
 
-        # ══ Tab «Lời thoại» ═════════════════════════════════════════════════
+        # ══ Tab «Lời thoại»: cả bảng là danh sách câu, ô «Nhờ AI sửa» neo dưới cùng ═══════════════════════
         page = self.pages[TAB_TEXT]
+        page.pack_propagate(False)               # cao đúng bằng khung nhìn (_fit_text_page) — danh sách tự cuộn bên trong
         # lời thoại của video đang chọn: sửa ngay, gắn với khung xem trước (nơi DUY NHẤT sửa từng câu)
         from app.ui.widgets.cue_editor import CueEditor
 
-        sec = Section(page, "Lời thoại của video đang chọn")
-        sec.pack(fill="x", pady=4)
-        self.editor = CueEditor(sec.body, self.window, on_saved=lambda it: (self.on_active_changed(),
-                                                                             self.window.queue_update(it)))
-        self.editor.pack(fill="x")
+        self.editor = CueEditor(page, self.window, on_saved=lambda it: (self.on_active_changed(),
+                                                                       self.window.queue_update(it)))
+        self.editor.pack(fill="both", expand=True, pady=(2, 0))
+        tk.Misc.bind(self._parent_canvas, "<Configure>", lambda _e: self._fit_text_page(), add="+")
+        tk.Misc.bind(page, "<Map>", lambda _e: self.after_idle(self._fit_text_page), add="+")    # vừa hiện ra mới đo được
 
+        # ══ Tab «Dịch»: dịch AI + tệp phụ đề (xuất / nhập cho AI bên ngoài) ═════════════════════════════
+        page = self.pages[TAB_TR]
         sec = Section(page, "Dịch", info="AI dịch cả video theo từng đoạn: dịch sát rồi phóng tác cho tự nhiên; có lồng "
                                          "tiếng thì tự khớp độ dài câu đọc. Lỗi giữa chừng thì «Thử lại» dịch tiếp. "
                                          "Chọn Gemini / DeepSeek và model: Cài đặt › AI dùng API key.")
@@ -88,28 +93,24 @@ class SRTModule(BaseModule):
         self.tr_btn = button(sec.body, "Dịch phụ đề", icon_name="translate", command=self._translate_now,
                              min_width=button_width(sec.body, "Dịch phụ đề", icon=True, font=T.font(13, "medium")))
         self.tr_btn.pack(fill="x", pady=(6, 2))
-        # dịch / rà soát bằng AI bên ngoài (ChatGPT, Gemini web, API riêng…): xuất SRT + lời dặn → nhập lại bản dịch
-        ext = ctk.CTkFrame(sec.body, fg_color="transparent")
-        ext.pack(fill="x", pady=(4, 0))
-        row_label(ext, "AI bên ngoài", "Dùng ChatGPT / Gemini / Claude / DeepSeek trên web hoặc API riêng: «Xuất» lưu file "
-                                       "SRT và chép sẵn lời dặn vào clipboard → gửi cả hai cho AI → «Nhập bản dịch» (từ "
-                                       "file, hoặc dán thẳng SRT AI trả về). Máy luôn giữ mốc thời gian gốc của từng câu "
-                                       "nên phụ đề không lệch video, kể cả khi AI sửa mốc / gộp / bỏ sót câu.").pack(side="left")
-        button(ext, "Nhập bản dịch", icon_name="download", size="sm", command=self._ext_import_menu,
-               tip="Nhập SRT bản dịch AI ngoài trả về — giữ mốc thời gian gốc").pack(side="right")
-        button(ext, "Xuất", icon_name="export", size="sm", command=self._ext_export_menu,
-               tip="Xuất SRT lời gốc (để dịch) hoặc song ngữ (để rà soát) + lời dặn cho AI").pack(side="right", padx=(0, 6))
         self.tr_enable = SwitchRow(sec.body, "Tự dịch khi chuẩn bị video", on_change=s(cfg, "translate_enable", preview=False),
                                    info="Bước «Chuẩn bị» tự dịch khi phụ đề hoặc lồng tiếng cần bản dịch.")
         self.tr_enable.pack(fill="x", pady=(4, 0))
         self.tr_status = StatusLabel(sec.body, "")
         self.tr_status.pack(fill="x")
 
-        sec = Section(page, "Tệp phụ đề", collapsed=True)
+        # tệp phụ đề: đem ra AI bên ngoài (ChatGPT / Gemini web…) dịch / rà soát rồi nạp lại — giữ mốc thời gian gốc
+        sec = Section(page, "Tệp phụ đề", info="Dịch bằng AI bên ngoài: «Xuất SRT › Lời gốc» → gửi file cho ChatGPT / "
+                                               "Gemini / Claude / DeepSeek → chép SRT AI trả về → «Nhập bản dịch › Dán SRT…». "
+                                               "Máy luôn giữ mốc thời gian gốc của từng câu nên phụ đề không lệch video, "
+                                               "kể cả khi AI sửa mốc / gộp / bỏ sót câu. Cần lời dặn cho AI: «Xuất SRT › "
+                                               "Chép lời dặn».")
         sec.pack(fill="x", pady=4)
         self.file_section = sec
-        ButtonRow(sec.body, [("Chọn file SRT", self._pick_srt, None), ("Xuất SRT", self._export_srt, None)]).pack(fill="x", pady=2)
-        ButtonRow(sec.body, [("Sửa thời gian…", self.open_editor, None), ("Dán bản dịch ngoài…", self._manual_translate, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Xuất SRT ▾", self._export_menu, None),
+                             ("Nhập bản dịch ▾", self._import_menu, None)]).pack(fill="x", pady=2)
+        ButtonRow(sec.body, [("Nạp SRT lời gốc…", self._pick_srt, None), ("Xem / sửa SRT…", self.open_editor, None)]).pack(
+            fill="x", pady=2)
         ButtonRow(sec.body, [("Mở bằng app khác", self._open_srt, None),
                              ("Xoá phụ đề & giọng của video…", self._clear_cache, T.danger_button())]).pack(fill="x", pady=2)
         self.file_status = StatusLabel(sec.body, "")
@@ -181,7 +182,24 @@ class SRTModule(BaseModule):
         self.pages[name].pack(fill="x")
         if name == TAB_TEXT:
             self.editor.start_tick()               # tô câu đang phát (tự dừng khi tab bị ẩn)
+            self.after(10, self._fit_text_page)
         self.scroll_top()
+
+    def _fit_text_page(self) -> None:
+        """Tab «Lời thoại»: trang cao đúng bằng phần còn lại của khung nhìn — danh sách câu chiếm hết chỗ (tự cuộn bên
+        trong), ô «Nhờ AI sửa» luôn ở đáy như chatbot. Cửa sổ quá thấp thì giữ tối thiểu, bảng cuộn như thường."""
+        page = self.pages[TAB_TEXT]
+        try:
+            if not page.winfo_ismapped():
+                return
+            canvas = self._parent_canvas
+            top = page.winfo_rooty() - canvas.winfo_rooty() + int(canvas.canvasy(0))
+            k = float(ctk.ScalingTracker.get_widget_scaling(page)) or 1.0
+            h = max(460.0, (canvas.winfo_height() - top - 6) / k)
+            if abs(float(page.cget("height")) - h) > 2:
+                page.configure(height=h)
+        except (tk.TclError, ValueError):
+            pass
 
     def open_style(self) -> None:
         """Từ nơi khác (tab Duyệt «Sửa ›», mục cũ «Phụ đề»): mở tab «Phụ đề»."""
@@ -229,6 +247,7 @@ class SRTModule(BaseModule):
 
     def on_shown(self) -> None:
         super().on_shown()
+        self.after_idle(self._fit_text_page)
         self.editor.reload_if_stale()
         if self.tab_var.get() == TAB_TEXT:
             self.editor.start_tick()
@@ -298,6 +317,22 @@ class SRTModule(BaseModule):
                                        initialdir=str(Path(it.path).parent))
         if not p:
             return
+        if it.srt_path and Path(it.srt_path).exists():
+            from app.services import external_ai as X
+            from app.services.srt_utils import decode_subtitle
+
+            text = decode_subtitle(Path(p).read_bytes())
+            if X.looks_translated(text, load_srt(it.srt_path), self.state.subtitle.translate_target):
+                ans = messagebox.askyesnocancel(
+                    "Nạp SRT", f"File «{Path(p).name}» là BẢN DỊCH ({self.state.subtitle.translate_target}), còn lời gốc "
+                               "của video là tiếng nước ngoài.\n\nCó = nhập làm bản dịch (giữ mốc thời gian gốc — đúng "
+                               "cho file AI bên ngoài dịch xong)\nKhông = vẫn dùng làm lời gốc mới (bản dịch cũ bỏ)",
+                    icon="warning")
+                if ans is None:
+                    return
+                if ans:
+                    self.import_translation_text(it, text)
+                    return
         self.window.pipeline.attach_srt(it, p)      # bản dịch / người nói theo SRT cũ bỏ đi
         self.state.mark_dirty()
         self._after_change(it)
@@ -319,21 +354,9 @@ class SRTModule(BaseModule):
             return
         from app.ui.widgets.srt_editor import SRTEditorDialog
 
-        SRTEditorDialog(self.window, it, on_saved=lambda: self._after_change(it))
+        dlg = SRTEditorDialog(self.window, it, on_saved=lambda: self._after_change(it),
+                              on_import=lambda text: self.import_translation_text(it, text, parent=dlg))
 
-    def _export_srt(self) -> None:
-        it = self._need_item()
-        if it is None:
-            return
-        src = it.srt_translated_path if it.srt_translated_path and Path(it.srt_translated_path).exists() else it.srt_path
-        if not src or not Path(src).exists():
-            messagebox.showinfo("Edit Studio", "Chưa có SRT để xuất.")
-            return
-        p = filedialog.asksaveasfilename(defaultextension=".srt", initialfile=f"{it.stem}.srt",
-                                         filetypes=[("SRT", "*.srt")])
-        if p:
-            shutil.copyfile(src, p)
-            self.window.log(f"Đã xuất {p}")
 
     def _open_srt(self) -> None:
         """Mở file đang sửa: bản dịch nếu có (cùng file với «Xuất SRT»), không thì lời gốc."""
@@ -425,58 +448,86 @@ class SRTModule(BaseModule):
         if v != self.state.subtitle.translate_style:
             self.set_value(self.state.subtitle, "translate_style", v, preview=False)
 
-    # ── AI bên ngoài ──────────────────────────────────────────────────────
-    def _menu(self, items: list[tuple[str, object]]) -> None:
+    # ── Tệp phụ đề: xuất / nhập (dịch bằng AI bên ngoài) ─────────────────
+    def _menu(self, items: list[tuple[str, object] | None]) -> None:
         m = tk.Menu(self, tearoff=0, bg=T.BG_ELEVATED, fg=T.TEXT, activebackground=T.BG_HOVER,
                     activeforeground=T.TEXT, bd=0)
-        for label, cmd in items:
-            m.add_command(label=label, command=cmd)
+        for it in items:
+            if it is None:
+                m.add_separator()
+            else:
+                m.add_command(label=it[0], command=it[1])
         m.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
-    def _ext_export_menu(self) -> None:
-        self._menu([("Lời gốc — để AI ngoài dịch", lambda: self._ext_export("translate")),
-                    ("Song ngữ (gốc + bản dịch) — để AI ngoài rà soát", lambda: self._ext_export("review"))])
+    def _export_menu(self) -> None:
+        self._menu([("Bản dịch (đang dùng)", lambda: self._export("translation")),
+                    ("Lời gốc — để AI bên ngoài dịch", lambda: self._export("source")),
+                    ("Song ngữ (gốc + bản dịch) — để AI bên ngoài rà soát", lambda: self._export("bilingual")),
+                    None,
+                    ("Chép lời dặn cho AI: dịch", lambda: self._copy_prompt("translate")),
+                    ("Chép lời dặn cho AI: rà soát bản dịch", lambda: self._copy_prompt("review"))])
 
-    def _ext_import_menu(self) -> None:
+    def _import_menu(self) -> None:
         self._menu([("Từ file SRT…", lambda: self._ext_import(None)),
-                    ("Dán SRT vừa chép từ khung chat AI", lambda: self._ext_import("clipboard"))])
+                    ("Dán SRT vừa chép (từ khung chat AI)", lambda: self._ext_import("clipboard")),
+                    None,
+                    ("Dịch tay từng câu / dán theo dòng…", self._manual_translate)])
 
-    def _ext_export(self, kind: str) -> None:
+    def _export(self, kind: str) -> None:
+        """``kind``: "translation" (bản dịch đang dùng, chưa dịch thì lời gốc) · "source" · "bilingual". Chỉ ghi file
+        SRT (UTF-8 có BOM — Notepad / web đọc đúng chữ Hán); lời dặn cho AI chép riêng ở «Chép lời dặn»."""
         from app.services import external_ai as X
 
         it = self._need_item()
         if it is None:
             return
-        if not it.srt_path or not Path(it.srt_path).exists():
-            messagebox.showinfo("Edit Studio", "Video này chưa có lời thoại — nhận diện ở tab Nhận diện hoặc chọn file SRT trước.")
-            return
-        self._ask_save()
-        src = load_srt(it.srt_path)
+        has_src = bool(it.srt_path and Path(it.srt_path).exists())
         has_tr = bool(it.srt_translated_path and Path(it.srt_translated_path).exists())
-        if kind == "review" and not has_tr:
-            messagebox.showinfo("Edit Studio", "Video này chưa có bản dịch để rà soát — chọn «Lời gốc» để AI ngoài dịch.")
+        if not has_src and not has_tr:
+            messagebox.showinfo("Edit Studio", "Video này chưa có lời thoại — nhận diện ở tab Nhận diện hoặc nạp file SRT trước.")
             return
-        cfg = self.state.subtitle
-        sample = " ".join(c.plain for c in src[:20])
-        text = X.export_source(src) if kind == "translate" else X.export_bilingual(src, load_srt(it.srt_translated_path))
-        tag = "loi-goc" if kind == "translate" else "song-ngu"
+        if kind == "bilingual" and not (has_src and has_tr):
+            messagebox.showinfo("Edit Studio", "Cần cả lời gốc và bản dịch để xuất song ngữ — chưa dịch thì xuất «Lời gốc».")
+            return
+        if kind == "source" and not has_src:
+            kind = "translation"
+        self._ask_save()
+        if kind == "bilingual":
+            text, tag = X.export_bilingual(load_srt(it.srt_path), load_srt(it.srt_translated_path)), "song-ngu"
+        else:
+            path = it.srt_path if kind == "source" or not has_tr else it.srt_translated_path
+            text, tag = X.export_source(load_srt(path)), ("loi-goc" if path == it.srt_path else "ban-dich")
+        n = text.count("-->")
         p = filedialog.asksaveasfilename(defaultextension=".srt", initialfile=f"{it.stem}.{tag}.srt",
                                          initialdir=str(Path(it.path).parent), filetypes=[("SRT", "*.srt")])
         if not p:
             return
-        ask = X.prompt(kind, len(src), X.source_name(self.state.subtitle.stt_language, sample),
-                       X.target_name(cfg.translate_target), cfg.translate_style, self.state.settings.glossary)
         Path(p).write_text(text, encoding="utf-8")
-        Path(p).with_suffix(".loi-dan.txt").write_text(ask, encoding="utf-8")
+        tip = (" Gửi file cho AI bên ngoài; cần lời dặn thì «Xuất SRT › Chép lời dặn», xong «Nhập bản dịch»."
+               if tag != "ban-dich" else "")
+        self.file_status.ok(f"Đã xuất {Path(p).name} ({n} câu).{tip}")
+        self.window.log(f"Đã xuất {p}")
+
+    def _copy_prompt(self, kind: str) -> None:
+        """Chép lời dặn cho AI bên ngoài (giữ đủ số câu + mốc thời gian, phong cách của mẫu, tên riêng) vào clipboard."""
+        from app.services import external_ai as X
+
+        it = self._need_item()
+        if it is None:
+            return
+        src = load_srt(it.srt_path) if it.srt_path and Path(it.srt_path).exists() else []
+        if not src:
+            messagebox.showinfo("Edit Studio", "Video này chưa có lời gốc.")
+            return
+        cfg = self.state.subtitle
+        ask = X.prompt(kind, len(src), X.source_name(cfg.stt_language, " ".join(c.plain for c in src[:20])),
+                       X.target_name(cfg.translate_target), cfg.translate_style, self.state.settings.glossary)
         self.clipboard_clear()
         self.clipboard_append(ask)
-        self.tr_status.ok(f"Đã xuất {Path(p).name} ({len(src)} câu) + lời dặn (đã chép vào clipboard, lưu kèm "
-                          f"{Path(p).with_suffix('.loi-dan.txt').name}). Gửi file + dán lời dặn cho AI, xong bấm «Nhập bản dịch».")
-        self.window.log(f"Xuất cho AI ngoài: {p}")
+        self.file_status.ok("Đã chép lời dặn vào clipboard — dán vào khung chat AI cùng file SRT.")
 
     def _ext_import(self, source: str | None) -> None:
-        from app.services import external_ai as X
-        from app.services.srt_utils import Cue, decode_subtitle, save_srt
+        from app.services.srt_utils import decode_subtitle
 
         it = self._need_item()
         if it is None:
@@ -498,6 +549,14 @@ class SRTModule(BaseModule):
             if not p:
                 return
             text = decode_subtitle(Path(p).read_bytes())
+        self.import_translation_text(it, text)
+
+    def import_translation_text(self, it, text: str, parent=None) -> bool:
+        """Chữ SRT bản dịch (AI ngoài trả về / dán tay) → bản dịch của video, LUÔN dùng mốc thời gian gốc
+        (``external_ai.import_translation``); bản dịch cũ → .srt.bak. True nếu đã nhập."""
+        from app.services import external_ai as X
+        from app.services.srt_utils import Cue, save_srt
+
         self._ask_save()
         src = load_srt(it.srt_path)
         old = it.srt_translated_path if it.srt_translated_path and Path(it.srt_translated_path).exists() else None
@@ -505,12 +564,12 @@ class SRTModule(BaseModule):
         res = X.import_translation(src, text, self.state.subtitle.translate_target, prev)
         if not res.got:
             messagebox.showinfo("Edit Studio", "Không đọc được câu nào — nội dung phải là SRT (số thứ tự, mốc thời gian, "
-                                               "chữ) hoặc danh sách «1. câu dịch».")
-            return
+                                               "chữ) hoặc danh sách «1. câu dịch».", parent=parent)
+            return False
         if res.matched < len(src) * 0.8 and not messagebox.askyesno(
-                "Nhập bản dịch", f"AI ngoài chỉ trả {res.matched}/{len(src)} câu khớp với lời gốc.\n\n{res.summary()}\n\n"
-                                 "Vẫn nhập? (câu thiếu giữ bản dịch cũ / lời gốc)"):
-            return
+                "Nhập bản dịch", f"Chỉ {res.matched}/{len(src)} câu khớp với lời gốc.\n\n{res.summary()}\n\n"
+                                 "Vẫn nhập? (câu thiếu giữ bản dịch cũ / lời gốc)", parent=parent):
+            return False
         out = str(old or self.window.pipeline.translated_path(it))
         if old:
             shutil.copyfile(old, Path(old).with_suffix(".srt.bak"))       # bản cũ giữ lại
@@ -518,9 +577,10 @@ class SRTModule(BaseModule):
         it.srt_translated_path = out
         self.state.mark_dirty()
         self._after_change(it)
-        msg = f"Nhập bản dịch AI ngoài: {res.summary()}" + (" — bản cũ lưu .bak." if old else ".")
-        (self.tr_status.warn if res.missing or res.untranslated else self.tr_status.ok)(msg)
+        msg = f"Nhập bản dịch: {res.summary()}" + (" — bản cũ lưu .bak." if old else ".")
+        (self.file_status.warn if res.missing or res.untranslated else self.file_status.ok)(msg)
         self.window.log(msg)
+        return True
 
     def _manual_translate(self) -> None:
         it = self._need_item()

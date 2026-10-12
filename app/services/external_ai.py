@@ -134,6 +134,17 @@ def _blocks(text: str) -> list[tuple[int | None, float | None, float | None, str
     return out
 
 
+def looks_translated(text: str, src: list[Cue], target: str) -> bool:
+    """Nội dung là BẢN DỊCH (vd tiếng Việt) trong khi lời gốc đang là chữ Hán / Nhật / Hàn — dễ nạp / dán nhầm vào
+    chỗ lời gốc (ghi đè mất lời gốc)."""
+    if target in _CJK_TARGETS or not src:
+        return False
+    src_cjk = sum(bool(_CJK.search(c.plain)) for c in src) / len(src)
+    lines = [b[3] for b in _blocks(text)] or [ln for ln in text.splitlines() if ln.strip()]
+    new_cjk = sum(bool(_CJK.search(t)) for t in lines) / max(1, len(lines))
+    return bool(lines) and src_cjk >= 0.5 and new_cjk <= 0.1
+
+
 def _clean(text: str, target: str) -> str:
     """Bỏ dòng lời gốc (AI trả cả song ngữ) khi dịch sang ngôn ngữ không dùng chữ Hán / Nhật / Hàn."""
     if target in _CJK_TARGETS:

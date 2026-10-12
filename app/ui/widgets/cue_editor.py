@@ -6,13 +6,17 @@ video). Câu AI sửa tô vàng, ↶ trả lại từng câu, «Hoàn tác» tr�
 trích: giữ âm gốc, vẫn hiện phụ đề) · «Tìm & thay» cho cả video · «Lưu & tạo lại giọng» (câu không đổi dùng lại giọng cũ
 nên rất nhanh; không sửa chữ mà giọng đã cũ thì vẫn tạo lại).
 
-Danh sách chia trang (không có thanh cuộn riêng) để nằm gọn trong bảng tính năng vốn đã cuộn được.
+Bố cục kiểu chatbot: danh sách TẤT CẢ câu chiếm hết chiều cao còn lại, một thanh cuộn, không chia trang; hai nút lưu; ô
+«Nhờ AI sửa» neo dưới cùng kèm lịch sử. Danh sách ẢO: chỉ có ``POOL`` dòng widget (đủ lấp khung nhìn), cuộn tới đâu đổ
+chữ câu đó vào — video 300 câu nhẹ như 30 câu (dựng mỗi dòng CTk ~45 ms: dựng đủ 300 dòng mất ~14 s). Nơi đặt editor phải cho nó một chiều cao (tab «Lời thoại»
+đặt trang cao đúng bằng khung nhìn).
 """
 
 from __future__ import annotations
 
 import bisect
 import re
+import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox
@@ -29,7 +33,8 @@ from app.ui.progress_panel import friendly_error
 
 
 class CueEditor(ctk.CTkFrame):
-    PAGE = 12
+    POOL = 18                   # số dòng widget (đủ lấp khung nhìn cao ~1100 px) — dùng lại khi cuộn, mọi video
+    WHEEL = 2                   # số câu cuộn mỗi nấc chuột
 
     def __init__(self, master, window, *, on_saved: Callable[[VideoItem], None] | None = None) -> None:
         super().__init__(master, fg_color="transparent")
@@ -44,7 +49,9 @@ class CueEditor(ctk.CTkFrame):
         self._starts: list[float] = []
         self.edit_path: str | None = None
         self.is_translation = False
-        self.page = 0
+        self.page = 0                   # giữ cho nơi gọi cũ — danh sách không còn chia trang
+        self._first = 0                 # câu ở dòng trên cùng của khung nhìn
+        self._visible = self.POOL       # số dòng thấy trọn trong khung (đo sau khi vẽ)
         self._cur = -1                  # câu đang ở vị trí khung xem trước
         self._painted = -1
         self._stop_at: float | None = None
@@ -64,56 +71,26 @@ class CueEditor(ctk.CTkFrame):
         self.head = auto_wrap(ctk.CTkLabel(self, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
                                            justify="left", wraplength=400))
         self.head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        # danh sách câu: chiếm hết chiều cao còn lại, tự cuộn bên trong
+        self.grid_rowconfigure(1, weight=1)
         self.rows_frame = ctk.CTkFrame(self, fg_color=T.BG_INPUT, corner_radius=8)
-        self.rows_frame.grid(row=1, column=0, sticky="ew")
+        self.rows_frame.grid(row=1, column=0, sticky="nsew")
         self.rows_frame.grid_columnconfigure(0, weight=1)
+        self.rows_frame.grid_rowconfigure(0, weight=1)
+        self.rows_area = ctk.CTkFrame(self.rows_frame, fg_color="transparent")
+        self.rows_area.grid(row=0, column=0, sticky="nsew", padx=(4, 0), pady=4)
+        self.rows_area.grid_propagate(False)          # cao theo chỗ được chia, dòng thừa bị khuất (không đẩy khung)
+        self.rows_area.grid_columnconfigure(0, weight=1)
+        self.vbar = ctk.CTkScrollbar(self.rows_frame, command=self._vscroll)
+        self.vbar.grid(row=0, column=1, sticky="ns", padx=2, pady=4)
+        tk.Misc.bind(self.rows_area, "<Configure>", lambda _e: self.after_idle(self._update_bar), add="+")
+        for w in (self.rows_area, self.rows_frame):              # lăn ở khoảng trống giữa các dòng cũng cuộn
+            for x in (w, getattr(w, "_canvas", None)):
+                if x is not None:
+                    tk.Misc.bind(x, "<MouseWheel>", self._on_wheel, add="+")
         self._rows: list[dict] = []
-        for r in range(self.PAGE):
-            top = ctk.CTkFrame(self.rows_frame, fg_color="transparent")
-            play = ctk.CTkButton(top, text="", width=96, height=22, anchor="w", font=T.mono(10), fg_color="transparent",
-                                 hover_color=T.BG_HOVER, text_color=T.TEXT_MUTED, command=lambda r=r: self._play_row(r))
-            play.pack(side="left")
-            ref = auto_wrap(ctk.CTkLabel(top, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w",
-                                         justify="left", wraplength=300))
-            ref.pack(side="left", fill="x", expand=True, padx=(4, 0))
-            ent = ctk.CTkEntry(self.rows_frame, height=30, font=T.font(12))
-            ent.bind("<FocusIn>", lambda _e, r=r: self._focus_row(r))
-            ent.bind("<KeyRelease>", lambda _e: self._update_dirty_mark(), add="+")
-            ent.bind("<Return>", lambda _e, r=r: self._move(r, 1))
-            ent.bind("<Down>", lambda _e, r=r: self._move(r, 1))
-            ent.bind("<Up>", lambda _e, r=r: self._move(r, -1))
-            # Ctrl+Enter / Ctrl+↑↓ (duyệt, đổi video) — ô nhập tự bắt Enter/↑↓ nên chuyển tiếp lên cửa sổ chính
-            ent.bind("<Control-Return>", lambda _e: (self.window._review_key("approve"), "break")[1])
-            ent.bind("<Control-Down>", lambda _e: (self.window._review_key("next"), "break")[1])
-            ent.bind("<Control-Up>", lambda _e: (self.window._review_key("prev"), "break")[1])
-            redo = ctk.CTkButton(self.rows_frame, text="↻", width=30, height=30, command=lambda r=r: self._ai_row(r),
-                                 **{**T.secondary_button(), "font": T.font(13, "bold")})
-            back = ctk.CTkButton(self.rows_frame, text="↶", width=30, height=30, command=lambda r=r: self._revert_row(r),
-                                 **{**T.secondary_button(), "font": T.font(13, "bold"), "text_color": T.WARNING})
-            mute = ctk.CTkButton(self.rows_frame, text="⊘", width=30, height=30, command=lambda r=r: self._toggle_noread(r),
-                                 **{**T.secondary_button(), "font": T.font(13, "bold")})
-            Tooltip(play, "Phát đúng câu này trên khung xem trước (có giọng lồng)")
-            Tooltip(redo, "AI dịch lại riêng câu này (theo «Phong cách dịch», xem câu trước/sau làm ngữ cảnh)")
-            Tooltip(back, "Trả lại câu này như trước khi AI sửa")
-            Tooltip(mute, "Không lồng tiếng câu này — giữ âm gốc (lời bài hát, câu trích…), phụ đề vẫn hiện. Bấm lần nữa "
-                          "để đọc lại.")
-            self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "back": back, "mute": mute, "top": top,
-                               "widgets": [(top, dict(row=2 * r, column=0, columnspan=4, sticky="ew", padx=4, pady=(4, 0))),
-                                           (ent, dict(row=2 * r + 1, column=0, sticky="ew", padx=(4, 2), pady=(0, 2))),
-                                           (redo, dict(row=2 * r + 1, column=1, padx=(2, 2), pady=(0, 2))),
-                                           (back, dict(row=2 * r + 1, column=2, padx=(0, 2), pady=(0, 2))),
-                                           (mute, dict(row=2 * r + 1, column=3, padx=(0, 4), pady=(0, 2)))]})
+        self._build_rows(self.POOL)
 
-        nav = ctk.CTkFrame(self, fg_color="transparent")
-        nav.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        self.prev_btn = ctk.CTkButton(nav, text="‹", width=30, height=30, command=lambda: self.show_page(self.page - 1),
-                                      **T.secondary_button())
-        self.prev_btn.pack(side="left")
-        self.page_lbl = ctk.CTkLabel(nav, text="", font=T.font(11), width=90)
-        self.page_lbl.pack(side="left", padx=4)
-        self.next_btn = ctk.CTkButton(nav, text="›", width=30, height=30, command=lambda: self.show_page(self.page + 1),
-                                      **T.secondary_button())
-        self.next_btn.pack(side="left")
         # hai nút lưu một hàng riêng, chia đều — bảng tính năng hẹp (laptop) vẫn đủ chỗ cả hai
         saves = ctk.CTkFrame(self, fg_color="transparent")
         saves.grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -127,12 +104,15 @@ class CueEditor(ctk.CTkFrame):
                                tip="Lưu các câu đã sửa; video có lồng tiếng thì tạo lại giọng (câu không đổi dùng lại)")
         self.save_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
-        # ── Nhờ AI sửa (kiểu chat): AI tự tìm câu liên quan tới yêu cầu và chỉ sửa đúng những câu đó ──
-        ai = ctk.CTkFrame(self, fg_color="transparent")
-        ai.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        self.status = StatusLabel(self, "")
+        self.status.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+
+        # ── Nhờ AI sửa (kiểu chatbot, neo dưới cùng): lịch sử hỏi – đáp + ô nhập; AI tự tìm câu liên quan ──
+        ai = ctk.CTkFrame(self, fg_color=T.BG_INPUT, corner_radius=8)
+        ai.grid(row=5, column=0, sticky="ew", pady=(6, 0))
         ai.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(ai, fg_color="transparent")
-        head.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
+        head.grid(row=0, column=0, columnspan=3, sticky="ew", padx=8, pady=(6, 2))
         ctk.CTkLabel(head, text="Nhờ AI sửa", font=T.font(11), text_color=T.TEXT_DIM, anchor="w").pack(side="left")
         info_icon(head, "Gõ yêu cầu bằng lời, vd «xưng anh – em», «sửa bạn mày thành chó nhà mày», «rà lại cả kịch bản cho "
                         "thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), câu khác giữ "
@@ -142,19 +122,77 @@ class CueEditor(ctk.CTkFrame):
         self.find_btn = button(head, "Tìm & thay", icon_name="edit", variant="ghost", size="sm", command=self.find_replace,
                                tip="Đổi một chữ / tên riêng ở mọi câu của video (chưa lưu — xem rồi bấm Lưu)")
         self.find_btn.pack(side="right")
-        self.ai_req = ctk.CTkEntry(ai, height=32, font=T.font(12),
-                                   placeholder_text="vd: xưng anh – em, văn nói tự nhiên hơn")
-        self.ai_req.grid(row=1, column=0, sticky="ew")
+        self.ai_undo = button(head, "Hoàn tác", icon_name="undo", variant="ghost", size="sm", command=self.ai_revert,
+                              tip="Trả lại mọi câu AI đã sửa (chưa lưu) như cũ")
+        self.ai_undo.pack(side="right", padx=(0, 4))
+        self.ai_undo.pack_forget()
+        # lịch sử hỏi – đáp của video đang sửa (hiện khi đã nhắn) — như khung chat
+        self.chat = ctk.CTkTextbox(ai, height=96, font=T.font(12), wrap="word", fg_color="transparent",
+                                   activate_scrollbars=True)
+        self.chat.tag_config("me", foreground=T.ACCENT)
+        self.chat.tag_config("ai", foreground=T.TEXT)
+        self.chat.tag_config("wait", foreground=T.TEXT_MUTED)
+        self.chat.configure(state="disabled")
+        self.chat.grid(row=1, column=0, columnspan=3, sticky="ew", padx=6)
+        self.chat.grid_remove()
+        self.ai_req = ctk.CTkEntry(ai, height=34, font=T.font(12),
+                                   placeholder_text="Nhắn AI sửa lời thoại… vd: sửa câu trả lời cho khớp câu hỏi")
+        self.ai_req.grid(row=2, column=0, sticky="ew", padx=(8, 0), pady=(4, 8))
         self.ai_req.bind("<Return>", lambda _e: (self.ai_edit(), "break")[1])
         self.ai_send = button(ai, "Gửi", icon_name="sparkle", size="sm", command=self.ai_edit,
-                              tip="Gửi yêu cầu (Enter). Câu AI sửa được tô vàng, chưa lưu — xem rồi bấm «Lưu & tạo lại giọng».")
-        self.ai_send.grid(row=1, column=1, padx=(6, 0))
-        self.ai_undo = button(ai, "Hoàn tác", icon_name="undo", variant="ghost", size="sm", command=self.ai_revert,
-                              tip="Trả lại mọi câu AI đã sửa (chưa lưu) như cũ")
-        self.ai_undo.grid(row=1, column=2, padx=(4, 0))
-        self.ai_undo.grid_remove()
-        self.status = StatusLabel(self, "")
-        self.status.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+                              tip="Gửi (Enter). Câu AI sửa được tô vàng, chưa lưu — xem rồi bấm Lưu.")
+        self.ai_send.grid(row=2, column=1, padx=(6, 8), pady=(4, 8))
+
+    def _build_rows(self, n: int) -> None:
+        """Dựng thêm dòng (ô câu + nút) tới đủ ``n`` dòng."""
+        for r in range(len(self._rows), n):
+            top = ctk.CTkFrame(self.rows_area, fg_color="transparent")
+            play = ctk.CTkButton(top, text="", width=96, height=22, anchor="w", font=T.mono(10), fg_color="transparent",
+                                 hover_color=T.BG_HOVER, text_color=T.TEXT_MUTED, command=lambda r=r: self._play_row(r))
+            play.pack(side="left")
+            ref = auto_wrap(ctk.CTkLabel(top, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w",
+                                         justify="left", wraplength=300))
+            ref.pack(side="left", fill="x", expand=True, padx=(4, 0))
+            ent = ctk.CTkEntry(self.rows_area, height=30, font=T.font(12))
+            ent.bind("<FocusIn>", lambda _e, r=r: self._focus_row(r))
+            ent.bind("<KeyRelease>", lambda _e: self._update_dirty_mark(), add="+")
+            ent.bind("<Return>", lambda _e, r=r: self._move(r, 1))
+            ent.bind("<Down>", lambda _e, r=r: self._move(r, 1))
+            ent.bind("<Up>", lambda _e, r=r: self._move(r, -1))
+            # Ctrl+Enter / Ctrl+↑↓ (duyệt, đổi video) — ô nhập tự bắt Enter/↑↓ nên chuyển tiếp lên cửa sổ chính
+            ent.bind("<Control-Return>", lambda _e: (self.window._review_key("approve"), "break")[1])
+            ent.bind("<Control-Down>", lambda _e: (self.window._review_key("next"), "break")[1])
+            ent.bind("<Control-Up>", lambda _e: (self.window._review_key("prev"), "break")[1])
+            redo = ctk.CTkButton(self.rows_area, text="↻", width=30, height=30, command=lambda r=r: self._ai_row(r),
+                                 **{**T.secondary_button(), "font": T.font(13, "bold")})
+            back = ctk.CTkButton(self.rows_area, text="↶", width=30, height=30, command=lambda r=r: self._revert_row(r),
+                                 **{**T.secondary_button(), "font": T.font(13, "bold"), "text_color": T.WARNING})
+            mute = ctk.CTkButton(self.rows_area, text="⊘", width=30, height=30, command=lambda r=r: self._toggle_noread(r),
+                                 **{**T.secondary_button(), "font": T.font(13, "bold")})
+            Tooltip(play, "Phát đúng câu này trên khung xem trước (có giọng lồng)")
+            Tooltip(redo, "AI dịch lại riêng câu này (theo «Phong cách dịch», xem câu trước/sau làm ngữ cảnh)")
+            Tooltip(back, "Trả lại câu này như trước khi AI sửa")
+            Tooltip(mute, "Không lồng tiếng câu này — giữ âm gốc (lời bài hát, câu trích…), phụ đề vẫn hiện. Bấm lần nữa "
+                          "để đọc lại.")
+            self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "back": back, "mute": mute, "top": top,
+                               "widgets": [(top, dict(row=2 * r, column=0, columnspan=4, sticky="ew", padx=4, pady=(4, 0))),
+                                           (ent, dict(row=2 * r + 1, column=0, sticky="ew", padx=(4, 2), pady=(0, 2))),
+                                           (redo, dict(row=2 * r + 1, column=1, padx=(2, 2), pady=(0, 2))),
+                                           (back, dict(row=2 * r + 1, column=2, padx=(0, 2), pady=(0, 2))),
+                                           (mute, dict(row=2 * r + 1, column=3, padx=(0, 4), pady=(0, 2)))]})
+            for w in (top, ent, redo, back, mute):
+                self._bind_wheel(w)
+
+
+    def _bind_wheel(self, w) -> None:
+        """Lăn chuột trên dòng nào cũng cuộn danh sách (không cuộn cả bảng tính năng)."""
+        tk.Misc.bind(w, "<MouseWheel>", self._on_wheel, add="+")
+        for ch in w.winfo_children():
+            self._bind_wheel(ch)
+
+    def _on_wheel(self, e) -> str:
+        self._scroll(-self.WHEEL if e.delta > 0 else self.WHEEL)
+        return "break"
 
     def destroy(self) -> None:
         self.stop_tick()
@@ -182,9 +220,37 @@ class CueEditor(ctk.CTkFrame):
             self.load(self.item)
             self.show_page(page, sync=False)
 
+    def _chat_add(self, who: str, text: str) -> None:
+        """Thêm một dòng vào khung chat (``who``: "me" / "ai" / "wait")."""
+        self.chat.configure(state="normal")
+        if who == "ai" or who == "wait":
+            self._chat_drop_wait()
+        prefix = {"me": "Bạn ›  ", "ai": "AI ›  ", "wait": "AI ›  "}[who]
+        start = self.chat.index("end-1c")
+        self.chat.insert("end", ("\n" if self.chat.get("1.0", "end-1c") else "") + prefix + text)
+        self.chat.tag_add(who, start, "end-1c")
+        self.chat.configure(state="disabled")
+        self.chat.grid()
+        self.chat.see("end")
+
+    def _chat_drop_wait(self) -> None:
+        """Bỏ dòng «AI đang đọc…» khi có trả lời."""
+        ranges = self.chat.tag_ranges("wait")
+        if ranges:
+            self.chat.configure(state="normal")
+            self.chat.delete(ranges[0], ranges[-1])      # dòng chờ gồm cả dấu xuống dòng phía trước
+            self.chat.configure(state="disabled")
+
+    def _chat_clear(self) -> None:
+        self.chat.configure(state="normal")
+        self.chat.delete("1.0", "end")
+        self.chat.configure(state="disabled")
+        self.chat.grid_remove()
+
     def load(self, it: VideoItem | None) -> None:
         if it is not self.item:
             self._ai_history = []
+            self._chat_clear()
         self.item = it
         self._src_sig = self._file_sig(it)
         self._cur = -1
@@ -212,76 +278,137 @@ class CueEditor(ctk.CTkFrame):
         self.texts = [c.text.replace("\n", " ") for c in self.cues]
         self._orig_texts = list(self.texts)
         self._noread = self.window.pipeline.load_noread(it) if it is not None else []
+        self._first = 0                                 # video mới → về đầu danh sách
         self.show_page(0, sync=False)
         self._update_dirty_mark()
         self.status.info("")
 
     def _range(self) -> range:
-        a = self.page * self.PAGE
-        return range(a, min(a + self.PAGE, len(self.cues)))
+        """Câu đang nằm trên các dòng của khung nhìn."""
+        return range(self._first, min(self._first + len(self._rows), len(self.cues)))
 
     def _sync(self) -> None:
+        """Chữ đang gõ ở các dòng đang hiện → ``texts`` (gọi trước khi cuộn / lưu / gửi AI)."""
         for row, i in zip(self._rows, self._range()):
             if i < len(self.texts):
                 self.texts[i] = row["entry"].get()
 
-    def show_page(self, page: int, sync: bool = True) -> None:
+    @staticmethod
+    def _set(row: dict, name: str, **kw) -> None:
+        """configure chỉ phần thật sự đổi — mỗi lần configure, widget CTk vẽ lại cả khung (cuộn danh sách ảo vẽ lại
+        18 dòng mỗi nấc chuột: bỏ được phần lớn chi phí)."""
+        cache = row.setdefault("_cache", {}).setdefault(name, {})
+        diff = {k: v for k, v in kw.items() if cache.get(k) != v}
+        if diff:
+            row[name].configure(**diff)
+            cache.update(diff)
+
+    def _paint_row(self, r: int, i: int) -> None:
+        row, c = self._rows[r], self.cues[i]
+        off = self._is_noread(i)
+        self._set(row, "play", text=f"{'⊘' if off else '▶'} {i + 1} · {format_ts(c.start, '.')[3:8]}",
+                  text_color=T.TEXT_MUTED)
+        self._paint_ref(row, i)
+        if row["entry"].get() != self.texts[i]:
+            row["entry"].delete(0, "end")
+            row["entry"].insert(0, self.texts[i])
+        self._set(row, "entry", border_color=self._base_border(i), text_color=T.TEXT_MUTED if off else T.TEXT)
+        self._set(row, "mute", text_color=T.WARNING if off else T.TEXT_DIM)
+        shown = row.setdefault("_shown", {})
+        for w, kw in row["widgets"]:
+            show = (w is not row["redo"] or self.is_translation) and (w is not row["back"] or i in self._ai_before)
+            if shown.get(id(w)) != show:
+                (w.grid(**kw) if show else w.grid_remove())
+                shown[id(w)] = show
+
+    def show_page(self, page: int = 0, sync: bool = True) -> None:
+        """Vẽ lại các dòng đang hiện (tên cũ — không còn chia trang; ``page`` bỏ qua)."""
         if sync and self.cues:
             self._sync()
-        pages = max(1, (len(self.cues) + self.PAGE - 1) // self.PAGE)
-        self.page = max(0, min(pages - 1, page))
+        self._first = max(0, min(self._first, len(self.cues) - 1))
         idxs = self._range()
         for r, row in enumerate(self._rows):
             if r < len(idxs):
-                i = idxs[r]
-                c = self.cues[i]
-                off = self._is_noread(i)
-                row["play"].configure(text=f"{'⊘' if off else '▶'} {i + 1} · {format_ts(c.start, '.')[3:8]}",
-                                      text_color=T.TEXT_MUTED)
-                self._paint_ref(row["ref"], i)
-                row["entry"].delete(0, "end")
-                row["entry"].insert(0, self.texts[i])
-                row["entry"].configure(border_color=self._base_border(i), text_color=T.TEXT_MUTED if off else T.TEXT)
-                row["mute"].configure(text_color=T.WARNING if off else T.TEXT_DIM)
-                for w, kw in row["widgets"]:
-                    show = (w is not row["redo"] or self.is_translation) and (w is not row["back"] or i in self._ai_before)
-                    if show:
-                        w.grid(**kw)
-                    else:
-                        w.grid_remove()
+                self._paint_row(r, idxs[r])
             else:
+                shown = row.setdefault("_shown", {})
                 for w, _kw in row["widgets"]:
-                    w.grid_remove()
-        if not idxs:
+                    if shown.get(id(w)) is not False:
+                        w.grid_remove()
+                        shown[id(w)] = False
+        if not self.cues:
             self.rows_frame.grid_remove()
         else:
             self.rows_frame.grid()
         self._painted = -1
-        self._paint_current()
-        self.page_lbl.configure(text=f"Trang {self.page + 1}/{pages}" if self.cues else "")
-        self.prev_btn.configure(state="normal" if self.page > 0 else "disabled")
-        self.next_btn.configure(state="normal" if self.page < pages - 1 else "disabled")
+        self._paint_current(follow=False)
+        self.after_idle(self._update_bar)
         self.save_btn.configure(state="normal" if self.cues else "disabled")
         self.save_sub_btn.configure(state="normal" if self.cues else "disabled")
         self.find_btn.configure(state="normal" if self.cues else "disabled")
         self.ai_send.configure(state="normal" if self.cues else "disabled")
 
-    def _paint_ref(self, label: ctk.CTkLabel, i: int) -> None:
+    # ── Cuộn (danh sách ảo) ──────────────────────────────────────────────
+    def _update_bar(self) -> None:
+        """Đo số dòng thấy trọn trong khung → thanh cuộn đúng tỉ lệ."""
+        try:
+            h = self.rows_area.winfo_height()
+            if h > 1:
+                n = 0
+                for row, _i in zip(self._rows, self._range()):
+                    e = row["entry"]
+                    if not e.winfo_ismapped() or e.winfo_y() + e.winfo_height() > h:
+                        break
+                    n += 1
+                self._visible = max(1, n)
+            total = max(1, len(self.cues))
+            self.vbar.set(self._first / total, min(1.0, (self._first + self._visible) / total))
+        except tk.TclError:
+            pass
+
+    def _scroll(self, n: int) -> None:
+        if not self.cues:
+            return
+        last = max(0, len(self.cues) - self._visible)
+        first = max(0, min(self._first + n, last))
+        if first == self._first:
+            return
+        self._sync()
+        self._first = first
+        self.show_page(sync=False)
+
+    def _vscroll(self, *args) -> None:
+        """Thanh cuộn: kéo («moveto») hoặc bấm mũi tên / rãnh («scroll»)."""
+        if not self.cues or not args:
+            return
+        if args[0] == "moveto":
+            self._scroll(int(float(args[1]) * len(self.cues)) - self._first)
+        elif args[0] == "scroll":
+            step = max(1, self._visible - 1) if len(args) > 2 and args[2] == "pages" else 1
+            self._scroll(int(float(args[1])) * step)
+
+    def _see_row(self, i: int) -> None:
+        """Cuộn để câu ``i`` nằm trong khung nhìn (đang phát / bấm ↑↓ / AI vừa sửa câu khuất)."""
+        if not (0 <= i < len(self.cues)) or self._first <= i < self._first + self._visible:
+            return
+        self._scroll(max(0, i - 1) - self._first)
+
+    def _paint_ref(self, row: dict, i: int) -> None:
         """Dòng chữ nhỏ trên ô sửa: câu gốc; câu AI đã sửa thì thêm câu cũ (tô vàng)."""
         base = self.ref[i].plain if i < len(self.ref) else ""
         if self._is_noread(i):
             base = ("⊘ không đọc — giữ âm gốc · " + base).strip(" ·")
         if i not in self._ai_before:
-            label.configure(text=base, text_color=T.TEXT_MUTED)
+            self._set(row, "ref", text=base, text_color=T.TEXT_MUTED)
             return
         old = self._ai_before[i]
         note = f"✎ trước: «{old if len(old) <= 90 else old[:89] + '…'}»"
-        label.configure(text=f"{base}\n{note}" if base else note, text_color=T.WARNING)
+        self._set(row, "ref", text=f"{base}\n{note}" if base else note, text_color=T.WARNING)
 
     # ── Gắn với khung xem trước ──────────────────────────────────────────
     def _row_index(self, r: int) -> int | None:
-        idxs = self._range()
-        return idxs[r] if 0 <= r < len(idxs) else None
+        i = self._first + r
+        return i if 0 <= r < len(self._rows) and i < len(self.cues) else None
 
     def _focus_row(self, r: int) -> None:
         i = self._row_index(r)
@@ -309,9 +436,9 @@ class CueEditor(ctk.CTkFrame):
         j = i + d
         if not (0 <= j < len(self.cues)):
             return "break"
-        if j not in self._range():
-            self.show_page(j // self.PAGE)
-        self._rows[j - self.page * self.PAGE]["entry"].focus_set()
+        self._see_row(j)
+        if self._first <= j < self._first + len(self._rows):
+            self._rows[j - self._first]["entry"].focus_set()
         return "break"
 
     def start_tick(self) -> None:
@@ -341,9 +468,7 @@ class CueEditor(ctk.CTkFrame):
             cur = k if 0 <= k < len(self.cues) and t < self.cues[k].end + 0.3 else -1
             if cur != self._cur:
                 self._cur = cur
-                if cur >= 0 and pv.player.playing and cur not in self._range():
-                    self.show_page(cur // self.PAGE)       # đang phát → lật trang theo câu đang đọc
-                self._paint_current()
+                self._paint_current()                      # tô + cuộn tới câu đang đọc
             if self._stop_at is not None:
                 if not pv.player.playing:
                     self._stop_at = None
@@ -352,16 +477,22 @@ class CueEditor(ctk.CTkFrame):
                     pv.stop_play()
         self._tick_id = self.after(200, self._tick)
 
-    def _paint_current(self) -> None:
-        """Tô dòng của câu đang ở vị trí phát (chỉ vẽ lại 2 dòng đổi trạng thái — configure CTk vẽ lại cả widget)."""
-        want = self._cur - self.page * self.PAGE if self._cur in self._range() else -1
+    def _paint_current(self, follow: bool = True) -> None:
+        """Tô dòng của câu đang ở vị trí phát (chỉ vẽ lại 2 dòng đổi trạng thái — configure CTk vẽ lại cả widget);
+        đang phát mà câu nằm ngoài khung → cuộn theo."""
+        pv = self.window.preview
+        if follow and self._cur >= 0 and pv.player.playing and not (self._first <= self._cur < self._first + self._visible):
+            self._see_row(self._cur)                       # vẽ lại cả khung → gọi lại hàm này (follow=False)
+            return
+        want = self._cur - self._first if self._cur in self._range() else -1
         old = self._painted
         if want == old:
             return
         for r, on in ((old, False), (want, True)):
-            if 0 <= r < len(self._rows):
-                self._rows[r]["play"].configure(text_color=T.ACCENT if on else T.TEXT_MUTED)
-                self._rows[r]["entry"].configure(border_color=T.ACCENT if on else self._base_border(self._row_index(r)))
+            if 0 <= r < len(self._rows) and self._row_index(r) is not None:
+                self._set(self._rows[r], "play", text_color=T.ACCENT if on else T.TEXT_MUTED)
+                self._set(self._rows[r], "entry",
+                          border_color=T.ACCENT if on else self._base_border(self._row_index(r)))
         self._painted = want
 
     # ── Lưu ──────────────────────────────────────────────────────────────
@@ -595,7 +726,7 @@ class CueEditor(ctk.CTkFrame):
         self._ai_marks = set()
         self._ai_before = {}
         self._ai_after = {}
-        self.ai_undo.grid_remove()
+        self.ai_undo.pack_forget()
 
     def _apply_ai(self, edits: dict[int, str], expect: list[str] | None = None) -> list[int]:
         """Điền câu AI sửa vào ô (chưa lưu), nhớ câu cũ cho ↶ / Hoàn tác. ``expect``: chữ lúc gửi AI — câu người dùng
@@ -614,7 +745,7 @@ class CueEditor(ctk.CTkFrame):
             self._ai_marks.add(i)
             changed.append(i)
         if self._ai_marks:
-            self.ai_undo.grid()
+            self.ai_undo.pack(side="right", padx=(0, 4), after=self.find_btn)
         return changed
 
     def _revert_row(self, r: int) -> None:
@@ -627,7 +758,7 @@ class CueEditor(ctk.CTkFrame):
         self._ai_marks.discard(i)
         self._update_dirty_mark()
         if not self._ai_before:
-            self.ai_undo.grid_remove()
+            self.ai_undo.pack_forget()
         self.show_page(self.page, sync=False)
         self.status.info(f"Đã trả lại câu {i + 1} như trước khi AI sửa (chưa lưu).")
 
@@ -651,7 +782,10 @@ class CueEditor(ctk.CTkFrame):
         source = [c.plain for c in self.ref] if self.is_translation else None
         st = self.app_state.state_for(it)
         win = self.window
-        self.status.warn(f"AI đang đọc {len(current)} câu để sửa theo «{req}»…")
+        self.status.info("")
+        self._chat_add("me", req)
+        self._chat_add("wait", f"đang đọc {len(current)} câu…")
+        self.ai_req.delete(0, "end")
         self.ai_send.configure(state="disabled")
 
         def work(cancel):
@@ -665,21 +799,21 @@ class CueEditor(ctk.CTkFrame):
             if self.item is not it:
                 return
             if error:
-                self.status.error(f"AI sửa lỗi: {friendly_error(error_line(error, 200))}")
+                self._chat_add("ai", f"✖ Lỗi: {friendly_error(error_line(error, 200))}")
                 return
             edits, note = result
             changed = self._apply_ai(edits, current)     # câu người dùng sửa tiếp trong lúc chờ: giữ chữ của họ
             done_ex = "; ".join(f"câu {i + 1}: «{current[i]}» → «{self.texts[i]}»" for i in changed[:2])
             self._ai_history.append((req, (note + (f" (vd {done_ex})" if done_ex else "")).strip()))
             if not changed:
-                self.status.info(f"AI không thấy câu nào cần sửa. {note}".strip())
+                self._chat_add("ai", f"Không thấy câu nào cần sửa. {note}".strip())
                 return
-            self.show_page(changed[0] // self.PAGE, sync=False)
+            self.show_page(0, sync=False)
+            self._see_row(changed[0])
             self._update_dirty_mark()
             nums = ", ".join(f"#{i + 1}" for i in changed[:12]) + ("…" if len(changed) > 12 else "")
-            self.status.ok(f"AI sửa {len(changed)} câu ({nums}) — tô vàng, chưa lưu. {note} Xem rồi bấm «Lưu & tạo lại giọng»."
-                           .replace("  ", " "))
-            self.ai_req.delete(0, "end")
+            self._chat_add("ai", f"{note} — sửa {len(changed)} câu ({nums}), tô vàng, chưa lưu.".strip(" —"))
+            self.status.info("Xem các câu tô vàng rồi bấm «Lưu phụ đề» hoặc «Lưu & tạo lại giọng».")
 
         win.run_task("AI sửa lời thoại", work, done)
 

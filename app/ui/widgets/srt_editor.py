@@ -19,13 +19,16 @@ from app.ui.progress_panel import friendly_error
 
 
 class SRTEditorDialog(ctk.CTkToplevel):
-    """Sửa trực tiếp SRT gốc / bản dịch với tìm-thay."""
+    """Sửa trực tiếp SRT gốc / bản dịch với tìm-thay. Lưu đè lời gốc luôn giữ bản cũ .bak; dán bản dịch (vd tiếng Việt)
+    vào chỗ lời gốc chữ Hán → hỏi nhập làm bản dịch (``on_import``: giữ mốc thời gian gốc) thay vì ghi đè lời gốc."""
 
-    def __init__(self, window, item: VideoItem, on_saved: Callable[[], None] | None = None) -> None:
+    def __init__(self, window, item: VideoItem, on_saved: Callable[[], None] | None = None,
+                 on_import: Callable[[str], bool] | None = None) -> None:
         super().__init__(window)
         self.window = window
         self.item = item
         self.on_saved = on_saved
+        self.on_import = on_import
         self.title("Xem / Sửa SRT")
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{min(1000, sw - 60)}x{min(780, sh - 100)}+40+40")
@@ -126,11 +129,30 @@ class SRTEditorDialog(ctk.CTkToplevel):
         self.status.configure(text=f"Đã thay {n} chỗ.")
 
     def _save(self) -> None:
-        cues = parse_srt(self.box.get("1.0", "end"))
+        raw = self.box.get("1.0", "end")
+        cues = parse_srt(raw)
         if not cues:
             self.status.configure(text="Nội dung không có câu hợp lệ.")
             return
         p = self._path()
+        if self.target.get() != "Bản dịch" and p and Path(p).exists():
+            from app.services import external_ai as X
+
+            target = self.window.app_state.subtitle.translate_target
+            if self.on_import is not None and X.looks_translated(raw, load_srt(p), target):
+                ans = messagebox.askyesnocancel(
+                    "Lưu SRT", f"Nội dung này là BẢN DỊCH ({target}) nhưng đang lưu vào LỜI GỐC (tiếng nước ngoài) — "
+                               "lưu là mất lời gốc.\n\nCó = nhập làm bản dịch (giữ mốc thời gian gốc)\n"
+                               "Không = vẫn thay lời gốc (bản cũ giữ .bak)", icon="warning", parent=self)
+                if ans is None:
+                    return
+                if ans:
+                    if self.on_import(raw):
+                        self.status.configure(text="Đã nhập làm bản dịch — lời gốc giữ nguyên.")
+                    return
+            import shutil
+
+            shutil.copyfile(p, Path(p).with_suffix(".srt.bak"))     # đè lời gốc → giữ bản cũ
         if not p:
             suffix = ".dich.srt" if self.target.get() == "Bản dịch" else ".srt"
             p = str(SUBS_DIR / f"{self.window.pipeline.file_stem(self.item)}{suffix}")
