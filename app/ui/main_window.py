@@ -150,6 +150,7 @@ class MainWindow(_Root):
         self.after(4000, self._watch_tick)
         self.after(60000, self._release_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._start_control()
         self._bind_shortcuts()
         self.bind("<Configure>", self._on_resize)
         self.after(400, self._apply_layout)
@@ -852,6 +853,33 @@ class MainWindow(_Root):
             return ("Nhập key…", lambda: self.open_settings(tab="cloud"), "settings", True)
         return ("Thử lại", retry, "refresh", True) if retry else None
 
+    def _start_control(self) -> None:
+        """Cổng lệnh cục bộ cho CLI / MCP / agent (``app.agent``) — chỉ nghe 127.0.0.1, có mã bí mật."""
+        self._control = None
+        try:
+            from app.agent.control import ControlServer
+            from app.agent.ops import GuiHost, dispatch
+
+            host = GuiHost(self)
+            self._control = ControlServer(lambda op, args: dispatch(host, op, args))
+            self._control.start()
+        except Exception:                               # noqa: BLE001 — không mở được cổng thì app vẫn chạy bình thường
+            logger.warning("Không mở được cổng lệnh cục bộ", exc_info=True)
+            self._control = None
+
+    def preflight_problem(self, items: list[VideoItem]) -> str | None:
+        """Như ``_preflight`` nhưng không bật hộp thoại — câu lý do (lệnh từ CLI / MCP), None = chạy được."""
+        from app.services.ocr_hardsub import available as ocr_ok
+        from app.services.qwen_asr import is_installed
+
+        need = [self.pipeline_for(it).needs(it) for it in items]
+        st = self.app_state.settings
+        if not st.translate_keys() and any("gemini" in n for n in need):
+            return f"chưa có API key {st.translate_provider} để dịch — nhập ở Cài đặt › AI dùng API key"
+        if any("qwen" in n for n in need) and not is_installed() and not ocr_ok():
+            return "chưa cài bộ nghe lời thoại (Qwen3-ASR) — Cài đặt › AI trên máy"
+        return None
+
     def _preflight(self, items: list[VideoItem], rerun: Callable[[], None]) -> bool:
         """Trước khi chạy: cần dịch mà chưa có API key Gemini / cần nghe lời thoại mà chưa cài Qwen3-ASR → báo ngay
         (trước đây nhận diện xong cả chục phút mới lỗi ở bước dịch). False = không chạy."""
@@ -1291,25 +1319,35 @@ class MainWindow(_Root):
             items = ready
         self._run_queue(items, mode="render", audio_only=audio_only)
 
-    def _run_queue(self, items: list[VideoItem], *, mode: str = "render", audio_only: bool = False) -> None:
+    def _run_queue(self, items: list[VideoItem], *, mode: str = "render", audio_only: bool = False,
+                   quiet: bool = False) -> str | None:
+        """``quiet`` (lệnh từ CLI / MCP): không bật hộp thoại nào — trả câu lý do không chạy được; None = đã chạy."""
         if not self.ffmpeg.available:
-            messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
-            return
-        if not self._preflight(items, lambda: self._run_queue(items, mode=mode, audio_only=audio_only)):
-            return
+            if not quiet:
+                messagebox.showerror(APP_NAME, "Không có ffmpeg — xem Cài đặt.")
+            return "không có ffmpeg"
+        if quiet:
+            why = self.preflight_problem(items)
+            if why:
+                return why
+        elif not self._preflight(items, lambda: self._run_queue(items, mode=mode, audio_only=audio_only)):
+            return "thiếu cấu hình"
         if self.tasks.running or self.runner.running:   # không đổi audio_only của pipeline khi hàng đợi đang chạy
+            if quiet:
+                return "đang chạy việc khác — run(action='wait') rồi gọi lại"
             label = "Chuẩn bị" if mode == "prepare" else ("Xuất MP3" if audio_only else "Xuất")
             self._offer_wait(f"{label} {len(items)} video",
                              lambda: self._run_queue(items, mode=mode, audio_only=audio_only))
-            return
+            return "đang chạy việc khác"
         self.preview.stop_play()
         out_dir = Path(self.app_state.output_dir or VIDEOS_DIR)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
-            messagebox.showerror(APP_NAME, f"Không tạo được thư mục xuất:\n{out_dir}\n\nỔ đĩa đã rút hoặc đường dẫn sai — "
-                                           "chọn lại ở Cài đặt › Xuất video.")
-            return
+            if not quiet:
+                messagebox.showerror(APP_NAME, f"Không tạo được thư mục xuất:\n{out_dir}\n\nỔ đĩa đã rút hoặc đường dẫn "
+                                               "sai — chọn lại ở Cài đặt › Xuất video.")
+            return f"không tạo được thư mục xuất {out_dir}"
         low = []
         for d in {out_dir, JOBS_DIR}:
             try:
@@ -1318,10 +1356,12 @@ class MainWindow(_Root):
                 continue
             if free < 3:
                 low.append(f"{d.anchor or d} còn {free:.1f} GB")
-        if low and not messagebox.askyesno(APP_NAME, "Ổ đĩa sắp đầy: " + ", ".join(sorted(set(low))) + ".\n\n"
-                                           "Mỗi giờ video cần khoảng 3–4 GB file tạm khi xuất — có thể lỗi giữa chừng. "
-                                           "Bấm «Dọn dẹp» trên cùng để giải phóng. Vẫn chạy?"):
-            return
+        if low and quiet:
+            self.log("⚠ Ổ đĩa sắp đầy: " + ", ".join(sorted(set(low))) + " — vẫn chạy theo lệnh agent.")
+        elif low and not messagebox.askyesno(APP_NAME, "Ổ đĩa sắp đầy: " + ", ".join(sorted(set(low))) + ".\n\n"
+                                             "Mỗi giờ video cần khoảng 3–4 GB file tạm khi xuất — có thể lỗi giữa chừng. "
+                                             "Bấm «Dọn dẹp» trên cùng để giải phóng. Vẫn chạy?"):
+            return "người dùng huỷ (ổ đĩa sắp đầy)"
         srt = self.modules.get("srt")
         if srt is not None and srt.editor.item in items and srt.editor.dirty():
             srt.editor.save(regen=False)        # câu sửa dở ở Lời thoại → lưu trước (giọng tạo lại trong lượt chạy)
@@ -1387,13 +1427,15 @@ class MainWindow(_Root):
             self.app_state.save_config()
             self.pipeline.audio_only = False
 
-        if self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
-            self.set_running(True)
-            self.progress.start_queue(items, mode, on_skip=self.skip_current if total > 1 else None)
-            if prep:
-                self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
-            else:
-                self.log(f"Bắt đầu xuất {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+        if not self.runner.start(items, on_update=on_update, on_log=self.log, on_done=on_done, mode=mode):
+            return "không bắt đầu được"
+        self.set_running(True)
+        self.progress.start_queue(items, mode, on_skip=self.skip_current if total > 1 else None)
+        if prep:
+            self.log(f"Chuẩn bị {total} video (phụ đề, dịch, giọng lồng) — xong sẽ mở tab «Duyệt».")
+        else:
+            self.log(f"Bắt đầu xuất {'MP3' if audio_only else 'MP4'} {total} video → {self.app_state.output_dir}")
+        return None
 
     # ── Thư mục theo dõi ─────────────────────────────────────────────────
     def watch_started(self) -> None:
@@ -1675,6 +1717,8 @@ class MainWindow(_Root):
             srt.editor.save(regen=False, quiet=True)  # lời thoại tự lưu — chữ còn chờ tự lưu thì lưu luôn, không hỏi
         self.preview.stop_play()
         self.app_state.save_config()
+        if self._control is not None:
+            self._control.stop()
         self.player.stop()
         from app.services import qwen_asr
 

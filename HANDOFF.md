@@ -408,6 +408,23 @@
     `make_installer.py` mặc định chỉ bản Lite (`--full` / `--both` khi cần). OCR thưa hơn (4 / 3 khung/giây) đo được
     nhanh hơn nhưng sửa sai tên riêng (猞→舍) → giữ 10 khung/giây (`audit_out/repeat_fit/ocr_fps.json`).
 
+49. **CLI + MCP + agent DeepSeek (đợt 3)** (`app/agent/`; test `test_agent.py` 24):
+    - App đang mở là chủ duy nhất của hàng đợi: `MainWindow._start_control` mở `ControlServer` (127.0.0.1, cổng ngẫu
+      nhiên, mã bí mật, ghi `output/control.json`; biến `EDIT_STUDIO_CONTROL_FILE` để test trỏ chỗ khác — sitecustomize
+      của test ẩn đã đặt). `control.call` gửi lệnh; app chưa mở → tự mở (`launch_app`) rồi chờ; app bản cũ đang mở
+      (khoá «chỉ một cửa sổ» có mà không có cổng) → báo khởi động lại, không mở thêm.
+    - 5 lệnh thô (`ops.py`, chạy trong app qua `GuiHost.call` = luồng Tk): `videos(add, preset, limit)` · `run(ids,
+      action=prepare|render|wait, until, wait_s)` · `review(id, all, limit, offset)` (chỉ câu ⚠ + `people` = cặp xưng
+      hô của hồ sơ) · `fix(id, text{n: câu}, request, voice, wait_s)` (request → `ai_edit` kèm hồ sơ; voice → prepare
+      stops=False) · `settings(template, ratio, fit, offset_x/y, zoom, target, style, until)`. Id = sha1(đường dẫn)[:6].
+      Lỗi trả `{"error"}` một dòng; không đường dẫn / log / cả SRT.
+    - `_run_queue(quiet=True)` + `preflight_problem`: không bật hộp thoại (thiếu key / Qwen, ổ đầy, đang bận) — trả lý do.
+    - Mô tả lệnh `schema.py` (~650 token, tiếng Anh); MCP stdio tự viết (`python -m app.agent mcp`: initialize,
+      tools/list, tools/call, ping); CLI `python -m app.agent <lệnh> '<json>'`; `tools/agent_deepseek.py` vòng lặp
+      function-calling (key: DEEPSEEK_API_KEY / .env / key trong app, không in ra).
+    - Bản .exe là app cửa sổ (không stdout) → MCP / CLI chạy bằng python mã nguồn; muốn dùng với bản cài cần thêm một exe
+      console riêng (chưa làm).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).
