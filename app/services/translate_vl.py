@@ -629,8 +629,8 @@ def make_brief(router: Router, cues: list[Cue], lines: list[str], speakers: list
     for idx in repeated_groups(lines).values():
         r = None
         if fit:
-            rs = [syllable_range(cues, i, fit) for i in idx]
-            r = (min(a for a, _b in rs), min(b for _a, b in rs))
+            rs = sorted(syllable_range(cues, i, fit) for i in idx)
+            r = rs[len(rs) // 2]                          # khung giữa — một chỗ khung ngắn bất thường không kéo cả nhóm
         repeats.append((lines[idx[0]], len(idx), r))
     try:
         d = _ask(router, brief_prompt(lines, speakers, src_lang, tgt_lang, style, custom_terms, repeats),
@@ -660,6 +660,29 @@ def unify_repeats(lines: list[str], texts: list[str], canon: dict[str, str], ski
         if not target:
             seen = [texts[i].strip() for i in idx]
             target = max(seen, key=lambda t: (seen.count(t), -seen.index(t)))
+        for i in idx:
+            if texts[i].strip() != target:
+                texts[i] = target
+                changed.append(i)
+    return sorted(changed)
+
+
+def keep_repeats(lines: list[str], before: list[str], texts: list[str], skip: set[int]) -> list[int]:
+    """Sau bước khớp độ dài: câu lặp chỉ bị đổi ở số ít chỗ (khung ngắn / dài bất thường) → trả về bản chung, giọng đọc
+    nhanh / chậm hơn ở chỗ đó; bị đổi ở đa số chỗ (bản chung dài quá cho cả video) → mọi chỗ dùng bản ngắn nhất đã đổi.
+    Trả các câu đã đổi."""
+    from app.services.tts.quality import syllable_count
+
+    changed: list[int] = []
+    for idx in repeated_groups(lines).values():
+        idx = [i for i in idx if i not in skip and before[i].strip()]
+        if len(idx) < 2 or len({before[i].strip() for i in idx}) > 1:
+            continue
+        moved = [i for i in idx if texts[i].strip() != before[i].strip()]
+        if not moved:
+            continue
+        target = (before[idx[0]].strip() if len(moved) * 2 <= len(idx)
+                  else min((texts[i].strip() for i in moved), key=syllable_count))
         for i in idx:
             if texts[i].strip() != target:
                 texts[i] = target
@@ -958,7 +981,12 @@ def translate_cues_vl(cues: list[Cue], *, settings: Settings, target: str, sourc
             log(f"Dịch: đồng bộ {len(same)} câu lặp lại (cùng lời gốc → cùng bản dịch).")
     # 5) khớp thời lượng lồng tiếng
     if fit and not stopped():
+        before = list(texts)
         texts = fit_texts(cues, texts, router, fit, log, style=style_b, tgt_lang=tgt_lang, directs=directs)
+        back = keep_repeats(lines, before, texts, unsure)
+        if back and log:
+            log(f"Dịch: {len(back)} câu lặp giữ đúng một bản dịch (chỗ khung ngắn / dài bất thường → giọng đọc nhanh / "
+                "chậm hơn, không đổi chữ).")
     memory.save()
     ckpt.finish()
     # câu gốc bị ngắt ở dấu phẩy (Qwen tách câu dài) → bản dịch cũng kết thúc bằng «,» → giọng đọc lên giọng lửng lơ,

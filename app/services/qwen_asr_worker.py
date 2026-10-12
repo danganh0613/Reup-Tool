@@ -11,8 +11,8 @@ không phải nghe lại); có file <out>.skip thì bỏ qua video đó (ngườ
 Làm theo VideoLingo bản 01f8434 (core/asr_backend/qwen_asr_local.py, speech_edges.py, spacy_utils/*; Apache-2.0):
 Silero VAD chỉ cắt biên ngoài (đệm 1 s) · cửa sổ ≤ 180 s cắt ở 100 ms lặng nhất trong 30 s cuối · Qwen3-ASR-1.7B, ngân
 sách token 13/giây + 32 · Qwen3-ForcedAligner-0.6B → mốc từng chữ, gắn dấu câu · spaCy tách câu theo dấu → dấu phẩy →
-liên từ → câu > 60 token. Edit Studio thêm: căn mốc «sụp» (một chữ bị kéo > 1 s rồi ≥ 3 chữ dồn < 0,03 s/chữ — gặp ở
-video thử: «保» 3 s rồi 15 chữ trong 0,08 s) → chia đều lại vùng đó; cửa sổ đọc lặp → chia đôi đọc lại một lần.
+liên từ → câu > 60 token. Edit Studio thêm: căn mốc «sụp» (một chữ bị kéo > 1 s rồi ≥ 3 chữ dồn < 0,05 s/chữ — gặp ở
+video thử: «保» 3 s rồi 15 chữ trong 0,08 s; «这个能抓回家养吗» 8 chữ trong 0,6 s sau khoảng trống giả 2 s) → chia đều lại vùng đó; cửa sổ đọc lặp → chia đôi đọc lại một lần.
 In ra stdout: «PROGRESS k x» (video thứ k, 0..1) · «JOB k» (bắt đầu làm video k) · «DONE k» · «FAIL k lý do» ·
 «SKIP k» · dòng log «[ 12s] …». Kết quả JSON mỗi video: language, text, words[{word,start,end}], sentences[{text,tokens}]."""
 
@@ -41,6 +41,7 @@ QWEN_TO_ISO = {v: k for k, v in ISO_TO_QWEN.items()}
 QWEN_TO_ISO["Cantonese"] = "zh"
 _REPEATED = re.compile(r"(.{1,40}?)\1{3,}", re.S)
 T0 = time.perf_counter()
+COLLAPSED = 0.05                    # < 0,05 s/chữ = căn mốc sụp (bộ căn mốc chia khung 0,08 s; người nói nhanh ~0,12 s/chữ)
 NEED_VRAM_GB = 5.0                  # Qwen3-ASR-1.7B bf16 + bộ nhớ chạy (đo trên RTX 3060 Ti: ~4,7 GB)
 _OUT = threading.Lock()
 _STEP = {"name": "khởi động", "since": T0, "last": T0, "p0": 0.0, "p1": 0.03, "expect": 15.0, "job": 0, "done": {}}
@@ -171,7 +172,7 @@ def attach_words(text, items, offset=0.0, limit=None):
 
 
 def repair_collapsed(words: list[dict]) -> int:
-    """Căn mốc «sụp»: ≥ 3 chữ dồn (< 0,03 s/chữ — không ai nói nhanh vậy). Lùi ≤ 10 chữ tìm chỗ thời gian bị «nuốt»:
+    """Căn mốc «sụp»: ≥ 3 chữ dồn (< ``COLLAPSED`` s/chữ — không ai nói nhanh vậy). Lùi ≤ 10 chữ tìm chỗ thời gian bị «nuốt»:
     chữ bị kéo > 1 s hoặc khoảng trống > 1 s giữa hai chữ (gặp cả hai kiểu ở video thử) → chia đều lại từ đó tới hết
     loạt dồn. Không thấy thì mượn khoảng lặng ngay trước loạt dồn nếu đủ ~0,1 s/chữ."""
     def chars(w):
@@ -179,7 +180,7 @@ def repair_collapsed(words: list[dict]) -> int:
     fixed, i = 0, 0
     while i < len(words):
         j = i
-        while j < len(words) and (words[j]["end"] - words[j]["start"]) / chars(words[j]) < 0.03:
+        while j < len(words) and (words[j]["end"] - words[j]["start"]) / chars(words[j]) < COLLAPSED:
             j += 1
         if j - i >= 3:
             a_idx = next((k for k in range(i - 1, max(-1, i - 11), -1)

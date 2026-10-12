@@ -341,6 +341,12 @@
       nhất — trước bước khớp độ dài. `parse_brief` đọc lại hồ sơ người dùng sửa (tên riêng + câu lặp).
     - Tab Dịch › «Hồ sơ kịch bản»: xem / sửa (rời ô là lưu), xoá trắng = lần dịch sau AI soạn lại. Nhận diện lại / nạp SRT
       lời gốc khác / «Xoá phụ đề & giọng» → bỏ hồ sơ. `STYLE_TAG` = `|vl-hoso1` (bộ nhớ dịch cũ không dùng lại).
+    - Câu lặp sau bước khớp độ dài: `keep_repeats` — chỉ số ít chỗ bị rút / nới (khung bất thường) → trả về bản chung
+      (giọng đọc nhanh / chậm hơn ở chỗ đó); đa số chỗ bị rút → mọi chỗ dùng bản ngắn nhất. Khung số âm tiết của câu lặp
+      trong lời nhắc hồ sơ = khung giữa của nhóm (không lấy khung ngắn nhất).
+    - Video «tải xuống»: câu 27 bị cắt còn 0,6 s vì bộ căn mốc để 2 s trống giả rồi dồn 8 chữ 0,04 s/chữ — ngưỡng «căn mốc
+      sụp» `COLLAPSED` 0,03 → 0,05 s/chữ (bộ căn mốc chia khung 0,08 s; quét các kết quả nhận diện có sẵn: chỉ bắt đúng
+      chỗ này). Có hiệu lực khi nhận diện lại.
 
 ## Còn tồn / để ý khi làm tiếp
 
