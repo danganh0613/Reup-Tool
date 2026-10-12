@@ -1539,9 +1539,12 @@ class MainWindow(_Root):
         self.show_module(key)
         m = self.modules.get(key)
         if key == "srt" and m is not None:
+            from app.services.line_qa import QA_TITLE
             from app.ui.modules.module_srt import TAB_TEXT
 
             m.show_tab(TAB_TEXT)
+            if title == QA_TITLE:
+                m.editor.show_flagged(True)
         section = EDIT_SECTIONS.get(title)
         if section and m is not None and hasattr(m, "scroll_to_section"):
             self.after(80, lambda: m.scroll_to_section(section))

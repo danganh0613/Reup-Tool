@@ -102,11 +102,7 @@ def _voice_issues(pipe, item: VideoItem) -> list[str]:
         out.append(f"{data['failed']} câu không đọc được (bỏ trống)")
     if data.get("fallback"):
         out.append(f"{data['fallback']} câu đọc tạm bằng Edge (VieNeu lỗi)")
-    if data.get("qc_bad"):
-        out.append(f"{data['qc_bad']} câu đọc chưa đạt — nên nghe lại")
-    if data.get("overflow_cues"):
-        out.append(f"{len(data['overflow_cues'])} câu đọc tràn khung")
-    return out
+    return out          # câu đọc chưa đạt / tràn khung: từng câu ở dòng «Câu cần nghe lại»
 
 
 def summarize(window, item: VideoItem) -> list[Row]:
@@ -202,6 +198,20 @@ def summarize(window, item: VideoItem) -> list[Row]:
             rows[-1] = Row(last.module, last.icon, last.title, last.value + " · " + " · ".join(issues), WARN, last.detail)
     else:
         rows.append(Row("tts", "speaker", "Người nói & lồng tiếng", "Không lồng tiếng", OFF))
+
+    # 4b. Câu cần nghe lại: giọng đọc sai, đọc nhanh / tràn khung, chưa dịch, lệch xưng hô so với hồ sơ kịch bản
+    if uses_text and n_orig:
+        from app.services.line_qa import QA_TITLE, summary
+
+        try:
+            flags = pipe.review_flags(item)
+        except Exception:                                # noqa: BLE001 — soát lỗi hỏng không được làm hỏng bảng Duyệt
+            flags = {}
+        if flags:
+            first = sorted(flags)[:8]
+            rows.append(Row("srt", "warning", QA_TITLE, summary(flags), WARN,
+                            "Câu " + ", ".join(str(i + 1) for i in first) + (" …" if len(flags) > 8 else "")
+                            + " — «Sửa ›» chỉ hiện các câu này ở tab Lời thoại: ▶ nghe, sửa, rồi icon loa tạo lại giọng."))
 
     # 5. Âm thanh gốc
     if v.mute:

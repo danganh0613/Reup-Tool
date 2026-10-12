@@ -6,6 +6,9 @@ video). Câu AI sửa tô vàng, ↶ trả lại từng câu, «Hoàn tác» tr�
 trích: giữ âm gốc, vẫn hiện phụ đề) · «Tìm & thay» cho cả video · icon loa = tạo lại giọng (câu không đổi dùng lại giọng
 cũ nên rất nhanh; không sửa chữ mà giọng đã cũ thì vẫn tạo lại).
 
+Câu cần nghe lại (``line_qa``: giọng đọc sai, đọc nhanh / tràn khung, chưa dịch, lệch xưng hô so với hồ sơ kịch bản)
+có dấu ⚠ kèm lý do; nút «n cần xem» trên thanh icon lọc chỉ còn các câu đó (tab Duyệt «Sửa ›» mở sẵn chế độ lọc).
+
 Bố cục kiểu chatbot: thanh icon nhỏ trên cùng (copy cho AI ngoài · dán bản dịch · tìm & thay · tạo lại giọng), danh
 sách TẤT CẢ câu chiếm hết chiều cao còn lại (một thanh cuộn, không chia trang), ô «Nhờ AI sửa» neo dưới cùng kèm lịch
 sử. Chữ sửa TỰ LƯU (ngừng gõ ~1 s / rời ô / AI sửa xong) — tạo giọng luôn đọc đúng chữ đang thấy. Danh sách ẢO: chỉ có ``POOL`` dòng widget (đủ lấp khung nhìn), cuộn tới đâu đổ
@@ -30,7 +33,7 @@ from app.core.state import VideoItem
 from app.services.job_runner import error_line
 from app.services.srt_utils import Cue, format_ts, load_srt, save_srt, wrap_lines
 from app.ui.widgets.common import StatusLabel, auto_wrap, info_icon
-from app.ui.widgets.ui import Tooltip, button
+from app.ui.widgets.ui import Tooltip, button, relabel, set_variant
 from app.ui.progress_panel import friendly_error
 
 logger = logging.getLogger(__name__)
@@ -88,6 +91,9 @@ class CueEditor(ctk.CTkFrame):
         self._dirty_mark = False
         self._autosave_id: str | None = None
         self._base_texts: list[str] = []          # chữ lúc mở video — mốc «đã đổi gì» cho ngữ cảnh Nhờ AI sửa
+        self._flags: dict[int, list] = {}         # câu cần nghe lại (line_qa) → lý do
+        self._only_flagged = False                # đang lọc «chỉ câu cần xem»
+        self._view: list[int] = []                # câu đang có trong danh sách (cả video / chỉ câu cần xem), theo thứ tự
         self.grid_columnconfigure(0, weight=1)
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -95,6 +101,10 @@ class CueEditor(ctk.CTkFrame):
         bar.grid_columnconfigure(0, weight=1)
         tools = ctk.CTkFrame(bar, fg_color="transparent")
         tools.grid(row=0, column=1, sticky="e", padx=(6, 0))
+        self.qa_btn = button(tools, "", icon_name="warning", variant="ghost", size="sm", command=self.toggle_flagged,
+                             tip="Số câu cần nghe lại (giọng đọc sai, đọc nhanh / tràn khung, chưa dịch, xưng hô lệch hồ sơ "
+                                 "kịch bản) — bấm để chỉ hiện các câu này: ▶ nghe, sửa, xong bấm icon loa tạo lại giọng. "
+                                 "Nút sáng màu = đang lọc, bấm lần nữa để hiện lại cả video.")
         self.copy_btn = button(tools, "", icon_name="copy", variant="ghost", size="sm", width=34, command=self._copy_menu,
                                tip="Copy để dán cho AI bên ngoài (ChatGPT, Gemini web…): lời gốc / song ngữ kèm lời dặn, "
                                    "hoặc SRT đang sửa")
@@ -107,8 +117,9 @@ class CueEditor(ctk.CTkFrame):
                                 command=self.regen_voice,
                                 tip="Tạo lại giọng theo lời thoại đang thấy (câu không đổi dùng lại giọng cũ — nhanh). Nút "
                                     "sáng màu = giọng chưa khớp chữ vừa sửa.")
-        for b in (self.copy_btn, self.paste_btn, self.find_btn, self.voice_btn):
+        for b in (self.qa_btn, self.copy_btn, self.paste_btn, self.find_btn, self.voice_btn):
             b.pack(side="left", padx=1)
+        self.qa_btn.pack_forget()                     # chỉ hiện khi có câu cần nghe lại
         self.head = auto_wrap(ctk.CTkLabel(bar, text="", font=T.font(12, "medium"), text_color=T.TEXT_DIM, anchor="w",
                                            justify="left", wraplength=400))
         self.head.grid(row=0, column=0, sticky="ew")
@@ -176,6 +187,8 @@ class CueEditor(ctk.CTkFrame):
             play = ctk.CTkButton(top, text="", width=96, height=22, anchor="w", font=T.mono(10), fg_color="transparent",
                                  hover_color=T.BG_HOVER, text_color=T.TEXT_MUTED, command=lambda r=r: self._play_row(r))
             play.pack(side="left")
+            flag = ctk.CTkLabel(top, text="", font=T.font(11), text_color=T.WARNING, anchor="e")
+            flag.pack(side="right", padx=(6, 4))          # trước ô câu gốc (giãn hết chỗ còn lại) → luôn còn chỗ
             ref = auto_wrap(ctk.CTkLabel(top, text="", font=T.font(11), text_color=T.TEXT_MUTED, anchor="w",
                                          justify="left", wraplength=300))
             ref.pack(side="left", fill="x", expand=True, padx=(4, 0))
@@ -197,11 +210,13 @@ class CueEditor(ctk.CTkFrame):
             mute = ctk.CTkButton(self.rows_area, text="⊘", width=30, height=30, command=lambda r=r: self._toggle_noread(r),
                                  **{**T.secondary_button(), "font": T.font(13, "bold")})
             Tooltip(play, "Phát đúng câu này trên khung xem trước (có giọng lồng)")
+            flag_tip = Tooltip(flag, "")
             Tooltip(redo, "AI dịch lại riêng câu này (theo «Phong cách dịch», xem câu trước/sau làm ngữ cảnh)")
             Tooltip(back, "Trả lại câu này như trước khi AI sửa")
             Tooltip(mute, "Không lồng tiếng câu này — giữ âm gốc (lời bài hát, câu trích…), phụ đề vẫn hiện. Bấm lần nữa "
                           "để đọc lại.")
             self._rows.append({"play": play, "ref": ref, "entry": ent, "redo": redo, "back": back, "mute": mute, "top": top,
+                               "flag": flag, "flag_tip": flag_tip,
                                "widgets": [(top, dict(row=2 * r, column=0, columnspan=4, sticky="ew", padx=4, pady=(4, 0))),
                                            (ent, dict(row=2 * r + 1, column=0, sticky="ew", padx=(4, 2), pady=(0, 2))),
                                            (redo, dict(row=2 * r + 1, column=1, padx=(2, 2), pady=(0, 2))),
@@ -284,6 +299,7 @@ class CueEditor(ctk.CTkFrame):
         if it is not self.item:
             self._ai_history = []
             self._chat_clear()
+            self._only_flagged = False
         self.item = it
         self._src_sig = self._file_sig(it)
         self._cur = -1
@@ -315,13 +331,21 @@ class CueEditor(ctk.CTkFrame):
         self._base_texts = list(self.texts)
         self._noread = self.window.pipeline.load_noread(it) if it is not None else []
         self._first = 0                                 # video mới → về đầu danh sách
+        self._refresh_flags()
         self.show_page(0, sync=False)
         self._update_dirty_mark()
         self.status.info("")
 
-    def _range(self) -> range:
+    def _range(self) -> list[int]:
         """Câu đang nằm trên các dòng của khung nhìn."""
-        return range(self._first, min(self._first + len(self._rows), len(self.cues)))
+        return self._view[self._first:self._first + len(self._rows)]
+
+    def _pos(self, i: int) -> int | None:
+        """Vị trí của câu ``i`` trong danh sách đang hiện (None: câu đang bị lọc ẩn)."""
+        if not self._only_flagged:
+            return i if 0 <= i < len(self._view) else None
+        k = bisect.bisect_left(self._view, i)
+        return k if k < len(self._view) and self._view[k] == i else None
 
     def _sync(self) -> None:
         """Chữ đang gõ ở các dòng đang hiện → ``texts`` (gọi trước khi cuộn / lưu / gửi AI)."""
@@ -342,6 +366,12 @@ class CueEditor(ctk.CTkFrame):
     def _paint_row(self, r: int, i: int) -> None:
         row, c = self._rows[r], self.cues[i]
         off = self._is_noread(i)
+        fl = self._flags.get(i) or []
+        self._set(row, "flag", text=("⚠ " + " · ".join(f.short for f in fl)) if fl else "")
+        tip = "\n".join(f.detail for f in fl)
+        if row.get("_tip") != tip:
+            row["flag_tip"].set_text(tip)
+            row["_tip"] = tip
         self._set(row, "play", text=f"{'⊘' if off else '▶'} {i + 1} · {format_ts(c.start, '.')[3:8]}",
                   text_color=T.TEXT_MUTED)
         self._paint_ref(row, i)
@@ -361,7 +391,9 @@ class CueEditor(ctk.CTkFrame):
         """Vẽ lại các dòng đang hiện (tên cũ — không còn chia trang; ``page`` bỏ qua)."""
         if sync and self.cues:
             self._sync()
-        self._first = max(0, min(self._first, len(self.cues) - 1))
+        if len(self._view) != len(self.cues) and not self._only_flagged:
+            self._view = list(range(len(self.cues)))
+        self._first = max(0, min(self._first, len(self._view) - 1))
         idxs = self._range()
         for r, row in enumerate(self._rows):
             if r < len(idxs):
@@ -395,15 +427,15 @@ class CueEditor(ctk.CTkFrame):
                         break
                     n += 1
                 self._visible = max(1, n)
-            total = max(1, len(self.cues))
+            total = max(1, len(self._view))
             self.vbar.set(self._first / total, min(1.0, (self._first + self._visible) / total))
         except tk.TclError:
             pass
 
     def _scroll(self, n: int) -> None:
-        if not self.cues:
+        if not self._view:
             return
-        last = max(0, len(self.cues) - self._visible)
+        last = max(0, len(self._view) - self._visible)
         first = max(0, min(self._first + n, last))
         if first == self._first:
             return
@@ -413,19 +445,20 @@ class CueEditor(ctk.CTkFrame):
 
     def _vscroll(self, *args) -> None:
         """Thanh cuộn: kéo («moveto») hoặc bấm mũi tên / rãnh («scroll»)."""
-        if not self.cues or not args:
+        if not self._view or not args:
             return
         if args[0] == "moveto":
-            self._scroll(int(float(args[1]) * len(self.cues)) - self._first)
+            self._scroll(int(float(args[1]) * len(self._view)) - self._first)
         elif args[0] == "scroll":
             step = max(1, self._visible - 1) if len(args) > 2 and args[2] == "pages" else 1
             self._scroll(int(float(args[1])) * step)
 
     def _see_row(self, i: int) -> None:
         """Cuộn để câu ``i`` nằm trong khung nhìn (đang phát / bấm ↑↓ / AI vừa sửa câu khuất)."""
-        if not (0 <= i < len(self.cues)) or self._first <= i < self._first + self._visible:
+        p = self._pos(i)
+        if p is None or self._first <= p < self._first + self._visible:
             return
-        self._scroll(max(0, i - 1) - self._first)
+        self._scroll(max(0, p - 1) - self._first)
 
     def _paint_ref(self, row: dict, i: int) -> None:
         """Dòng chữ nhỏ trên ô sửa: câu gốc; câu AI đã sửa thì thêm câu cũ (tô vàng)."""
@@ -441,8 +474,8 @@ class CueEditor(ctk.CTkFrame):
 
     # ── Gắn với khung xem trước ──────────────────────────────────────────
     def _row_index(self, r: int) -> int | None:
-        i = self._first + r
-        return i if 0 <= r < len(self._rows) and i < len(self.cues) else None
+        j = self._first + r
+        return self._view[j] if 0 <= r < len(self._rows) and j < len(self._view) else None
 
     def _focus_row(self, r: int) -> None:
         i = self._row_index(r)
@@ -464,15 +497,14 @@ class CueEditor(ctk.CTkFrame):
         self.start_tick()
 
     def _move(self, r: int, d: int) -> str:
-        i = self._row_index(r)
-        if i is None:
+        if self._row_index(r) is None:
             return "break"
-        j = i + d
-        if not (0 <= j < len(self.cues)):
+        q = self._first + r + d                          # dòng kế trong danh sách đang hiện (kể cả khi đang lọc)
+        if not (0 <= q < len(self._view)):
             return "break"
-        self._see_row(j)
-        if self._first <= j < self._first + len(self._rows):
-            self._rows[j - self._first]["entry"].focus_set()
+        self._see_row(self._view[q])
+        if self._first <= q < self._first + len(self._rows):
+            self._rows[q - self._first]["entry"].focus_set()
         return "break"
 
     def start_tick(self) -> None:
@@ -515,10 +547,11 @@ class CueEditor(ctk.CTkFrame):
         """Tô dòng của câu đang ở vị trí phát (chỉ vẽ lại 2 dòng đổi trạng thái — configure CTk vẽ lại cả widget);
         đang phát mà câu nằm ngoài khung → cuộn theo."""
         pv = self.window.preview
-        if follow and self._cur >= 0 and pv.player.playing and not (self._first <= self._cur < self._first + self._visible):
+        p = self._pos(self._cur) if self._cur >= 0 else None
+        if follow and p is not None and pv.player.playing and not (self._first <= p < self._first + self._visible):
             self._see_row(self._cur)                       # vẽ lại cả khung → gọi lại hàm này (follow=False)
             return
-        want = self._cur - self._first if self._cur in self._range() else -1
+        want = p - self._first if p is not None and self._cur in self._range() else -1
         old = self._painted
         if want == old:
             return
@@ -583,6 +616,8 @@ class CueEditor(ctk.CTkFrame):
             it.status = "Cần xuất lại"
             self.window.queue_update(it)
             self.window.update_render_button()
+        self._refresh_flags(keep=True)                 # câu vừa sửa: soát lại (dấu ⚠ mất là đã ổn)
+        self.show_page(sync=False)
         if quiet:                                      # tự lưu: giữ tô vàng + ↶ của câu AI sửa tới khi đổi video
             logger.debug("%s: tự lưu %d câu lời thoại", it.name, changed)
             st = self.app_state.state_for(it)
@@ -651,6 +686,63 @@ class CueEditor(ctk.CTkFrame):
             self._autosave_id = None
         if self.item is not None and self.cues and self._text_dirty():
             self.save(regen=False, quiet=True)
+
+    # ── Câu cần nghe lại ─────────────────────────────────────────────────
+    def _refresh_flags(self, keep: bool = False) -> None:
+        """Soát lại câu cần nghe (nạp / lưu / tạo lại giọng / sửa hồ sơ). ``keep``: đang lọc thì giữ cả câu vừa sửa
+        xong trong danh sách (không biến mất giữa lúc đang sửa — dấu ⚠ mất là biết đã ổn)."""
+        it = self.item
+        flags: dict[int, list] = {}
+        if it is not None and self.cues:
+            try:
+                flags = self.window.pipeline_for(it).review_flags(it, texts=self.texts)
+            except Exception:                            # noqa: BLE001 — soát lỗi hỏng không được làm hỏng việc sửa
+                logger.debug("Không soát được câu cần nghe lại", exc_info=True)
+        self._flags = flags
+        if self._only_flagged and not flags and not keep:
+            self._only_flagged = False
+        if self._only_flagged:
+            self._view = sorted(set(flags) | (set(self._view) if keep else set()))
+        else:
+            self._view = list(range(len(self.cues)))
+        self._update_qa_btn()
+
+    def refresh_flags(self) -> None:
+        """Soát lại rồi vẽ lại (vd vừa sửa hồ sơ kịch bản, vừa tạo lại giọng)."""
+        if self.cues:
+            self._sync()
+        self._refresh_flags(keep=True)
+        self.show_page(sync=False)
+
+    def _update_qa_btn(self) -> None:
+        n = len(self._flags)
+        if not n and not self._only_flagged:
+            self.qa_btn.pack_forget()
+            return
+        relabel(self.qa_btn, str(n))              # gọn (dòng «Bản dịch · n câu» không bị ép); đang lọc = nút sáng màu
+        set_variant(self.qa_btn, "primary" if self._only_flagged else "ghost")
+        if not self.qa_btn.winfo_manager():
+            self.qa_btn.pack(side="left", padx=1, before=self.copy_btn)
+
+    def show_flagged(self, on: bool = True) -> None:
+        """Chỉ hiện các câu cần nghe lại (``on``) / hiện lại tất cả (giữ câu đang ở đầu khung nhìn)."""
+        if not self.cues:
+            return
+        self._sync()
+        on = bool(on and self._flags)
+        top = self._view[self._first] if self._view and self._first < len(self._view) else 0
+        self._only_flagged = on
+        self._view = sorted(self._flags) if on else list(range(len(self.cues)))
+        self._first = 0 if on else top
+        self._update_qa_btn()
+        self.show_page(sync=False)
+        if on:
+            self.status.info(f"Đang xem {len(self._view)} câu cần nghe lại · bấm lại nút ⚠ để hiện tất cả")
+        else:
+            self.status.info("")
+
+    def toggle_flagged(self) -> None:
+        self.show_flagged(not self._only_flagged)
 
     # ── Giọng ────────────────────────────────────────────────────────────
     def _voice_state(self, it: VideoItem) -> tuple[bool, bool]:
@@ -875,6 +967,8 @@ class CueEditor(ctk.CTkFrame):
                 self.status.error(f"Tạo lại giọng lỗi: {friendly_error(error_line(error, 200))}")
             else:
                 self.status.ok("Đã tạo lại giọng — bấm ▶ Phát (hoặc ▶ ở câu vừa sửa) để nghe lại.")
+                if self.item is it:                    # giọng mới → soát lại câu đọc sai / đọc nhanh
+                    self.refresh_flags()
             win.queue_update(it)
             win.preview.schedule_refresh(0)
 

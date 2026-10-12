@@ -490,6 +490,31 @@ class Pipeline:
             out.append(f"{name} · {g}" if name and g else name)
         return out if any(out) else None
 
+    # ── Soát lỗi từng câu (câu cần nghe lại) ──────────────────────────────
+    def review_flags(self, item: VideoItem, texts: list[str] | None = None) -> dict:
+        """Câu cần nghe lại của bản đang dùng (bản dịch nếu có, không thì lời gốc) → {chỉ số câu: [line_qa.Flag]}.
+        ``texts``: chữ đang sửa dở ở tab Lời thoại (cùng số câu) thay cho chữ trong file."""
+        from app.services import line_qa
+        from app.services.translate_router import LANG_CODE
+
+        has = lambda p: bool(p) and Path(p).exists()      # noqa: E731
+        tr = item.srt_translated_path if has(item.srt_translated_path) else None
+        src = item.srt_path if has(item.srt_path) else None
+        if not (tr or src):
+            return {}
+        cues = load_srt(tr or src)
+        sources = None
+        if tr and src:
+            ref = load_srt(src)
+            sources = [c.plain for c in ref] if len(ref) == len(cues) else None
+        if texts is None or len(texts) != len(cues):
+            texts = [c.plain for c in cues]
+        t = self.state.tts
+        report = line_qa.voice_report(item.voice_path) if t.enable_tts and has(item.voice_path) else {}
+        return line_qa.review_flags(texts, sources, cjk_ok=not tr or LANG_CODE.get(self.state.subtitle.translate_target)
+                                    in ("zh", "ja", "ko"), report=report, brief=self.load_brief(item),
+                                    speakers=self.speaker_labels(item, cues), base_speed=t.tts_speed)
+
     # ── Người nói (lồng tiếng nhiều giọng) ────────────────────────────────
     def speakers_path(self, item: VideoItem) -> Path:
         h = hashlib.sha1(item.path.encode("utf-8")).hexdigest()[:8]
@@ -1029,6 +1054,14 @@ class Pipeline:
             self._prepare_assets(item, info, t, vcfg=self.state.video, stage=stage, log=log, cancel=cancel,
                                  on_update=on_update,
                                  stop_after_translate=stops and self.state.settings.prepare_until == "translation")
+        try:                                            # soát lỗi từng câu: chỉ báo, không bao giờ làm hỏng lượt chạy
+            from app.services.line_qa import summary
+
+            flags = self.review_flags(item)
+            if flags:
+                log(f"{item.name}: {summary(flags)} — tab Duyệt › «Sửa ›» ở dòng «Câu cần nghe lại».")
+        except Exception:                               # noqa: BLE001
+            logger.debug("Không soát được lỗi từng câu", exc_info=True)
         item.status, item.progress, item.message = "Chờ duyệt", 1.0, ""
         item.review = "pending"
         on_update(item)

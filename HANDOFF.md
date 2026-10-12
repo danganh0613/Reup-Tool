@@ -372,6 +372,20 @@
     - Tab Duyệt: video đang chờ hiện «⏸ Chờ … · làm tiếp ở tab Lời thoại rồi bấm Tiếp tục», bộ đếm «Chờ bạn làm tiếp n».
       Ngưỡng thu gọn ô Mẫu 1250 → 1320 (ô «Chạy đến» rộng hơn công tắc cũ ~40 px).
 
+46. **Câu cần nghe lại (B1 — nền cho agent sau này)** (`app/services/line_qa.py`; test `test_line_qa.py` 29; ảnh
+    `audit_out/qa/shot_qa.py`):
+    - `line_qa.review_flags` đọc file có sẵn, không gọi AI: báo cáo từng câu của track giọng (`.cues.csv` cạnh WAV:
+      `loi_qc` sau khi đọc lại, `du_phong`, `tempo`, `tran`) — chỉ khi chữ `chu` khớp chữ đang thấy; bản dịch còn chữ
+      Hán / Kana / Hangul, y nguyên lời gốc, trống; xưng hô lệch hồ sơ (`brief_pronouns` đọc «xưng «…», gọi người nghe
+      «…»» theo người nói, nhãn người nói từng câu; «bạn mày», «bạn bè», «cậu ấy» là danh từ). Đọc nhanh khi ×≥ max(1,2,
+      tốc độ đặt × 1,08); tràn > 0,15 s.
+    - `Pipeline.review_flags(item, texts=None)`; cuối Chuẩn bị ghi «n câu cần nghe lại: …» vào nhật ký.
+    - Tab Lời thoại: dấu ⚠ + lý do ngắn trên dòng câu (tooltip lý do đủ), nút ⚠ n lọc (`_view`: danh sách ảo theo chỉ số
+      câu đang hiện — `_range` / `_row_index` / `_pos` / `_move` / cuộn theo `_view`). Lưu / tạo lại giọng / sửa hồ sơ
+      → soát lại; đang lọc thì câu vừa sửa xong vẫn ở danh sách (hết ⚠). Đổi video → bỏ lọc.
+    - Tab Duyệt: dòng «Câu cần nghe lại» (`QA_TITLE`, WARN, liệt kê số câu); «Sửa ›» → `edit_in` bật sẵn lọc. Dòng
+      giọng không còn nhắc trùng «câu đọc chưa đạt / tràn khung».
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

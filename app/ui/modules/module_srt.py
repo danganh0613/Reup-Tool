@@ -440,6 +440,8 @@ class SRTModule(BaseModule):
         self._brief_for = (it, text)
         self.brief_section.set_subtitle(f"{len(text.splitlines())} dòng" if text else "chưa có")
         self.window.log(f"{it.name}: đã lưu hồ sơ kịch bản" + ("" if text else " (xoá trắng — lần dịch sau AI soạn lại)"))
+        if self.editor.item is it:
+            self.editor.refresh_flags()                 # xưng hô theo hồ sơ mới
 
     def _translate_now(self) -> None:
         it = self._need_item()

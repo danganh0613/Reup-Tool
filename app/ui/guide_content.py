@@ -162,7 +162,8 @@ TOPICS: list[dict] = [
         ("steps", [
             "Đổi video bằng ‹ › hoặc ô chọn (● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
             "Đọc «Video này sẽ ra sao»: khung hình, lời thoại (bao nhiêu câu, đã dịch chưa), phụ đề, mấy người nói & ai "
-            "lồng tiếng, âm thanh gốc, che mờ, nhạc nền, logo, cắt, hiệu ứng. Dòng tô vàng ⚠ là chỗ nên xem lại.",
+            "lồng tiếng, âm thanh gốc, che mờ, nhạc nền, logo, cắt, hiệu ứng. Dòng tô vàng ⚠ là chỗ nên xem lại. Dòng «Câu cần "
+            "nghe lại» → «Sửa ›» mở tab Lời thoại chỉ với các câu đó.",
             "Bấm ▶ Phát xem video. Thấy chỗ chưa ổn → bấm «Sửa ›» ở dòng đó → mở đúng tab tính năng. Chỉnh gì ở đó cũng CHỈ "
             "áp cho video đang duyệt (dải trên cùng ghi «✎ Chỉnh riêng»); muốn dùng cho mọi video thì bấm «Áp cho tất cả».",
             "Chỉnh xong bấm ▶ Phát xem lại → «‹ Về Duyệt» → «Duyệt» (hoặc Ctrl+Enter ở bất kỳ tab nào) → tự sang video chờ kế.",
@@ -199,6 +200,14 @@ TOPICS: list[dict] = [
             "câu đọc không kịp. Khoảng 10–15 lượt gọi AI mỗi video ngắn.",
             "Đọc lại ở tab «Lời thoại» (cả bảng là danh sách câu, lăn chuột để cuộn). Sửa trực tiếp — tự lưu; bấm icon loa "
             "trên danh sách để tạo lại giọng (chỉ câu nào sửa mới đọc lại).",
+        ]),
+        ("h", "Chỉ nghe các câu cần xem"),
+        ("steps", [
+            "Máy tự soát từng câu và gắn dấu ⚠ kèm lý do: giọng đọc sai (máy nghe lại vẫn lệch), giọng dự phòng, đọc quá "
+            "nhanh / tràn khung, còn chữ gốc / chưa dịch / trống, xưng hô khác «Hồ sơ kịch bản».",
+            "Bấm nút ⚠ (kèm số câu) trên danh sách: chỉ còn các câu đó. Rê chuột vào ⚠ ở mỗi câu để xem lý do, ▶ để nghe.",
+            "Sửa xong câu nào thì dấu ⚠ của câu đó mất (câu vẫn ở danh sách để bạn nghe lại). Bấm icon loa tạo lại giọng, "
+            "bấm lại nút ⚠ để hiện cả video.",
         ]),
         ("h", "Dịch chưa hay — nhờ AI sửa"),
         ("steps", [
