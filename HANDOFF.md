@@ -322,7 +322,7 @@
     - Dòng trạng thái tự ẩn khi trống (`_AutoHideStatus`). Icon «copy / paste / search»: Segoe E8C8 / E77F / E721; font
       đi kèm macOS chưa có → mượn icon tài liệu / bảng / kính lúp.
 
-42. **«Không dịch — tự dịch bên ngoài»** (test `audit_out/qa/test_external_mode.py` 14):
+42. **«Không dịch — tự dịch bên ngoài»** (đã thay bằng «Chạy đến: Đến lời gốc» — mục 45):
     - `Settings.external_translate` (Cài đặt › AI dùng API key › «Cách dịch»: AI tự dịch / Không dịch). Bật: Chuẩn bị /
       Xuất nhận diện lời gốc (+ người nói) rồi raise `WaitTranslation` → trạng thái hàng đợi «Chờ bản dịch» (màu vàng,
       không tính lỗi, có trong câu tổng kết). `needs()` trả «external» (không đòi key dịch), `planned_steps` bỏ bước dịch.
@@ -356,6 +356,21 @@
     - Đo «tải xuống» (16 câu hỏi lặp, mốc thật từ giọng tách): 1 lượt cũ lệch TB 0,24 s / lớn nhất 1,44 s; 1 lượt + ngưỡng
       mới 0,16 / 0,52 s; 2 lượt 0,08 / 0,19 s, không còn vùng dồn. «tải xuống (2)»: lượt 1 có 3 vùng dồn, 2 lượt 0; số câu
       giữ nguyên. Tốn thêm ~0,5 s / 100 s âm thanh. Video đã nhận diện phải bấm Nhận diện lời thoại lại.
+
+45. **«Chạy đến» + luôn duyệt** (test `test_external_mode.py` 29, `test_qa_m` / `test_qa_p3` cập nhật; ảnh
+    `audit_out/qa/shot_until.py`):
+    - Bỏ công tắc «Duyệt trước» (trên cùng + tab Video): luôn Chuẩn bị → Duyệt → Xuất; `ui["review_mode"]` cũ bỏ qua,
+      tab Duyệt luôn có. `set_review_mode` / `review_mode` / `layout_review` đã gỡ.
+    - Ô «Chạy đến» (`Select`, cạnh nút chính) = `Settings.prepare_until` (nhớ chung, settings.json): `all` Tự động hết ·
+      `source` Đến lời gốc (thay radio «Cách dịch» trong Cài đặt — `external_translate` cũ tự chuyển) · `translation`
+      Đến bản dịch: AI dịch xong `WaitReview` → «Chờ soát bản dịch» (chưa tạo giọng). `PrepareStop` (gốc của
+      `WaitTranslation` / `WaitReview`) mang `status`; `WAITING` = hai trạng thái chờ.
+    - Bấm lại chạy tiếp từ chỗ dừng (bước đã có kết quả bỏ qua — dừng ở bản dịch chỉ khi lượt đó vừa dịch). Nút chính
+      «Tiếp tục (n)» khi mọi video còn lại đang chờ bạn; kết quả cuối lượt có nút «Mở Lời thoại» (`open_text_of`).
+      `planned_steps` không tính bước giọng / khử giọng khi sẽ dừng; xuất (render) không dừng ở bản dịch; nút tạo lại
+      giọng ở Lời thoại gọi `prepare(stops=False)`.
+    - Tab Duyệt: video đang chờ hiện «⏸ Chờ … · làm tiếp ở tab Lời thoại rồi bấm Tiếp tục», bộ đếm «Chờ bạn làm tiếp n».
+      Ngưỡng thu gọn ô Mẫu 1250 → 1320 (ô «Chạy đến» rộng hơn công tắc cũ ~40 px).
 
 ## Còn tồn / để ý khi làm tiếp
 

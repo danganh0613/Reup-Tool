@@ -22,8 +22,9 @@ TOPICS: list[dict] = [
             "Không chọn mẫu thì video giữ nguyên tiếng gốc.",
             "Cần chỉnh thêm thì bấm từng mục ở thanh bên trái (Lời thoại, Lồng tiếng, Che mờ, Nhạc…) — khung xem trước "
             "đổi theo ngay.",
-            "Bấm nút chính trên cùng bên phải («Xuất video», hoặc «Chuẩn bị» khi bật «Duyệt trước»). Thanh trạng thái dưới "
-            "cùng cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh đó để lấy video.",
+            "Bấm nút chính trên cùng bên phải: «Chuẩn bị» (máy làm phụ đề, dịch, giọng) → xem ở tab «Duyệt» → «Xuất». "
+            "Thanh trạng thái dưới cùng cho biết đang làm bước nào và còn bao lâu. Xong bấm «Mở thư mục» ngay trên thanh "
+            "đó để lấy video.",
         ]),
         ("warn", f"Video tiếng nước ngoài cần 2 thứ (cài một lần): bộ nghe lời thoại Qwen3-ASR (Cài đặt › AI trên máy, "
                  f"~{INSTALL_GB} GB) và API key Gemini "
@@ -53,16 +54,19 @@ TOPICS: list[dict] = [
             "Nạp nhiều video / cả thư mục vào hàng đợi — mọi video dùng chung mẫu đang chọn.",
             "Video nào cần khác (vd. chữ cứng nằm chỗ khác): chọn video đó, ở mục Video bật «Chỉnh riêng cho video này» "
             "hoặc «Áp mẫu riêng». Video đó có nhãn «✎ Riêng» trong hàng đợi, ô Mẫu trên cùng ghi mẫu của nó.",
-            "Bấm «Xuất video»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó. Thứ tự xuất = thứ tự hàng đợi "
+            "Bấm «Chuẩn bị» rồi «Xuất»: mỗi video dựng đúng theo mẫu / cấu hình riêng của nó. Thứ tự = thứ tự hàng đợi "
             "(chuột phải vào video để đưa lên / xuống).",
             "Nút ≡ cạnh «Lưu mẫu» (Quản lý mẫu): xem tất cả mẫu, áp cho tất cả / chỉ video đang chọn, xuất file mẫu gửi "
             "máy khác, nhập mẫu.",
         ]),
-        ("h", "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)"),
+        ("h", "Chuẩn bị → Duyệt → Xuất"),
         ("steps", [
-            "Bật công tắc «Duyệt trước» cạnh nút chính trên cùng (hoặc ở tab Video). Nút chính đổi thành «Chuẩn bị (n)».",
-            "Bấm «Chuẩn bị»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa xuất). "
+            "Ô «Chạy đến» cạnh nút chính: «Tự động hết» (làm hết rồi chờ duyệt) · «Đến lời gốc» (dừng để bạn tự dịch bên "
+            "ngoài) · «Đến bản dịch» (dừng để bạn soát bản dịch rồi mới tạo giọng). Áp cho mọi video.",
+            "Bấm «Chuẩn bị (n)»: máy làm phụ đề, dịch, nhận diện người nói, tạo giọng lồng cho cả hàng đợi (chưa xuất). "
             "Xong tự mở tab «Duyệt» (thanh bên trái) — khung xem trước vẫn ở ngay cạnh.",
+            "Video dừng «Chờ bản dịch» / «Chờ soát bản dịch»: làm ở tab Lời thoại (icon copy / dán, sửa câu, Nhờ AI sửa) "
+            "rồi bấm «Tiếp tục (n)» — máy chạy tiếp từ chỗ dừng, phần đã xong không làm lại.",
             "Tab Duyệt: ‹ › hoặc ô chọn để đổi video, ▶ Phát để xem. Thấy câu sai: bấm «Sửa ›» ở dòng «Lời thoại» → sửa ở "
             "tab Lời thoại (tự lưu) → icon loa để tạo lại giọng (câu không đổi dùng lại, rất nhanh) → «‹ Về Duyệt».",
             "Đạt thì «Duyệt» (Ctrl+Enter, tự sang video chờ kế), không dùng thì «Bỏ qua».",
@@ -87,8 +91,8 @@ TOPICS: list[dict] = [
             "Đưa video vào (kéo thả vào khung xem trước, hoặc tab Video › «＋ Nạp video»).",
             "Ô «Mẫu» trên cùng chọn «Review phim dọc 9:16» hoặc «Thuyết minh ngang 16:9» — mẫu bật sẵn: nghe lời thoại → "
             "dịch sang tiếng Việt → lồng tiếng → phụ đề kiểu TikTok → khử giọng gốc → che chữ cứng.",
-            "Bấm «Xuất video» trên cùng. Muốn xem / sửa trước khi xuất: bật «Duyệt trước» rồi bấm «Chuẩn bị», xem từng "
-            "video ở tab Duyệt.",
+            "Bấm «Chuẩn bị» trên cùng, xem từng video ở tab Duyệt rồi «Xuất». Muốn tự dịch bên ngoài, hoặc soát bản dịch "
+            "trước khi tạo giọng: đổi ô «Chạy đến» cạnh nút chính.",
         ]),
         ("warn", f"Cần cài một lần: bộ nghe lời thoại (Cài đặt › AI trên máy, ~{INSTALL_GB} GB) và API key Gemini để dịch "
                  "(Cài đặt › AI dùng API key, miễn phí tại aistudio.google.com). Thiếu thì máy báo ngay khi bấm chạy."),
@@ -153,8 +157,8 @@ TOPICS: list[dict] = [
         ("tip", "Chữ hiện sớm / muộn hơn tiếng: tab «Phụ đề» › «Thời gian» › «Trễ phụ đề»."),
     ]},
     {"key": "review", "title": "Duyệt: xem từng video, chỗ nào chưa ổn thì sửa", "group": "Từng mục", "blocks": [
-        ("p", "Tab này chỉ hiện khi bật «Duyệt trước» (công tắc cạnh nút chính trên cùng). Video là trung tâm: khung xem "
-              "trước bên phải luôn hiện video đang duyệt, bảng bên trái tóm tắt video đó sẽ ra sao."),
+        ("p", "Video là trung tâm: khung xem trước bên phải luôn hiện video đang duyệt, bảng bên trái tóm tắt video đó "
+              "sẽ ra sao."),
         ("steps", [
             "Đổi video bằng ‹ › hoặc ô chọn (● chờ duyệt, ✓ đã duyệt, – bỏ qua).",
             "Đọc «Video này sẽ ra sao»: khung hình, lời thoại (bao nhiêu câu, đã dịch chưa), phụ đề, mấy người nói & ai "

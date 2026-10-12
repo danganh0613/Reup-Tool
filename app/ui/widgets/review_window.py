@@ -17,7 +17,7 @@ import customtkinter as ctk
 
 from app.config import theme as T
 from app.core.state import VideoItem
-from app.services.job_runner import error_line
+from app.services.job_runner import WAITING, error_line
 from app.services.srt_utils import format_ts
 from app.ui.icons import icon
 from app.ui.widgets.common import StatusLabel, auto_wrap, hint
@@ -35,6 +35,8 @@ def _mark(it: VideoItem) -> tuple[str, str, str]:
         return "✖", "Lỗi", T.DANGER
     if it.status in ("Đang chuẩn bị", "Đang xử lý"):
         return "⏳", it.status, T.INFO
+    if it.status in WAITING:                       # «Chạy đến» dừng chờ bạn: chờ bản dịch / chờ soát bản dịch
+        return "⏸", it.status, T.WARNING
     if it.status == "Xong" and it.review == "approved":
         return "★", "Đã xuất", T.SUCCESS
     if it.status == "Cần xuất lại" and it.review == "approved":
@@ -177,8 +179,11 @@ class ReviewPanel(ctk.CTkFrame):
         bits = [f"Chờ {c['pending']}", f"Đã duyệt {c['approved']}"]
         if c["skipped"]:
             bits.append(f"Bỏ qua {c['skipped']}")
-        if c[""]:
-            bits.append(f"Chưa chuẩn bị {c['']}")
+        waiting = sum(1 for it in vids if not it.review and it.status in WAITING)
+        if waiting:                                  # «Chạy đến» dừng chờ bạn (chờ bản dịch / chờ soát bản dịch)
+            bits.append(f"Chờ bạn làm tiếp {waiting}")
+        if c[""] - waiting:
+            bits.append(f"Chưa chuẩn bị {c[''] - waiting}")
         if todo_export:
             bits.append(f"→ Xuất ({todo_export}) ở trên cùng")
         self.counts.configure(text=" · ".join(bits))
@@ -237,7 +242,9 @@ class ReviewPanel(ctk.CTkFrame):
             bits.append(f"mẫu «{self.app_state.template_name}»")
         if it.status == "Lỗi" and it.message:
             bits.append("Lỗi: " + friendly_error(it.message, it))
-        if not self._ready(it) and it.status not in ("Đang chuẩn bị", "Đang xử lý"):
+        if it.status in WAITING:
+            bits.append("làm tiếp ở tab Lời thoại rồi bấm «Tiếp tục» trên cùng")
+        elif not self._ready(it) and it.status not in ("Đang chuẩn bị", "Đang xử lý"):
             bits.append("chưa duyệt được — bấm ⋯ › «Chuẩn bị lại video này»")
         self.info_lbl.configure(text="  ·  ".join(bits), text_color=color if it.status == "Lỗi" else T.TEXT_DIM)
         self._fill_summary()

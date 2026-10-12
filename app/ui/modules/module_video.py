@@ -8,7 +8,6 @@ from pathlib import Path
 import customtkinter as ctk
 
 from app.config import theme as T
-from app.services.watch_folder import WATCH_ACTIONS
 from app.core.state import ENCODE_PRESETS, FIT_MODES, GPU_BACKENDS, RATIO_VALUES, RATIOS, RESOLUTIONS, VIDEO_CODECS
 from app.services.sysinfo import gpu_name, gpu_name_nowait
 from app.ui.modules.base_module import BaseModule
@@ -53,9 +52,6 @@ class VideoModule(BaseModule):
         # «Xoá hết» tách xa nút «Nạp video» (trước: hai nút dính nhau, dễ bấm nhầm mất cả hàng đợi đã duyệt)
         button(foot, "Xoá hết hàng đợi", icon_name="trash", variant="ghost", size="sm", command=self._clear,
                tip="Bỏ mọi video khỏi hàng đợi (có hỏi trước; phụ đề / video đã xuất vẫn giữ trên ổ đĩa)").pack(side="right")
-        self.review = SwitchRow(self, "Duyệt trước khi xuất (Chuẩn bị → Duyệt → Xuất)", on_change=self._review_toggled)
-        self.review.pack(fill="x", pady=(2, 0))
-        self.review_hint = hint(self, "«Chuẩn bị» → xem, sửa ở tab «Duyệt» → «Xuất». Tắt = xuất thẳng.")
 
         sec = Section(self, "Khung hình & tốc độ", info="9:16 = TikTok / Shorts · 16:9 = YouTube. Nền mờ: video nằm "
                                                           "giữa, hai bên là chính nó phóng to và làm mờ.")
@@ -106,7 +102,7 @@ class VideoModule(BaseModule):
 
         sec = self.watch_sec = Section(self, "Thư mục theo dõi", subtitle="tự nạp video mới", collapsed=True,
                                        info="Máy xem thư mục vài giây một lần, chỉ nhận file đã chép xong. «Tự chuẩn bị» "
-                                            "hợp với Duyệt trước khi xuất; «Tự xuất» xuất luôn theo mẫu.")
+                                            "làm tới ô «Chạy đến» rồi chờ bạn duyệt; «Tự xuất» xuất luôn theo mẫu.")
         sec.pack(fill="x", pady=4)
         self.watch = SwitchRow(sec.body, "Theo dõi thư mục", on_change=self._watch_toggled)
         self.watch_dir = EntryRow(sec.body, "Thư mục", browse="dir", placeholder="chép video vào đây là tự vào hàng đợi",
@@ -210,12 +206,10 @@ class VideoModule(BaseModule):
             self.loop.set(cfg.loop_to_voice)
             self.novocal.set(cfg.demucs_enable)
             self._novocal_status()
-            self.review.set(bool(self.state.ui.get("review_mode")))
         finally:
             self._loading = False
         self.update_fit_hint()
         self.update_own()
-        self._layout_review()
         self._update_gpu_hint()
         self._name_example()
         self._refresh_watch()
@@ -284,9 +278,6 @@ class VideoModule(BaseModule):
         self.state.mark_dirty()
         if key == "watch_dir" and self.state.ui.get("watch_enable"):
             self.window.watch_started()
-        if key == "watch_action" and value == WATCH_ACTIONS[1] and not self.state.ui.get("review_mode"):
-            self.window.set_review_mode(True)
-            self.window.log("Đã bật «Duyệt trước khi xuất» — video tự chuẩn bị sẽ chờ bạn duyệt ở tab Duyệt.")
         self.update_watch_status()
 
     def _watch_toggled(self, on: bool) -> None:
@@ -297,26 +288,6 @@ class VideoModule(BaseModule):
         if on:
             self.window.watch_started()
         self.update_watch_status()
-
-    def _review_toggled(self, on: bool) -> None:
-        if self._loading:
-            return
-        self.window.set_review_mode(on)
-
-    def layout_review(self) -> None:
-        self._loading = True
-        try:
-            self.review.set(bool(self.state.ui.get("review_mode")))
-        finally:
-            self._loading = False
-        self._layout_review()
-
-    def _layout_review(self) -> None:
-        if self.state.ui.get("review_mode"):
-            if not self.review_hint.winfo_ismapped():
-                self.review_hint.pack(fill="x", pady=(0, 4), after=self.review)
-        else:
-            self.review_hint.pack_forget()
 
     def update_own(self) -> None:
         from app.services.templates import list_templates

@@ -125,11 +125,11 @@ SHORTCUTS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl + Z", "Hoàn tác (vùng che / khung phụ đề / xóa)"),
         ("Ctrl + Shift + Z / Ctrl + Y", "Làm lại"),
         ("Ctrl + S", "Lưu cấu hình ngay (app vẫn tự lưu)"),
-        ("Ctrl + R", "Nút chính trên cùng: Xuất video · bật Duyệt thì Chuẩn bị / Xuất"),
+        ("Ctrl + R", "Nút chính trên cùng: Chuẩn bị / Tiếp tục / Xuất"),
         ("Ctrl + O", "Nạp video (ở tab nào cũng được)"),
         ("Esc ×2", "Dừng tất cả (bấm 2 lần trong 3 giây — tránh lỡ tay)"),
     ]),
-    ("Duyệt trước khi xuất", [
+    ("Duyệt", [
         ("Ctrl + Enter", "Duyệt video đang xem, sang video chờ duyệt kế tiếp"),
         ("Ctrl + ↑ / ↓", "Video trước / sau"),
     ]),

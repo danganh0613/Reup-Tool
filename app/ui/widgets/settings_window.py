@@ -182,7 +182,7 @@ class SettingsWindow(ctk.CTkToplevel):
         return (self.toast.get(), self.ffmpeg.get().strip(), self.ffprobe.get().strip(), self.vieneu.get(),
                 float(self.loudness.get()), self.waveform.get(), self.tr_model.get().strip(),
                 tuple(self.app_state.settings.split_keys(self._key_text())), self.ds_key.get().strip(),
-                self.provider_var.get(), self.ds_model.get(), self.mode_var.get(),
+                self.provider_var.get(), self.ds_model.get(),
                 self.glossary.get("1.0", "end").strip(), self.out_var.get().strip())
 
     def _close(self) -> None:
@@ -303,19 +303,8 @@ class SettingsWindow(ctk.CTkToplevel):
             ctk.CTkRadioButton(row, text=name, value=name, variable=self.provider_var, font=T.font(12),
                                text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                                border_color=T.TEXT_MUTED).pack(side="left", padx=(0, 16))
-        # «Không dịch»: nhận diện lời gốc rồi dừng — người dùng copy ra dịch bên ngoài, dán bản dịch vào
-        row = ctk.CTkFrame(b, fg_color="transparent")
-        row.pack(fill="x", pady=3)
-        ctk.CTkLabel(row, text="Cách dịch", font=T.font(12), text_color=T.TEXT_DIM, anchor="w").pack(side="left",
-                                                                                              padx=(0, 12))
-        self.mode_var = ctk.StringVar(value="external" if st.external_translate else "ai")
-        for value, label in (("ai", "AI tự dịch"), ("external", "Không dịch — tự dịch bên ngoài")):
-            ctk.CTkRadioButton(row, text=label, value=value, variable=self.mode_var, font=T.font(12),
-                               text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                               border_color=T.TEXT_MUTED).pack(side="left", padx=(0, 16))
-        hint(b, "Không dịch: Chuẩn bị chỉ nhận diện lời gốc (nghe giọng + đọc chữ in sẵn) rồi dừng ở «Chờ bản dịch». "
-                "Ở tab Lời thoại bấm icon copy lấy lời gốc, dịch bên ngoài (ChatGPT, Gemini web…), copy kết quả rồi bấm "
-                "icon dán, xong bấm Chuẩn bị để tạo giọng. Nhờ AI sửa vẫn dùng AI chọn ở trên.").pack(fill="x", pady=(0, 2))
+        hint(b, "Muốn tự dịch bên ngoài (ChatGPT, Gemini web…): chọn «Chạy đến: Đến lời gốc» cạnh nút Chuẩn bị trên "
+                "cùng.").pack(fill="x", pady=(0, 2))
 
         b = self._card(c, "Gemini", info="Gói miễn phí có giới hạn lượt mỗi ngày. Google có thể dùng chữ bạn gửi để cải "
                                          "thiện sản phẩm — đừng gửi nội dung nhạy cảm.")
@@ -753,7 +742,6 @@ class SettingsWindow(ctk.CTkToplevel):
         st.gemini_api_keys = "\n".join(st.split_keys(self._key_text()))
         st.deepseek_api_key = self.ds_key.get().strip()
         st.translate_provider = self.provider_var.get()
-        st.external_translate = self.mode_var.get() == "external"
         st.deepseek_model = self.ds_model.get().strip() or DEEPSEEK_MODELS[0]
         st.glossary = self.glossary.get("1.0", "end").strip()
         out = self.out_var.get().strip().strip('"')

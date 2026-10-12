@@ -30,9 +30,24 @@ logger = logging.getLogger(__name__)
 ProgressCb = Callable[[float], None]
 
 
-class WaitTranslation(RuntimeError):
-    """«Không dịch» (Cài đặt): video cần bản dịch mà chưa có → dừng ở «Chờ bản dịch» (không phải lỗi) chờ người dùng dán
-    bản dịch làm bên ngoài vào."""
+class PrepareStop(RuntimeError):
+    """Chuẩn bị dừng đúng chỗ người dùng chọn ở «Chạy đến» (không phải lỗi) — ``status`` hiện ở hàng đợi; bấm Chuẩn bị
+    lần nữa là chạy tiếp (bước đã có kết quả được bỏ qua)."""
+    status = "Chờ"
+
+
+class WaitTranslation(PrepareStop):
+    """«Chạy đến: Đến lời gốc»: video cần bản dịch mà chưa có → dừng chờ người dùng dán bản dịch làm bên ngoài vào."""
+    status = "Chờ bản dịch"
+
+
+class WaitReview(PrepareStop):
+    """«Chạy đến: Đến bản dịch»: AI vừa dịch xong → dừng chờ người dùng soát / sửa bản dịch rồi mới tạo giọng."""
+    status = "Chờ soát bản dịch"
+
+
+#: trạng thái hàng đợi của video đang dừng chờ người dùng (không phải lỗi, chưa xong)
+WAITING = (WaitTranslation.status, WaitReview.status)
 
 
 class NoSpeech(RuntimeError):
@@ -917,16 +932,19 @@ class Pipeline:
         s, t, v = st.subtitle, st.tts, st.video
         has = lambda p: bool(p) and Path(p).exists()      # noqa: E731
         steps = ["read"]
+        until = st.settings.prepare_until
         need_cues = s.enable_subtitle or t.enable_tts
         want_tr = (s.enable_subtitle and s.srt_mode != SRT_MODES[0]) or (t.enable_tts and t.tts_source == TTS_SOURCES[0])
         no_srt = need_cues and not has(item.srt_path) and s.srt_source == SRT_SOURCES[0]
         if no_srt:
             steps.append("stt")
-        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path) \
-            and not self.state.settings.external_translate
+        wait_src = need_cues and want_tr and not has(item.srt_translated_path) and until == "source"
+        no_tr = need_cues and want_tr and s.translate_enable and not has(item.srt_translated_path) and not wait_src
         if no_tr:
             steps.append("translate")
         locked = item.voice_locked and has(item.voice_path)
+        # «Chạy đến»: dừng chờ bản dịch / chờ soát bản dịch → lượt này không tới bước tạo giọng, khử giọng
+        stop = wait_src or (mode == "prepare" and until == "translation" and no_tr and t.enable_tts and not locked)
         if t.enable_tts and t.multi_voice and not locked:
             try:
                 done = self.speakers_path(item).exists()
@@ -934,6 +952,8 @@ class Pipeline:
                 done = False
             if not done:
                 steps.append("speakers")
+        if stop:
+            return steps
         if t.enable_tts and not locked:
             try:                                        # phụ đề có sẵn + giọng khớp cấu hình → không đọc lại
                 fresh = not (no_srt or no_tr) and self.current_voice_track(item)[1]
@@ -987,9 +1007,10 @@ class Pipeline:
         return stage
 
     def prepare(self, item: VideoItem, *, on_update: Callable[[VideoItem], None], log: LogCb,
-                cancel: threading.Event, bands: dict | None = None) -> None:
+                cancel: threading.Event, bands: dict | None = None, stops: bool = True) -> None:
         """Bước «Chuẩn bị» (chưa render): nhận diện giọng, dịch, người nói, tạo giọng lồng → «Chờ duyệt».
-        ``bands``: dải tiến độ JobRunner tính lúc bắt đầu lượt (đã có phần nghe lời thoại chạy trước)."""
+        ``bands``: dải tiến độ JobRunner tính lúc bắt đầu lượt (đã có phần nghe lời thoại chạy trước).
+        ``stops``: dừng ở «Chạy đến: Đến bản dịch» (False: nút tạo lại giọng — người dùng đã muốn có giọng)."""
         if bands is None:
             bands, item.progress = step_bands(self.planned_steps(item, "prepare")), 0.0
         item.status, item.message = "Đang chuẩn bị", "Đọc thông tin"
@@ -1006,7 +1027,8 @@ class Pipeline:
         stage = self._stager(item, on_update, bands)
         for t in trims:
             self._prepare_assets(item, info, t, vcfg=self.state.video, stage=stage, log=log, cancel=cancel,
-                                 on_update=on_update)
+                                 on_update=on_update,
+                                 stop_after_translate=stops and self.state.settings.prepare_until == "translation")
         item.status, item.progress, item.message = "Chờ duyệt", 1.0, ""
         item.review = "pending"
         on_update(item)
@@ -1080,8 +1102,8 @@ class Pipeline:
         want_tr = (sub_on and scfg.srt_mode in (SRT_MODES[1], SRT_MODES[2])) or \
                   (tts_on and tcfg.tts_source == TTS_SOURCES[0])
         has_tr = bool(item.srt_translated_path and Path(item.srt_translated_path).exists())
-        if want_tr and not has_tr and self.state.settings.external_translate:
-            out.add("external")                      # «Không dịch»: nhận diện xong thì dừng chờ dán bản dịch
+        if want_tr and not has_tr and self.state.settings.prepare_until == "source":
+            out.add("external")                      # «Đến lời gốc»: nhận diện xong thì dừng chờ dán bản dịch
         elif want_tr and not has_tr and scfg.translate_enable:
             out.add("gemini")
         elif want_tr and not has_tr:
@@ -1090,8 +1112,10 @@ class Pipeline:
 
     def _prepare_assets(self, item: VideoItem, info, trim, *, vcfg, stage, log, cancel, on_update,
                         preview_out: Path | None = None, voice_only: bool = False,
-                        force_voice: bool = False) -> tuple[list[Cue], list[Cue] | None, Path | None]:
+                        force_voice: bool = False,
+                        stop_after_translate: bool = False) -> tuple[list[Cue], list[Cue] | None, Path | None]:
         """Phần «chuẩn bị» của một video: phụ đề (nhận diện / file SRT), bản dịch, người nói, track giọng lồng.
+        ``stop_after_translate`` («Chạy đến: Đến bản dịch»): AI vừa dịch xong → dừng (``WaitReview``) trước khi tạo giọng.
 
         Kết quả lưu ra file (SRT, WAV theo chữ ký cấu hình) → bước render sau dùng lại, không làm lại."""
         st = self.state
@@ -1131,16 +1155,20 @@ class Pipeline:
             if want_translated:
                 if item.srt_translated_path and Path(item.srt_translated_path).exists():
                     cues_tr = load_srt(item.srt_translated_path)
-                elif st.settings.external_translate:
+                elif st.settings.prepare_until == "source":
                     if tts_on and tcfg.multi_voice:      # nhận diện người nói luôn — dán bản dịch xong chỉ còn tạo giọng
                         self.ensure_speakers(item, progress=stage("Nhận diện người nói", 0.3, 0.1), log=log,
                                              cancel=cancel)
                     raise WaitTranslation("Chờ bản dịch — tab Lời thoại: icon copy lấy lời gốc, dịch bên ngoài, icon dán "
-                                          "bản dịch vào, rồi bấm Chuẩn bị (đang chọn «Không dịch» ở Cài đặt).")
+                                          "bản dịch vào, rồi bấm Chuẩn bị (đang chọn «Chạy đến: Đến lời gốc»).")
                 elif scfg.translate_enable:
                     cues_tr = self.translate(item, cues_orig, progress=stage("Dịch phụ đề", 0.3, 0.15), log=log,
                                              cancel=cancel)
                     on_update(item)
+                    held = item.voice_locked and bool(item.voice_path) and Path(item.voice_path or "").exists()
+                    if stop_after_translate and tts_on and not voice_only and not held:
+                        raise WaitReview("Chờ soát bản dịch — tab Lời thoại: soát / sửa bản dịch (hoặc Nhờ AI sửa), rồi "
+                                         "bấm Chuẩn bị để tạo giọng (đang chọn «Chạy đến: Đến bản dịch»).")
                 else:
                     log("⚠ Cần bản dịch nhưng chưa bật Dịch — dùng phụ đề gốc.")
                     cues_tr = None
@@ -1474,8 +1502,8 @@ class JobRunner:
                         else:
                             pipe.process(it, on_update=_ui_update, log=_ui_log, cancel=ev, bands=bands)
                         ok += 1
-                    except WaitTranslation as exc:
-                        it.status, it.message = "Chờ bản dịch", ""
+                    except PrepareStop as exc:
+                        it.status, it.message = exc.status, ""
                         _ui_update(it)
                         _ui_log(f"⏸ {it.name}: {exc}")
                     except RenderCancelled:

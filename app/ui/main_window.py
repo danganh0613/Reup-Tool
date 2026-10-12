@@ -20,10 +20,10 @@ from app.ui import ctk_patches
 from app.ui.icons import MODULE_ICONS, icon
 from app.config.paths import APP_NAME, APP_VERSION, ASSETS_DIR, JOBS_DIR, VIDEOS_DIR
 from app.core.logging_setup import add_ui_sink
-from app.core.state import AppState, VideoItem
+from app.core.state import PREPARE_UNTIL, AppState, VideoItem
 from app.services.audio_player import AudioPlayer
 from app.services.ffmpeg import FFmpeg
-from app.services.job_runner import JobRunner, Pipeline, TaskRunner
+from app.services.job_runner import WAITING, JobRunner, Pipeline, TaskRunner
 from app.services.notifier import notify
 from app.ui.modules.base_module import BaseModule
 from app.ui.modules.module_bgm import BGMModule
@@ -39,7 +39,7 @@ from app.ui.modules.module_video import VideoModule
 from app.ui.preview_panel import PreviewPanel
 from app.ui.progress_panel import ProgressPanel, friendly_error
 from app.ui.widgets.dialogs import LogWindow, NotificationCenter, ShortcutsWindow, now_str
-from app.ui.widgets.ui import button, button_width, relabel
+from app.ui.widgets.ui import Select, button, button_width, relabel
 from app.core.platform import IS_MAC, IS_WIN, exe_name, keep_awake, open_path
 
 ctk_patches.apply()      # vá CTk: hết vạch hở 1 px mép phải/dưới ở DPI lẻ
@@ -76,6 +76,14 @@ MODULES: list[type[BaseModule]] = [VideoModule, STTModule, SRTModule, TTSModule,
                                    BGMModule, BrandModule, TrimModule, ColorModule, StoryModule]
 _FKEYS = {f"<F{i + 1}>": m.key for i, m in enumerate(MODULES)}
 
+
+#: menu «Chạy đến» (nhãn đầy đủ) · câu nhắc khi đổi mức
+UNTIL_MENU = {"all": "Tự động hết — lời gốc → dịch → giọng → chờ duyệt",
+              "source": "Đến lời gốc — dừng để tự dịch bên ngoài rồi dán vào",
+              "translation": "Đến bản dịch — dừng để soát bản dịch rồi mới tạo giọng"}
+UNTIL_NOTE = {"all": "Chuẩn bị làm hết rồi chờ duyệt.",
+              "source": "nhận diện xong dừng «Chờ bản dịch»: icon copy → dịch ngoài → icon dán → Tiếp tục.",
+              "translation": "AI dịch xong dừng «Chờ soát bản dịch»: soát / sửa ở tab Lời thoại → Tiếp tục để tạo giọng."}
 
 class MainWindow(_Root):
     def __init__(self, state: AppState) -> None:
@@ -242,15 +250,13 @@ class MainWindow(_Root):
         self.clean_btn = self._hbtn(right, "Dọn dẹp", "trash", self.clean_workspace,
                                     tip="Xoá file đang làm (phụ đề, giọng lồng, file tạm) và làm trống hàng đợi")
         self.clean_btn.pack(side="left", padx=4)
-        # chế độ làm việc ngay cạnh nút chính: tắt = xuất thẳng · bật = Chuẩn bị → Duyệt → Xuất
-        self.review_switch = ctk.CTkSwitch(right, text="Duyệt trước", font=T.font(12), command=self._header_review,
-                                           onvalue=True, offvalue=False)
-        self.review_switch.pack(side="left", padx=(10, 2))
-        from app.ui.widgets.ui import Tooltip
-
-        Tooltip(self.review_switch, "Duyệt trước khi xuất — bật: «Chuẩn bị» → xem, sửa từng video ở tab «Duyệt» → «Xuất». "
-                                    "Tắt: bấm nút bên cạnh là xuất thẳng.")
-        self._sync_review_switch()
+        # «Chạy đến» ngay cạnh nút chính: Chuẩn bị tự làm tới đâu rồi dừng chờ bạn (nhớ chung cho mọi video)
+        self.until_select = Select(right, list(PREPARE_UNTIL), value=self.app_state.settings.prepare_until,
+                                   labels=UNTIL_MENU, short=lambda v: PREPARE_UNTIL.get(v, v), width=146, height=36,
+                                   menu_width=380, command=self._set_prepare_until, font=T.font(12),
+                                   tip="Chuẩn bị chạy đến đâu rồi dừng chờ bạn — bấm Chuẩn bị lần nữa là chạy tiếp từ "
+                                       "chỗ dừng. Áp cho mọi video.")
+        self.until_select.pack(side="left", padx=(10, 2))
         self.render_btn = button(right, "Xuất video", icon_name="play", variant="primary", size="lg",
                                  command=lambda: self.start_render(list(self.app_state.videos)),
                                  tip="Xuất các video chưa xuất trong hàng đợi (Ctrl+R)")
@@ -345,7 +351,7 @@ class MainWindow(_Root):
         if w < 50:
             return
         compact_header = w < 1740               # thanh «Mẫu» ở giữa cần chỗ → nút đầu trang chỉ còn icon sớm hơn
-        self.template_bar.set_compact(w < 1250)
+        self.template_bar.set_compact(w < 1320)              # ô «Chạy đến» cạnh nút chính chiếm thêm ~40 px
         if compact_header != self._compact_header:
             self._compact_header = compact_header
             for b, label, width in self.header_btns:
@@ -354,7 +360,7 @@ class MainWindow(_Root):
                 relabel(b, self._compact_text(b) if compact_header else label,
                         width=self._compact_width(b) if compact_header else width)
             self.version_label.configure(text="" if compact_header else f"v{APP_VERSION}")
-            self.review_switch.configure(text="Duyệt" if compact_header else "Duyệt trước")
+            self.until_select.configure(width=124 if compact_header else 146)
         compact_rail = h < 800
         if compact_rail != self._compact_rail:
             self._compact_rail = compact_rail
@@ -417,8 +423,6 @@ class MainWindow(_Root):
             self.show_module("srt")
             self.modules["srt"].open_style()
             return
-        if key == "review" and not self.review_mode:
-            key = "video"                       # tab Duyệt chỉ có khi bật «Duyệt trước khi xuất»
         if key == "review":
             from app.ui.widgets.review_window import ReviewPanel
 
@@ -1100,11 +1104,11 @@ class MainWindow(_Root):
         self._show_waiting()
 
     def retry_item(self, item: VideoItem) -> None:
-        """Nút ↻ của video lỗi trong hàng đợi: chuẩn bị lại (chế độ Duyệt) hoặc render lại đúng video đó."""
+        """Nút ↻ của video lỗi trong hàng đợi: chuẩn bị lại (chưa duyệt) hoặc render lại đúng video đó."""
         if item not in self.app_state.videos:
             return
         self.log(("Xuất lại: " if item.status in ("Xong", "Cần xuất lại") else "Thử lại: ") + item.name)
-        if self.review_mode and item.review != "approved":
+        if item.review != "approved":
             item.review = ""
             self._run_queue([item], mode="prepare")
         else:
@@ -1148,6 +1152,17 @@ class MainWindow(_Root):
             self.progress.result("stopped", f"Đã bỏ qua {skipped} video", "Bấm «Chạy lại» khi máy rảnh",
                                  ("Chạy lại", lambda: self._run_queue(again, mode="prepare" if prep else "render"),
                                   "refresh", True))
+        elif prep and any(it.status in WAITING for it in items):
+            # «Chạy đến» dừng chờ bạn: mở đúng chỗ làm tiếp (tab Lời thoại của video đầu tiên đang chờ)
+            first = next(it for it in items if it.status in WAITING)
+            src = sum(1 for it in items if it.status == WAITING[0])
+            rev = sum(1 for it in items if it.status == WAITING[1])
+            what = " · ".join(x for x in (f"{src} chờ bản dịch" if src else "", f"{rev} chờ soát bản dịch" if rev else "")
+                              if x)
+            todo = ("copy lời gốc → dịch ngoài → dán bản dịch" if src else "soát / sửa bản dịch") + \
+                ", xong bấm «Tiếp tục» trên cùng để tạo giọng"
+            self.progress.result("ok", (f"Chuẩn bị xong {ok} video · " if ok else "") + what + skip_note,
+                                 f"{took} · {todo}", ("Mở Lời thoại", lambda: self.open_text_of(first), "subtitles", True))
         elif prep:
             self.progress.result("ok", f"Chuẩn bị xong {ok} video" + skip_note,
                                  f"{took} · xem từng video ở tab «Duyệt», ưng thì bấm «Duyệt», xong bấm «Xuất» trên cùng")
@@ -1163,7 +1178,7 @@ class MainWindow(_Root):
         if not failed:
             self.progress.result("ok", "Không còn video lỗi", "Video lỗi đã được xoá hoặc đã chạy lại")
             return
-        prep = [it for it in failed if self.review_mode and it.review != "approved"]
+        prep = [it for it in failed if it.review != "approved"]
         ren = [it for it in failed if it not in prep]
         for it in prep:
             it.review = ""
@@ -1199,30 +1214,35 @@ class MainWindow(_Root):
             self._log_win.append(line)
 
     # ── Render ────────────────────────────────────────────────────────────
-    @property
-    def review_mode(self) -> bool:
-        return bool(self.app_state.ui.get("review_mode"))
+    def _set_prepare_until(self, value: str) -> None:
+        """Ô «Chạy đến» cạnh nút chính — nhớ chung cho mọi video (settings.json)."""
+        st = self.app_state.settings
+        if value not in PREPARE_UNTIL or value == st.prepare_until:
+            return
+        st.prepare_until = value
+        self.app_state.save_settings()
+        self.update_render_button()
+        for m in self.modules.values():                # tab Dịch / Lời thoại nhắc đúng cách làm của mức mới
+            if getattr(m, "key", "") == "srt" and hasattr(m, "on_active_changed"):
+                m.on_active_changed()
+        self.log(f"Chuẩn bị chạy đến: {PREPARE_UNTIL[value]} — {UNTIL_NOTE[value]}", notice=True)
+
+    def open_text_of(self, item: VideoItem) -> None:
+        """Mở tab Lời thoại của ``item`` (video đang dừng chờ bản dịch / chờ soát bản dịch)."""
+        if item in self.app_state.videos and self.app_state.active is not item:
+            self.app_state.set_active(self.app_state.videos.index(item))
+        self.edit_in("srt")
 
     def start_render(self, items: list[VideoItem], audio_only: bool = False, *, force: bool = False) -> None:
-        """Nút Render. Bật «Duyệt trước khi xuất»: video chưa chuẩn bị → Chuẩn bị; đã duyệt → xuất; còn lại → mở tab Duyệt.
-        ``force``: xuất đúng các video được đưa vào (đã duyệt)."""
+        """Nút chính: video chưa chuẩn bị (hoặc đang dừng chờ bạn ở «Chạy đến») → Chuẩn bị / chạy tiếp; đã duyệt →
+        xuất; còn lại → mở tab Duyệt. ``force``: xuất đúng các video được đưa vào (đã duyệt)."""
         if not items:
             messagebox.showinfo(APP_NAME, "Hàng đợi trống — bấm Nạp video trước.")
             return
-        if not self.review_mode and not force:
-            # video đã xuất (không sửa gì) không dựng lại; xuất lại riêng một video: nút ↻ ở dòng của nó
-            todo = [it for it in items if it.status != "Xong"]
-            if not todo:
-                if not messagebox.askyesno(APP_NAME, f"Cả {len(items)} video đã xuất. Xuất lại tất cả?"):
-                    return
-                todo = items
-            elif len(todo) < len(items):
-                self.log(f"Bỏ qua {len(items) - len(todo)} video đã xuất — xuất lại video nào thì bấm ↻ ở dòng đó.")
-            items = todo
         srt = self.modules.get("srt")
         if srt is not None and srt.editor.item in items and srt.editor.dirty():
             srt.editor.save(regen=False)            # câu sửa dở → lưu trước khi lọc video đã xuất (sửa xong là «Cần xuất lại»)
-        if self.review_mode and not force:
+        if not force:
             failed = [it for it in items if not it.review and it.status == "Lỗi"]
             todo = [it for it in items if not it.review and it.status != "Lỗi"]
             ready = [it for it in items if it.review == "approved" and it.status != "Xong"]
@@ -1291,7 +1311,7 @@ class MainWindow(_Root):
             self.queue_update(it)
         self._render_started = time.time()
         total = len(items)
-        finished = ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua", "Chờ bản dịch")
+        finished = ("Xong", "Lỗi", "Đã huỷ", "Chờ duyệt", "Đã bỏ qua", *WAITING)
         self.pipeline.audio_only = audio_only
         prep = mode == "prepare"
 
@@ -1321,9 +1341,12 @@ class MainWindow(_Root):
                 return
             skipped = sum(1 for it in items if it.status == "Đã bỏ qua")
             skip_note = f", bỏ qua {skipped}" if skipped else ""
-            waiting = sum(1 for it in items if it.status == "Chờ bản dịch")
-            if waiting:                              # «Không dịch» (Cài đặt): nhận diện xong, chờ dán bản dịch
-                skip_note += f", {waiting} chờ bản dịch (copy lời gốc → dịch ngoài → dán)"
+            waiting = sum(1 for it in items if it.status in WAITING)
+            src = sum(1 for it in items if it.status == WAITING[0])
+            if src:                                  # «Chạy đến: Đến lời gốc»: nhận diện xong, chờ dán bản dịch
+                skip_note += f", {src} chờ bản dịch (copy lời gốc → dịch ngoài → dán)"
+            if waiting - src:                        # «Chạy đến: Đến bản dịch»: AI dịch xong, chờ soát rồi tạo giọng
+                skip_note += f", {waiting - src} chờ soát bản dịch"
             if prep:
                 msg = f"Chuẩn bị xong: {ok} video chờ duyệt, {fail} lỗi{skip_note} · {elapsed / 60:.1f} phút"
                 self.log(msg)
@@ -1461,7 +1484,7 @@ class MainWindow(_Root):
             return
         it = self.app_state.active
         # chỉ khi video đã chuẩn bị (chưa chuẩn bị thì chỉnh là chỉnh chung cả hàng đợi); tab Truyện không thuộc video
-        show = (self.review_mode and it is not None and bool(it.review)
+        show = (it is not None and bool(it.review)
                 and self._current_module not in (None, "review", "story"))
         if not show:
             self.scope_strip.grid_remove()
@@ -1493,7 +1516,7 @@ class MainWindow(_Root):
     def _scope_changed(self, _section: str = "") -> None:
         if not self.app_state.last_change_auto and _section != "story":
             self.mark_changed()
-        if self.review_mode and not self.preview.player.playing and not self.app_state.last_change_auto:
+        if not self.preview.player.playing and not self.app_state.last_change_auto:
             self._scope_note = "✓ Đã chỉnh — ▶ Phát để xem lại"
         self._update_scope_strip()
 
@@ -1532,7 +1555,7 @@ class MainWindow(_Root):
         return self.modules["review"]
 
     def _review_key(self, action: str) -> None:
-        if not self.review_mode or not self.app_state.videos:
+        if not self.app_state.videos:
             return
         rv = self.review_panel()
         if action == "approve":
@@ -1542,56 +1565,27 @@ class MainWindow(_Root):
         self._scope_note = ""
         self._update_scope_strip()
 
-    def set_review_mode(self, on: bool) -> None:
-        """Bật / tắt «Duyệt trước khi xuất» (công tắc trên cùng hoặc ở tab Video) — hai chỗ luôn khớp nhau."""
-        self.app_state.ui["review_mode"] = bool(on)
-        self.app_state.mark_dirty()
-        self.sync_review_rail()
-        self.update_render_button()
-        self._sync_review_switch()
-        m = self.modules.get("video")
-        if m is not None:
-            m.layout_review()
-        self.progress.refresh_idle()
-
-    def _header_review(self) -> None:
-        self.set_review_mode(bool(self.review_switch.get()))
-
-    def _sync_review_switch(self) -> None:
-        sw = getattr(self, "review_switch", None)
-        if sw is not None and bool(sw.get()) != self.review_mode:
-            sw.select() if self.review_mode else sw.deselect()
-
     def sync_review_rail(self) -> None:
-        """Nút «Duyệt» trên thanh tính năng chỉ hiện khi bật chế độ Duyệt trước khi xuất."""
-        self.app_state.set_review_scope(self.review_mode)
+        """Nút «Duyệt» trên thanh tính năng (luôn có: Chuẩn bị → Duyệt → Xuất), ngay sau nút Video."""
+        self.app_state.set_review_scope(True)
         self._update_scope_strip()
-        b = self._rail_buttons.get("review")
-        if self.review_mode and b is None:
+        if self._rail_buttons.get("review") is None:
             from app.ui.widgets.review_window import ReviewPanel
 
             self._add_rail_button(ReviewPanel)
             first = self._rail_buttons.get("video")
             if first is not None:
                 self._rail_buttons["review"].pack_configure(after=first)
-        elif not self.review_mode and b is not None:
-            if self._current_module == "review":
-                self.show_module("video")
-            b.destroy()
-            del self._rail_buttons["review"]
 
     def update_render_button(self) -> None:
-        """Nhãn nút chính theo bước: Xuất video · bật Duyệt: Chuẩn bị (n) → Mở Duyệt → Xuất (n)."""
+        """Nhãn nút chính theo bước: Chuẩn bị (n) / Tiếp tục (n) (đang dừng chờ bạn ở «Chạy đến») → Mở Duyệt → Xuất (n)."""
         vids = self.app_state.videos
-        if not self.review_mode:
-            todo = sum(1 for it in vids if it.status != "Xong")
-            text = f"Xuất ({todo})" if todo and len(vids) > 1 else "Xuất video"
-        else:
-            todo = sum(1 for it in vids if not it.review and it.status != "Lỗi")
-            failed = sum(1 for it in vids if not it.review and it.status == "Lỗi")
-            ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
-            text = f"Chuẩn bị ({todo})" if todo else (f"Xuất ({ready})" if ready else (
-                f"Chuẩn bị lại ({failed})" if failed else ("Mở Duyệt" if vids else "Chuẩn bị")))
+        todo = sum(1 for it in vids if not it.review and it.status != "Lỗi")
+        waiting = sum(1 for it in vids if not it.review and it.status in WAITING)
+        failed = sum(1 for it in vids if not it.review and it.status == "Lỗi")
+        ready = sum(1 for it in vids if it.review == "approved" and it.status != "Xong")
+        text = (f"Tiếp tục ({todo})" if todo == waiting else f"Chuẩn bị ({todo})") if todo else (
+            f"Xuất ({ready})" if ready else (f"Chuẩn bị lại ({failed})" if failed else ("Mở Duyệt" if vids else "Chuẩn bị")))
         if getattr(self, "_render_label", None) != text:
             self._render_label = text
             relabel(self.render_btn, text)

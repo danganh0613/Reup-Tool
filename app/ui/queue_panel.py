@@ -24,7 +24,8 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".flv", ".
 _UNSET = object()
 _STATUS_COLOR = {"Chờ": T.TEXT_MUTED, "Đang xử lý": T.INFO, "Xong": T.SUCCESS, "Lỗi": T.DANGER, "Đã huỷ": T.WARNING,
                  "Đang chuẩn bị": T.INFO, "Chờ duyệt": T.WARNING, "Đã duyệt": T.ACCENT, "Bỏ qua": T.TEXT_MUTED,
-                 "Đã bỏ qua": T.WARNING, "Cần xuất lại": T.WARNING, "Chờ bản dịch": T.WARNING}
+                 "Đã bỏ qua": T.WARNING, "Cần xuất lại": T.WARNING, "Chờ bản dịch": T.WARNING,
+                 "Chờ soát bản dịch": T.WARNING}
 _RUNNING = ("Chờ", "Đang xử lý", "Đang chuẩn bị")          # còn trong lượt đang chạy
 
 

@@ -303,7 +303,7 @@ class CueEditor(ctk.CTkFrame):
                 self.head.configure(text=f"Bản dịch · {len(self.cues)} câu")       # chữ nhỏ trên mỗi ô = câu gốc
             elif orig:
                 self.edit_path, self.cues = orig, load_srt(orig)
-                ext = self.app_state.settings.external_translate
+                ext = self.app_state.settings.prepare_until == "source"
                 self.head.configure(text=f"Lời gốc · {len(self.cues)} câu" + (
                     " — chưa dịch: icon copy → dịch ngoài → icon dán" if ext else ""))
             else:
@@ -861,8 +861,9 @@ class CueEditor(ctk.CTkFrame):
             win.progress.update_item(x, 1, 1, x.progress)
 
         def work(cancel):
-            pipe.prepare(it, on_update=lambda x: win.ui_call(lambda: upd(x)), log=win.log_bg, cancel=cancel)
-            if keep[0] in ("approved", "skipped") or not win.review_mode:
+            pipe.prepare(it, on_update=lambda x: win.ui_call(lambda: upd(x)), log=win.log_bg, cancel=cancel,
+                         stops=False)
+            if keep[0] in ("approved", "skipped"):
                 it.review, it.status = keep
 
         def done(_r, error):

@@ -397,6 +397,10 @@ class StoryConfig:
     auto_queue: bool = True
 
 
+#: «Chạy đến» (cạnh nút Chuẩn bị): Chuẩn bị tự làm tới đâu rồi dừng chờ bạn — nhớ chung cho mọi video
+PREPARE_UNTIL = {"all": "Tự động hết", "source": "Đến lời gốc", "translation": "Đến bản dịch"}
+
+
 @dataclass
 class Settings:
     """Cài đặt gắn với máy — lưu riêng ở ``settings.json``."""
@@ -416,9 +420,10 @@ class Settings:
     gemini_api_keys: str = ""          # nhiều key, mỗi dòng một key (xoay vòng khi hết quota)
     deepseek_api_key: str = ""         # DeepSeek (trả phí theo lượng dùng)
     glossary: str = ""                 # mỗi dòng: từ nguồn=nghĩa
-    #: «Không dịch» (Cài đặt › AI dùng API key): máy chỉ nhận diện lời gốc (giọng + chữ in sẵn) rồi DỪNG chờ bạn dịch
-    #: bên ngoài và dán bản dịch vào (icon dán ở tab Lời thoại) — không tự dịch, không đọc lời gốc thay bản dịch
-    external_translate: bool = False
+    #: «Chạy đến» (``PREPARE_UNTIL``): all = tự động hết · source = nhận diện lời gốc rồi DỪNG chờ bạn dịch bên ngoài,
+    #: dán bản dịch vào (không tự dịch, không đọc lời gốc thay bản dịch) · translation = AI dịch xong DỪNG chờ bạn soát
+    #: bản dịch rồi mới tạo giọng. Bấm Chuẩn bị lần nữa là chạy tiếp từ chỗ dừng
+    prepare_until: str = "all"
 
     @staticmethod
     def split_keys(text: str) -> list[str]:
@@ -1009,6 +1014,11 @@ class AppState:
                     moved = [self._settings_extra.pop(k, "") for k in ("gemini_api_key", "google_api_key")]
                     keys = Settings.split_keys("\n".join([self.settings.gemini_api_keys, *(str(v or "") for v in moved)]))
                     self.settings.gemini_api_keys = "\n".join(keys)
+                    # «Không dịch» cũ (Cài đặt › AI) → «Chạy đến: Đến lời gốc» cạnh nút Chuẩn bị
+                    if self._settings_extra.pop("external_translate", False) and "prepare_until" not in data:
+                        self.settings.prepare_until = "source"
+                if self.settings.prepare_until not in PREPARE_UNTIL:
+                    self.settings.prepare_until = "all"
                 self.settings.translate_model = migrate_model(self.settings.translate_model)
             except Exception:
                 logger.exception("settings.json hỏng, dùng mặc định")
