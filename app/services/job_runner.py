@@ -491,9 +491,10 @@ class Pipeline:
         return out if any(out) else None
 
     # ── Soát lỗi từng câu (câu cần nghe lại) ──────────────────────────────
-    def review_flags(self, item: VideoItem, texts: list[str] | None = None) -> dict:
-        """Câu cần nghe lại của bản đang dùng (bản dịch nếu có, không thì lời gốc) → {chỉ số câu: [line_qa.Flag]}.
-        ``texts``: chữ đang sửa dở ở tab Lời thoại (cùng số câu) thay cho chữ trong file."""
+    def qa_context(self, item: VideoItem) -> dict | None:
+        """Dữ liệu soát câu của bản đang dùng (bản dịch nếu có, không thì lời gốc), đọc file một lần: {"texts": chữ
+        trong file, "is_tr": là bản dịch, "kw": tham số ``line_qa.review_flags``} — tab Lời thoại giữ lại để soát lại
+        ngay khi gõ. None: chưa có lời thoại."""
         from app.services import line_qa
         from app.services.translate_router import LANG_CODE
 
@@ -501,19 +502,75 @@ class Pipeline:
         tr = item.srt_translated_path if has(item.srt_translated_path) else None
         src = item.srt_path if has(item.srt_path) else None
         if not (tr or src):
-            return {}
+            return None
         cues = load_srt(tr or src)
         sources = None
         if tr and src:
             ref = load_srt(src)
             sources = [c.plain for c in ref] if len(ref) == len(cues) else None
-        if texts is None or len(texts) != len(cues):
-            texts = [c.plain for c in cues]
         t = self.state.tts
         report = line_qa.voice_report(item.voice_path) if t.enable_tts and has(item.voice_path) else {}
-        return line_qa.review_flags(texts, sources, cjk_ok=not tr or LANG_CODE.get(self.state.subtitle.translate_target)
-                                    in ("zh", "ja", "ko"), report=report, brief=self.load_brief(item),
-                                    speakers=self.speaker_labels(item, cues), base_speed=t.tts_speed)
+        fit = None
+        if t.enable_tts and (not tr or t.tts_source == TTS_SOURCES[0]):     # giọng đọc đúng bản đang sửa
+            # trần nén như lúc tạo giọng (``generator.fit_cap``): tốc độ đọc × nén ≤ min(max_tempo, 1,25)
+            fit = line_qa.fit_model(cues, report, min_gap=t.min_gap,
+                                    cap=max(1.0, t.tts_speed, min(t.max_tempo, line_qa.TEMPO_CAP)),
+                                    fast=max(line_qa.FAST, t.tts_speed * 1.08))
+        return {"texts": [c.plain for c in cues], "is_tr": bool(tr),
+                "kw": dict(sources=sources, cjk_ok=not tr or LANG_CODE.get(self.state.subtitle.translate_target)
+                           in ("zh", "ja", "ko"), report=report, brief=self.load_brief(item),
+                           speakers=self.speaker_labels(item, cues), base_speed=t.tts_speed, fit=fit)}
+
+    def review_flags(self, item: VideoItem, texts: list[str] | None = None) -> dict:
+        """Câu cần nghe lại của bản đang dùng → {chỉ số câu: [line_qa.Flag]}. ``texts``: chữ đang sửa dở ở tab Lời thoại
+        (cùng số câu) thay cho chữ trong file."""
+        from app.services import line_qa
+
+        ctx = self.qa_context(item)
+        if ctx is None:
+            return {}
+        if texts is None or len(texts) != len(ctx["texts"]):
+            texts = ctx["texts"]
+        return line_qa.review_flags(texts, **ctx["kw"])
+
+    def line_budgets(self, item: VideoItem, idxs: list[int]) -> dict[int, int]:
+        """Giới hạn ký tự theo khung giọng thật (tính cả khoảng lặng tới câu sau, tốc độ đọc của video) cho ↻ dịch lại
+        từng câu — chưa lồng tiếng thì {} (theo thời lượng phụ đề như cũ)."""
+        ctx = self.qa_context(item)
+        fit = ctx["kw"]["fit"] if ctx else None
+        if fit is None:
+            return {}
+        texts = ctx["texts"]
+        return {i: max(6, fit.budget(i, texts[i] if i < len(texts) else "")) for i in idxs if 0 <= i < len(fit.slots)}
+
+    def auto_fix(self, item: VideoItem, texts: list[str] | None = None, *, only: list[int] | None = None,
+                 shorten_only: bool = False, log: LogCb | None = None,
+                 cancel: threading.Event | None = None) -> tuple[dict[int, str], list[int]]:
+        """«Tự sửa» các câu ⚠ của bản dịch (``only``: chỉ các câu này · ``shorten_only``: chỉ rút gọn câu dài, nút ✂):
+        AI sửa đúng lý do từng câu — rút gọn câu tràn / đọc nhanh theo khung thật, dịch nốt câu chưa dịch, xưng hô theo
+        hồ sơ, đổi cách nói câu giọng đọc sai chữ. Không lưu. Trả ({chỉ số: câu mới}, [câu khung quá ngắn, bỏ qua])."""
+        from app.services import line_qa
+        from app.services.translate_router import fix_lines
+
+        ctx = self.qa_context(item)
+        if ctx is None or not ctx["is_tr"]:
+            return {}, []
+        if texts is None or len(texts) != len(ctx["texts"]):
+            texts = ctx["texts"]
+        kw = ctx["kw"]
+        flags = line_qa.review_flags(texts, **kw)
+        if only is not None:
+            keep = set(only)
+            flags = {i: fs for i, fs in flags.items() if i in keep}
+        if shorten_only:
+            flags = {i: fl for i, fs in flags.items() if (fl := [f for f in fs if f.kind == "fast"])}
+        tasks, skipped = line_qa.fix_tasks(flags, texts, kw["fit"], has_source=kw["sources"] is not None)
+        if not tasks:
+            return {}, skipped
+        cfg = self.state.subtitle
+        edits = fix_lines(texts, kw["sources"], tasks, settings=self.state.settings, target=cfg.translate_target,
+                          style=cfg.translate_style, brief=kw["brief"], log=log, cancel=cancel)
+        return edits, skipped
 
     # ── Người nói (lồng tiếng nhiều giọng) ────────────────────────────────
     def speakers_path(self, item: VideoItem) -> Path:

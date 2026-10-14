@@ -647,6 +647,89 @@ def cut_off(new: str, old: str) -> bool:
     return 0 < len(a) < len(b) and b[:len(a)] == a
 
 
+# ── Tự sửa các câu ⚠ (line_qa.fix_tasks): mỗi câu đúng việc của nó ────────
+
+def _task_text(task: str, budget: int | None, target: str) -> str:
+    if task == "short":
+        return (f"too long to be spoken in its voice-over time slot — rewrite it within {budget} characters: keep the key "
+                "meaning, the names and the speaker's pronouns, natural spoken style, drop filler words and repetitions; "
+                "never cut a phrase off mid-way, no abbreviations or symbols (it is read aloud)")
+    if task == "translate":
+        return (f"not translated yet (empty, or still the source text / source-language characters) — translate the "
+                f"SOURCE line fully into {target}")
+    if task.startswith("pronoun:"):
+        return ("pronouns differ from the script brief (" + task.split(":", 1)[1].strip() + ") — use the speaker's "
+                "pronoun pair from the brief, change nothing else")
+    if task == "voice":
+        return ("the text-to-speech voice misread this line — rephrase it slightly with common, easy-to-read words, same "
+                "meaning and similar length")
+    return task
+
+
+def _fix_prompt(items: list[tuple[str, str, list[str], int | None, str, str]], target: str, style: str, glossary: str,
+                brief: str) -> str:
+    """``items``: (lời gốc, câu hiện tại, việc cần làm, giới hạn ký tự, câu trước, câu sau) — câu kề chỉ để hiểu
+    mạch thoại."""
+    rows = []
+    for k, (src, cur, tasks, budget, before, after) in enumerate(items):
+        around = "; ".join(x for x in (f"before: {before}" if before else "", f"after: {after}" if after else "") if x)
+        show_src = src and (src != cur or "translate" in tasks)        # câu còn y lời gốc: vẫn ghi rõ phải dịch câu nào
+        rows.append(f"{k + 1}. CURRENT: {cur or '(empty)'}" + (f"\n   SOURCE: {src}" if show_src else "")
+                    + "\n   FIX: " + "; ".join(_task_text(t, budget, target) for t in tasks)
+                    + (f"\n   CONTEXT (do not output): {around}" if around else ""))
+    gl = _glossary_lines(glossary)
+    return (
+        f"You are fixing specific problems in {target} voice-over subtitles of a video. Each numbered line shows the "
+        "CURRENT subtitle, its SOURCE line (when translated) and exactly what to FIX.\n"
+        "Rules:\n"
+        "- Fix ONLY the listed problem of each line. Keep the CURRENT wording, slang, nicknames and tone wherever the fix "
+        "does not need to change them — the user may have written this line by hand.\n"
+        "- Same number of items, same order; never merge or split lines, no explanations or quotes inside the text.\n"
+        f"- {QUOTE_RULE}\n"
+        + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")
+        + (f"- Script brief (pronouns, names, repeated lines) — keep to it:\n{brief.strip()}\n" if brief.strip() else "")
+        + (f"- Glossary — always use these exact translations:\n{gl}\n" if gl else "")
+        + "- Return ONLY a JSON object: {\"items\": [{\"id\": <item number>, \"text\": \"...\"}, ...]} with one item per "
+        "numbered line.\n\nLines:\n" + "\n".join(rows)
+    )
+
+
+def fix_lines(current: list[str], source: list[str] | None, tasks: dict[int, tuple[list[str], int | None]], *,
+              settings: Settings, target: str, style: str = "", brief: str = "",
+              log: Callable[[str], None] | None = None, cancel: threading.Event | None = None) -> dict[int, str]:
+    """AI sửa đúng các câu ``tasks`` ({chỉ số: ([việc], giới hạn ký tự)} — ``line_qa.fix_tasks``), xem câu kề làm
+    ngữ cảnh, giữ chữ người dùng ở chỗ không cần đổi. Bản rút gọn không ngắn hơn / chỉ cắt cụt chữ cuối → bỏ (giữ câu
+    cũ). Trả {chỉ số: câu mới} — chỉ câu thật sự đổi."""
+    router = Router(settings, log, cancel)
+    target_en = _LANG_HINT.get(target, target)
+    idxs = sorted(i for i in tasks if 0 <= i < len(current))
+    out: dict[int, str] = {}
+
+    def call(part: list[int]) -> list[str]:
+        inside = set(part)
+        items = [((source[i] if source and i < len(source) else "").replace("\n", " "), current[i].replace("\n", " "),
+                  tasks[i][0], tasks[i][1],
+                  current[i - 1] if i > 0 and i - 1 not in inside else "",
+                  current[i + 1] if i + 1 < len(current) and i + 1 not in inside else "") for i in part]
+        return _parse_items(router.call(_fix_prompt(items, target_en, style, settings.glossary, brief)),
+                            list(range(1, len(part) + 1)))
+
+    for a in range(0, len(idxs), BATCH):
+        if cancel is not None and cancel.is_set():
+            raise RenderCancelled("Đã huỷ")
+        for i, t in _solve(call, idxs[a:a + BATCH]).items():
+            t = " ".join((t or "").split())
+            old = " ".join(current[i].split())
+            if not t or t == old:
+                continue
+            if "short" in tasks[i][0] and (len(t) >= len(old) or cut_off(t, old)):
+                continue                                 # «rút gọn» mà không ngắn hơn / chỉ cắt cụt → giữ câu cũ
+            out[i] = t
+    if log:
+        log(f"Tự sửa câu ⚠: AI sửa {len(out)}/{len(idxs)} câu ({router.current.provider}/{router.current.model})")
+    return out
+
+
 # ── Nhờ AI sửa phụ đề theo yêu cầu (chỉ sửa đúng câu liên quan) ──────────
 
 EDIT_CHUNK = 220          # số câu mỗi lần gửi (phụ đề rất dài → chia lô, mỗi lô thấy cùng yêu cầu)

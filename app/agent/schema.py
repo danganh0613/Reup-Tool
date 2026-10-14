@@ -28,10 +28,13 @@ TOOLS: list[dict] = [
          "offset": {"type": "integer"}}}},
     {"name": "fix",
      "description": "Edit lines of one video: `text` {line number: new line} and/or `request` (natural-language "
-                    "instruction the app's own AI applies with the script brief). voice=true re-dubs changed lines.",
+                    "instruction the app's own AI applies with the script brief) and/or auto=true (AI fixes every "
+                    "flagged line by its reason, e.g. shortens lines too long for their slot). voice=true re-dubs "
+                    "changed lines.",
      "inputSchema": {"type": "object", "required": ["id"], "properties": {
          "id": {"type": "string"}, "text": {"type": "object", "additionalProperties": {"type": "string"}},
-         "request": {"type": "string"}, "voice": {"type": "boolean"}, "wait_s": {"type": "integer"}}}},
+         "request": {"type": "string"}, "auto": {"type": "boolean"}, "voice": {"type": "boolean"},
+         "wait_s": {"type": "integer"}}}},
     {"name": "settings",
      "description": "Get/set shared settings: template, output frame (ratio, fit, offset_x/offset_y -50..50, zoom "
                     "100..400), file size (size), translation target + style, until. No args = read only.",

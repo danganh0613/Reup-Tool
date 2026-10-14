@@ -207,6 +207,10 @@ TOPICS: list[dict] = [
             "Máy tự soát từng câu và gắn dấu ⚠ kèm lý do: giọng đọc sai (máy nghe lại vẫn lệch), giọng dự phòng, đọc quá "
             "nhanh / tràn khung, còn chữ gốc / chưa dịch / trống, xưng hô khác «Hồ sơ kịch bản».",
             "Bấm nút ⚠ (kèm số câu) trên danh sách: chỉ còn các câu đó. Rê chuột vào ⚠ ở mỗi câu để xem lý do, ▶ để nghe.",
+            "Bấm «Tự sửa» (cạnh nút ⚠): AI sửa các câu ⚠ đúng lý do — rút gọn câu dài cho vừa khung, dịch nốt câu chưa "
+            "dịch, xưng hô theo hồ sơ. Chỉ một câu dài: bấm ✂ cạnh câu đó. Câu sửa tô vàng, ↶ để trả lại.",
+            "Gõ tới đâu máy soát tới đó: câu vừa sửa mà dài quá khung hiện ngay «dài ~+0,6s» (ước lượng theo tốc độ đọc "
+            "của video), chưa cần tạo giọng.",
             "Sửa xong câu nào thì dấu ⚠ của câu đó mất (câu vẫn ở danh sách để bạn nghe lại). Bấm icon loa tạo lại giọng, "
             "bấm lại nút ⚠ để hiện cả video.",
         ]),
@@ -215,7 +219,7 @@ TOPICS: list[dict] = [
             "Nhắn vào ô chat «Nhờ AI sửa» ở đáy tab «Lời thoại», ví dụ «xưng anh – em, văn nói», «sửa bạn mày thành chó nhà "
             "mày», «rà lại cả kịch bản cho thống nhất». AI đọc cả video, tự tìm mọi câu cần sửa (câu hỏi lẫn câu trả lời), "
             "câu khác giữ nguyên. Nhắn tiếp được như chat («còn câu 37 nữa») — AI nhớ các lượt trước và các câu vừa đổi.",
-            "Chỉ một câu dở: bấm ↻ cạnh câu đó để AI dịch lại riêng câu ấy.",
+            "Chỉ một câu dở: bấm ↻ cạnh câu đó để AI dịch lại riêng câu ấy (vừa khung giọng của câu).",
             "Câu AI sửa được tô vàng (đã tự lưu), dòng nhỏ ghi câu cũ; bấm ↶ cạnh câu để trả lại, «Hoàn tác» trả lại hết; "
             "ưng thì bấm icon loa để tạo lại giọng.",
             "Dịch / soát bằng AI bên ngoài: icon copy (trên danh sách câu) chép lời gốc hoặc song ngữ kèm lời dặn → dán vào "

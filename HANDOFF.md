@@ -445,6 +445,21 @@
       (`-b:v` 0,8 × trần); VideoToolbox có trần → `-b:v`. Nhật ký xuất ghi «Dung lượng file: trần hình … · tiếng …».
     - Tab Video: khối «Dung lượng file xuất» (sau Khung hình) — «Xuất để» + ước lượng MB mỗi phút; agent `settings(size)`.
 
+52. **Tự sửa câu lỗi (A–D)** (test `test_autofix.py` 34; người dùng: «tự chỉnh / phụ đề lỗi thì tool có tự fix không»):
+    - `line_qa.FitModel` / `fit_model`: khung từng câu như lúc tạo giọng (`khung` trong `.cues.csv`, chưa có thì tới câu
+      sau trừ `min_gap`), tốc độ đọc đo từ track giọng của chính video (trung vị ký tự / giây ở ×1; câu đã đọc mà chữ chưa
+      đổi dùng tốc độ riêng của câu — câu nhiều dấu phẩy đọc chậm hơn ~20 %), «sàn» câu ngắn, `too_short` (khung 0,35 s
+      một chữ cũng không kịp). `TEMPO_CAP` = `generator.MAX_TOTAL_TEMPO` (không nạp generator: kéo numpy ~1 s).
+    - C: câu chưa đọc theo chữ đang thấy (vừa sửa) → ⚠ «dài ~+0,6s» / «sẽ đọc nhanh» (ước lượng); tab Lời thoại soát lại
+      sau mỗi lần ngừng gõ 0,3 s bằng `Pipeline.qa_context` đã đọc sẵn (không đọc file).
+    - A: ✂ trên dòng câu dài rút gọn được → `Pipeline.auto_fix(only=[i], shorten_only=True)`. D: nút «Tự sửa» (cạnh ⚠) →
+      `auto_fix`: `line_qa.fix_tasks` (rút gọn có giới hạn ký tự · dịch nốt · xưng hô theo hồ sơ · đổi cách nói câu giọng
+      đọc sai CHỮ; lỗi âm thanh như «vào đột ngột» bỏ qua; khung quá ngắn báo riêng) → `translate_router.fix_lines` (một
+      lời nhắc cho mọi câu, mỗi câu đúng việc, giữ chữ người dùng; bản «rút gọn» không ngắn hơn / cắt cụt → bỏ). Câu sửa tô
+      vàng, ↶ trả lại, tự lưu. Agent: `fix(id, auto=true)` (trả `too_short`).
+    - B: ↻ gửi giới hạn ký tự theo khung giọng thật (`Pipeline.line_budgets`) thay vì thời lượng phụ đề.
+    - Sửa lỗi cũ: ↶ một câu không trả lại được (kiểm «đã đổi» đọc ô chưa vẽ lại → ghi đè chữ AI lên).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

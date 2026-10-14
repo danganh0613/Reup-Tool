@@ -251,7 +251,7 @@ def review(host: GuiHost, id: str, all: bool = False, limit: int = 20, offset: i
 
 # ── 4. fix ─────────────────────────────────────────────────────────────────
 def fix(host: GuiHost, id: str, text: dict | None = None, request: str | None = None, voice: bool = False,   # noqa: A002
-        wait_s: int = 300) -> dict:
+        wait_s: int = 300, auto: bool = False) -> dict:
     from app.services.srt_utils import load_srt, save_srt, wrap_lines
 
     def load():
@@ -285,6 +285,15 @@ def fix(host: GuiHost, id: str, text: dict | None = None, request: str | None = 
             if 0 <= i < len(cues) and t and t != current[i]:
                 cues[i].text = wrap_lines(t)
                 changed.add(i + 1)
+    skipped: list[int] = []
+    if auto:                                             # như nút «Tự sửa»: AI sửa mọi câu ⚠ đúng lý do
+        current = [c.plain.replace("\n", " ").strip() for c in cues]
+        edits, skipped = host.w.pipeline_for(it).auto_fix(it, current, log=host.w.log_bg)
+        for i, t in edits.items():
+            t = " ".join((t or "").split())
+            if 0 <= i < len(cues) and t and t != current[i]:
+                cues[i].text = wrap_lines(t)
+                changed.add(i + 1)
 
     def save() -> None:
         w = host.w
@@ -304,6 +313,8 @@ def fix(host: GuiHost, id: str, text: dict | None = None, request: str | None = 
     out: dict = {"changed": sorted(changed)}
     if note:
         out["note"] = _clip(note, 200)
+    if skipped:
+        out["too_short"] = [i + 1 for i in skipped]     # khung quá ngắn: rút gọn kiểu gì cũng không vừa
     if voice:
         out["voice"] = _regen_voice(host, it, wait_s)
     out["flags"] = len(host.call(lambda: _flags(host, it)))
