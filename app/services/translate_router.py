@@ -652,8 +652,9 @@ def cut_off(new: str, old: str) -> bool:
 def _task_text(task: str, budget: int | None, target: str) -> str:
     if task == "short":
         return (f"too long to be spoken in its voice-over time slot — rewrite it within {budget} characters: keep the key "
-                "meaning, the names and the speaker's pronouns, natural spoken style, drop filler words and repetitions; "
-                "never cut a phrase off mid-way, no abbreviations or symbols (it is read aloud)")
+                "meaning, the names and the speaker's pronouns, natural spoken style; keep its slang, nicknames and "
+                "playful spellings word for word and shorten by dropping other words (filler words, repetitions, less "
+                "important details); never cut a phrase off mid-way, no abbreviations or symbols (it is read aloud)")
     if task == "translate":
         return (f"not translated yet (empty, or still the source text / source-language characters) — translate the "
                 f"SOURCE line fully into {target}")
@@ -683,7 +684,9 @@ def _fix_prompt(items: list[tuple[str, str, list[str], int | None, str, str]], t
         "CURRENT subtitle, its SOURCE line (when translated) and exactly what to FIX.\n"
         "Rules:\n"
         "- Fix ONLY the listed problem of each line. Keep the CURRENT wording, slang, nicknames and tone wherever the fix "
-        "does not need to change them — the user may have written this line by hand.\n"
+        "does not need to change them — the user may have written this line by hand. Never \"correct\" slang or "
+        "playful spellings (e.g. Vietnamese «xì trét» for stress) and never swap a nickname for a plain word.\n"
+        f"- Every word you write must be correctly spelled, common {target}.\n"
         "- Same number of items, same order; never merge or split lines, no explanations or quotes inside the text.\n"
         f"- {QUOTE_RULE}\n"
         + (f"- General style of this channel: {style.strip()}\n" if style.strip() else "")

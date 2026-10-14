@@ -56,7 +56,15 @@ class GuiHost:
             finally:
                 ev.set()
 
-        self.w.after(0, run)
+        until = time.monotonic() + 30
+        while True:
+            try:
+                self.w.after(0, run)
+                break
+            except RuntimeError as exc:                  # app vừa mở: Tk chưa vào vòng chạy → đợi một chút
+                if "main loop" not in str(exc) or time.monotonic() > until:
+                    raise
+                time.sleep(0.5)
         if not ev.wait(timeout):
             raise TimeoutError("giao diện bận quá lâu")
         if "e" in box:

@@ -459,6 +459,11 @@
       vàng, ↶ trả lại, tự lưu. Agent: `fix(id, auto=true)` (trả `too_short`).
     - B: ↻ gửi giới hạn ký tự theo khung giọng thật (`Pipeline.line_budgets`) thay vì thời lượng phụ đề.
     - Sửa lỗi cũ: ↶ một câu không trả lại được (kiểm «đã đổi» đọc ô chưa vẽ lại → ghi đè chữ AI lên).
+    - Thử thật (video chó, Gemini): lời nhắc đầu AI đổi tiếng lóng người dùng tự viết («xả xì trét của ông tướng này» →
+      «xả stress của nó») và viết sai «kiểng cợ» → lời nhắc giữ nguyên tiếng lóng / cách viết vui, rút bằng cách bỏ chữ
+      khác, mọi chữ đúng chính tả (thử lại: giữ «max ping», «õng ẹo», «xì trét»).
+    - Agent: lệnh tới lúc app vừa mở (Tk chưa vào vòng chạy, «main thread is not in main loop») → `GuiHost.call` đợi
+      tới 30 s thay vì báo lỗi.
 
 ## Còn tồn / để ý khi làm tiếp
 
