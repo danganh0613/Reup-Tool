@@ -112,9 +112,10 @@ class CueEditor(ctk.CTkFrame):
                                  "kịch bản) — bấm để chỉ hiện các câu này: ▶ nghe, sửa, xong bấm icon loa tạo lại giọng. "
                                  "Nút sáng màu = đang lọc, bấm lần nữa để hiện lại cả video.")
         self.fix_btn = button(tools, "Tự sửa", icon_name="sparkle", variant="ghost", size="sm", command=self.auto_fix,
-                              tip="AI sửa các câu ⚠ đúng lý do: rút gọn câu dài / đọc nhanh cho vừa khung, dịch nốt câu "
-                                  "chưa dịch, xưng hô theo hồ sơ kịch bản, đổi cách nói câu giọng đọc sai chữ. Câu sửa tô "
-                                  "vàng (↶ trả lại), xong bấm icon loa tạo lại giọng.")
+                              tip="AI sửa các câu ⚠ đúng lý do: rút gọn câu dài / đọc nhanh cho vừa khung, nói đầy đủ "
+                                  "hơn câu đọc xong sớm (để trống), dịch nốt câu chưa dịch, xưng hô theo hồ sơ kịch bản, "
+                                  "đổi cách nói câu giọng đọc sai chữ. Câu sửa tô vàng (↶ trả lại), xong bấm icon loa tạo "
+                                  "lại giọng.")
         self.copy_btn = button(tools, "", icon_name="copy", variant="ghost", size="sm", width=34, command=self._copy_menu,
                                tip="Copy để dán cho AI bên ngoài (ChatGPT, Gemini web…): lời gốc / song ngữ kèm lời dặn, "
                                    "hoặc SRT đang sửa")

@@ -119,10 +119,12 @@ class TTSModule(BaseModule):
         self.audio = AudioSection(self)
 
         sec = self.timing_sec = Section(self, "Khớp thời gian", collapsed=True,
-                                        info="Giọng luôn khớp mềm với hình: câu được vào sớm một chút khi câu trước "
-                                             "đã đọc xong, câu dài đọc nhanh dần (tối đa mức «Nén tối đa»), câu "
-                                             "bị trễ đọc nhanh hơn để đuổi kịp hình. Câu vẫn tràn thì AI tự rút gọn "
-                                             "bản dịch rồi đọc lại. Phụ đề dời theo đúng chỗ giọng đọc.")
+                                        info="Giọng tự khớp với hình, nhịp đọc đều: câu giọng đọc tự nói nhanh bất "
+                                             "thường được đọc chậm lại; vế sau của cùng một câu đọc nối liền; câu dài "
+                                             "đọc nhanh dần (tối đa mức «Nén tối đa»), câu bị trễ đọc nhanh hơn để đuổi "
+                                             "kịp hình. Câu vẫn tràn thì AI rút gọn, câu đọc xong sớm (để trống) thì AI "
+                                             "nói đầy đủ hơn — rồi đọc lại. Chỗ video gốc ngừng nói: âm gốc dâng nhẹ lấp "
+                                             "chỗ trống. Phụ đề dời theo đúng chỗ giọng đọc.")
         sec.pack(fill="x", pady=4)
         # trần TỔNG (tốc độ đọc × nén cho vừa khung) — quá 1,25× giọng méo, nuốt chữ (câu còn tràn: AI rút gọn bản dịch)
         self.max_tempo = SliderRow(sec.body, "Nén tối đa", from_=1.0, to=1.25, step=0.05, fmt="{:.2f}", suffix="×",

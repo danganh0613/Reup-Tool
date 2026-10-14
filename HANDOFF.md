@@ -468,6 +468,23 @@
     - Agent: lệnh tới lúc app vừa mở (Tk chưa vào vòng chạy, «main thread is not in main loop») → `GuiHost.call` đợi
       tới 30 s thay vì báo lỗi.
 
+53. **Lồng tiếng tự nhiên — ngầm, không công tắc** (test `test_pacing.py` 23; người dùng: câu quá nhanh / câu bình thường
+    khó chịu, video bị khoảng trống). Đo video chó (`audit_out/export_3/pacing_probe.py`): 26/31 câu cùng hệ số ×1,1 nhưng
+    tốc độ nói thật 4,7–6,9 âm tiết / giây (VieNeu tự đọc câu cảm thán / câu ngắn nhanh hơn tới 23 %); lặng 0,6–1,1 s ngay
+    sau dấu phẩy; lặng dài sau câu = giọng xong sớm (câu 11, 14) HOẶC video gốc tự ngừng nói (câu 22, 24, 26 — khoe chó);
+    độ to các câu đều (lệch 0,4 dB) — không cần sửa.
+    - Ghép giọng (`generator`): nhịp đều `EVEN_BAND` — câu nói nhanh hơn trung vị của video > 7 % đọc chậm lại (≤ 12 %),
+      câu chậm giữ nguyên (chậm thường do dấu phẩy); vế sau của cùng một câu (`_ENDS` không khớp câu trước) vào sớm tới
+      `PULL_JOIN` 0,8 s — đọc liền; chỗ của câu (`room_for`) tính từ lúc thật sự bắt đầu (thay `slot_for` + đuổi kịp
+      `CATCH_UP_LATE`); báo cáo thêm `phu_de_het`, `khung` = chỗ thật. Chữ ký track `v3` → ghép lại (câu đã đọc dùng lại).
+      Đo lại: câu nhanh bất thường 2 → 0, lặng giữa câu dài nhất 1,10 → 0,54 s, tràn 1 → 0.
+    - Chuẩn bị: một lượt AI chỉnh độ dài (`fix_lines`, thay `retranslate(SHORTEN_REQUEST)`) — rút gọn câu tràn + nói đầy
+      đủ hơn câu xong sớm (`line_qa.loose_lines`: xong trước khi người nói gốc hết câu ≥ 0,6 s, chừa 0,45 s nghỉ, ≤ +40 %);
+      bỏ câu người dùng sửa / đã chỉnh (`locks`), «Đến lời gốc». ⚠ «xong sớm» + «Tự sửa» (việc `long`) cho câu bị khoá.
+    - Âm gốc dâng ở chỗ không có giọng ≥ `DUCK_HOLD` (`render_pipeline.orig_swell`: ×3 mức đặt, tối đa 25 %; 0 % / tắt tự
+      hạ nền thì không) — đường bao riêng của âm gốc (`duck_envelope(swell=)`: hệ số ≤ 1, âm gốc đặt to ×swell), nhạc nền
+      giữ đường bao thường. Bản render + xem trước (`live_preview`).
+
 ## Còn tồn / để ý khi làm tiếp
 
 - **Phông Việt cũ VNI / TCVN3** trong file SRT chưa tự chuyển sang Unicode (cần Unikey Toolkit).

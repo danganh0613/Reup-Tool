@@ -251,8 +251,9 @@ TOPICS: list[dict] = [
             "giới hạn lượt; máy đọc liền vài câu kề nhau cho tự nhiên rồi tách lại, câu đọc chưa đạt tự đọc lại. Edge TTS "
             "miễn phí (HoaiMy nữ, NamMinh nam + giọng 🌐 đa ngôn ngữ, cần mạng) — cũng đọc tạm câu VieNeu không đọc được.",
             "Chọn giọng, bấm «Nghe thử giọng». Chỉnh «Tốc độ đọc» nếu muốn.",
-            "Giọng luôn khớp mềm với hình: câu dài đọc nhanh dần, câu bị trễ đọc nhanh hơn để đuổi kịp, câu vẫn tràn thì AI "
-            "rút gọn bản dịch rồi đọc lại.",
+            "Giọng tự khớp với hình, nhịp đọc đều: câu giọng đọc tự nói nhanh bất thường được đọc chậm lại; các vế của một "
+            "câu đọc nối liền; câu tràn thì AI rút gọn, câu đọc xong sớm (để trống) thì AI nói đầy đủ hơn — rồi đọc lại. "
+            "Chỗ video gốc tự ngừng nói: nhạc / tiếng nền gốc dâng nhẹ lên lấp (âm gốc 0 % thì không).",
             "Muốn nghe trước: khối «Giọng của video đang chọn» bấm «Tạo giọng cho video này». Hoặc bấm «Xuất video» trên "
             "cùng. Giọng đã tạo được giữ lại, lần sau xuất lại rất nhanh.",
         ]),

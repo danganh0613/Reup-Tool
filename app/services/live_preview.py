@@ -64,7 +64,7 @@ class LiveSpec:
         self.voice = voice
         self.voice_trimmed = voice_trimmed      # track giọng tính theo thời gian sau cắt
         self.vspeed = rp.voice_timeline_speed(voice)     # track mới dựng theo mốc video ra (đã đổi tốc độ)
-        self._duck: tuple[str, Path | None] | None = None
+        self._duck: dict[float, tuple[str, Path | None]] = {}       # hệ số dâng âm gốc → (khoá, đường bao)
         self.no_vocals: Path | None = None
         if self.vcfg.demucs_enable and self.vcfg.keep_original_audio and not self.vcfg.mute and info.has_audio:
             from app.services.vocal_remove import cached_no_vocals
@@ -144,16 +144,24 @@ class LiveSpec:
         if self.no_vocals is not None:           # âm gốc đã khử giọng nói (bản render cũng dùng file này)
             audio_src = f"[{g.add_input(['-ss', f'{src_t:.3f}', '-i', str(self.no_vocals)])}:a]"
         extras = self.mods.audio_extras(g, ctx) if self.mods.audio_extras else []
-        duck = None
+        duck = duck_o = None
+        duck_orig = bool(vcfg.adaptive_ducking and vcfg.keep_original_audio and audio_src)
+        swell = rp.orig_swell(vcfg) if duck_orig and voice_label else 1.0
+        if voice_label and swell > 1.0:                 # âm gốc: dâng ở chỗ không có giọng (như bản render)
+            env_o = self._duck_env(full, swell)
+            if env_o is not None:
+                duck_o = g.chain(f"[{g.add_input(['-ss', f'{ctx.t0:.3f}', '-i', str(env_o)])}:a]",
+                                 ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckgoc]")
         env = self._duck_env(full) if voice_label and (
-            (vcfg.adaptive_ducking and vcfg.keep_original_audio and audio_src) or any(ex.duck for ex in extras)) else None
+            (duck_orig and swell <= 1.0) or any(ex.duck for ex in extras)) else None
         if env is not None:                      # cùng đường bao hạ nền như bản render
             duck = g.chain(f"[{g.add_input(['-ss', f'{ctx.t0:.3f}', '-i', str(env)])}:a]",
                            ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckenv]")
         aout = rp.build_audio_graph(g, info, vcfg, audio_src=audio_src,
                                     voice_label=voice_label, extras=extras, duration=out_dur,
                                     orig_filters=self.mods.audio_orig_filters, voice_tempo=speed / self.vspeed,
-                                    duck_label=duck, preview_loudness=self.state.settings.loudness_target)
+                                    duck_label=duck, orig_duck_label=duck_o, orig_swell=swell,
+                                    preview_loudness=self.state.settings.loudness_target)
         if not aout:
             return None
         g.add(f"{aout}volume={max(0.0, volume):.3f}[pout]")
@@ -164,21 +172,23 @@ class LiveSpec:
                 "-c:a", "pcm_s16le", str(out_wav)]
         return cmd
 
-    def _duck_env(self, full: float) -> Path | None:
-        """Đường bao hạ nền cho cả video (tính một lần, giữ theo track giọng + độ dài)."""
+    def _duck_env(self, full: float, swell: float = 1.0) -> Path | None:
+        """Đường bao hạ nền cho cả video (tính một lần, giữ theo track giọng + độ dài); ``swell`` > 1: bản riêng của âm
+        gốc (dâng ở chỗ không có giọng)."""
         try:
             key = f"{self.voice}|{self.voice.stat().st_mtime_ns}|{full:.2f}|{self.speed}|{self.vspeed}"
         except OSError:
             return None
-        if self._duck is None or self._duck[0] != key:
+        got = self._duck.get(swell)
+        if got is None or got[0] != key:
             try:
-                env = rp.duck_envelope(self.voice, self.work / "duck.wav", duration=full,
-                                       tempo=self.speed / self.vspeed)
+                env = rp.duck_envelope(self.voice, self.work / ("duck.wav" if swell <= 1.0 else "duck_goc.wav"),
+                                       duration=full, tempo=self.speed / self.vspeed, swell=swell)
             except Exception:
                 logger.exception("Không dựng được đường bao hạ nền cho xem trước")
                 env = None
-            self._duck = (key, env)
-        return self._duck[1]
+            got = self._duck[swell] = (key, env)
+        return got[1]
 
     def signature(self) -> str:
         """Khoá cache audio: đổi cấu hình âm thanh → trích lại."""

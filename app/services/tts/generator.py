@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import re
+import statistics
 import threading
 import wave
 from collections.abc import Callable
@@ -35,8 +36,17 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 24000
 _BYTES_PER_SEC = SAMPLE_RATE * 2   # s16 mono
 TRIM_VERSION = "trim3"             # đổi khi đổi cách xử lý từng câu → track giọng cũ được tạo lại
-PULL_EARLY = 0.2                   # chế độ mềm: câu được vào sớm tối đa 0,2 s khi câu trước đã đọc xong
-CATCH_UP_LATE = 0.15               # chế độ mềm: câu bắt đầu trễ hơn mốc phụ đề quá ngần này → nén thêm để đuổi kịp hình
+PULL_EARLY = 0.2                   # câu được vào sớm tối đa 0,2 s khi câu trước (đã hết ý) đọc xong
+#: vế sau của cùng một câu (câu trước chưa hết ý: dấu phẩy / không dấu) vào sớm tới 0,8 s — đọc liền mạch, không ngắt
+#: giữa câu (đo video chó: có chỗ lặng 0,6–1,1 s ngay sau dấu phẩy)
+PULL_JOIN = 0.8
+#: nhịp đều: câu giọng đọc tự nói nhanh hơn nhịp chung của video quá 7 % (câu cảm thán, câu ngắn — đo: 6,9 so với trung vị
+#: 5,6 âm tiết / giây dù cùng hệ số ×1,1) → đọc chậm lại cho gần nhịp chung, tối đa 12 % (hơn nữa giọng kéo, mất tự
+#: nhiên). Câu chậm không ép nhanh: chậm thường do dấu phẩy — chỗ ngắt tự nhiên
+EVEN_BAND = 0.07
+EVEN_SLOW = 0.88
+_PAD = 0.15                        # lặng đầu + cuối ``polish`` chừa lại — không tính vào tốc độ nói
+_ENDS = re.compile(r"[.!?…。！？]['\"»”’)\]]*\s*$")       # câu đã hết ý
 PART_GAP = 0.25                    # nghỉ giữa các đoạn của một câu quá dài được tách ra đọc riêng
 MAX_TOTAL_TEMPO = 1.25             # time-stretch tổng (tốc độ đọc × nén cho vừa khung) — quá mức này giọng méo, nuốt chữ
 MIN_SUB = 1.0                      # phụ đề dời theo giọng hiện tối thiểu 1 s
@@ -524,12 +534,13 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     order = [i for i, _, _ in items]
     by_index = {i: c for i, c, _ in items}
 
-    def slot_for(pos: int) -> float:
+    def room_for(pos: int, start: float) -> float:
+        """Chỗ cho câu đọc tính từ lúc nó thật sự bắt đầu (vào sớm → rộng hơn; bị trễ vì câu trước tràn → hẹp lại, đọc
+        nhanh hơn để đuổi kịp hình): tới câu sau trừ khoảng nghỉ; câu cuối: tới hết phụ đề của nó."""
         cue = by_index[order[pos]]
         if pos + 1 < len(order):
-            nxt = by_index[order[pos + 1]]
-            return max(0.35, nxt.start - cue.start - cfg.min_gap)
-        return max(cue.duration, 0.35)
+            return max(0.35, by_index[order[pos + 1]].start - start - cfg.min_gap)
+        return max(cue.end - start, 0.35)
 
     if log:
         log("Khớp thời gian và ghép track…")
@@ -554,39 +565,43 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         (tốc độ đọc tự nó đã vượt trần thì không nén thêm)."""
         return max(1.0, total_cap / max(1e-6, residual_of(order[pos])))
 
-    def tempo_for(pos: int, cap: float) -> float:
-        slot = slot_for(pos)
+    # nhịp đều (``EVEN_BAND``): đo tốc độ nói từng câu (âm tiết / giây phần có tiếng), câu nhanh bất thường đọc chậm lại
+    syl = {pos: len(re.findall(r"\w+", by_index[order[pos]].plain)) for pos in nat_dur}
+    rate = {pos: syl[pos] / max(0.2, nat_dur[pos] - _PAD) for pos in nat_dur if syl[pos] >= 4}
+    even: dict[int, float] = {}
+    if len(rate) >= 5:
+        top = statistics.median(rate.values()) * (1 + EVEN_BAND)
+        even = {pos: max(EVEN_SLOW, top / r) for pos, r in rate.items() if r > top}
+
+    def tempo_for(pos: int, cap: float, room: float) -> float:
+        """Mức tempo của câu: theo nhịp đều (câu nói nhanh bất thường chậm lại); không vừa chỗ thì nén cho vừa (≤ ``cap``
+        của lượt khớp mềm và trần tổng) — câu đang chậm lại thì bớt chậm trước."""
         d = nat_dur[pos]
-        if d > slot + 0.03:
-            t = min(cap, fit_cap(pos), d / slot)
-            return t if t > 1.02 else 1.0
-        return 1.0
+        t = even.get(pos, 1.0)
+        if d / t > room + 0.03:
+            t = max(t, min(cap, fit_cap(pos), d / room))
+        return t if abs(t - 1.0) > 0.02 else 1.0
 
     def start_of(pos: int, cue: Cue, cursor: float) -> float:
         """Mốc bắt đầu đọc câu: đúng mốc phụ đề; cho vào sớm ≤ 0,2 s nếu câu trước đã xong (bớt khoảng «khựng» giữa
-        hai câu), luôn cách câu trước tối thiểu ``min_gap``."""
-        start = max(max(0.0, cue.start - PULL_EARLY), cursor)
+        hai câu) — vế sau của cùng một câu (câu trước chưa hết ý) vào sớm tới ``PULL_JOIN`` cho liền mạch; luôn cách câu
+        trước tối thiểu ``min_gap``."""
+        joins = pos > 0 and not _ENDS.search(by_index[order[pos - 1]].plain)
+        start = max(max(0.0, cue.start - (PULL_JOIN if joins else PULL_EARLY)), cursor)
         if pos > 0:
             start = max(start, cursor + cfg.min_gap)
         return start
 
     def plan_tempos(cap: float) -> tuple[dict[int, float], float]:
-        """Mức nén từng câu + độ dài track khi áp mức tăng tốc tối đa ``cap`` (không cần giải mã lại). Khớp mềm: câu
-        bắt đầu trễ hơn mốc phụ đề (câu trước tràn) đọc nhanh hơn để kết thúc đúng khung — đuổi kịp hình thay vì trễ
-        dồn cả đoạn sau (như VideoLingo tăng tốc cả cụm câu), vẫn trong cùng trần nén."""
+        """Mức tempo từng câu + độ dài track khi áp mức tăng tốc tối đa ``cap`` (không cần giải mã lại). Khớp mềm: chỗ
+        của câu tính từ lúc nó thật sự bắt đầu — câu bị trễ (câu trước tràn) đọc nhanh hơn để kết thúc đúng khung, đuổi
+        kịp hình thay vì trễ dồn cả đoạn sau (như VideoLingo tăng tốc cả cụm câu), vẫn trong cùng trần nén."""
         tempos: dict[int, float] = {}
         cursor = 0.0
         for pos in range(len(order)):
-            cue = by_index[order[pos]]
-            t = tempo_for(pos, cap)
-            start = start_of(pos, cue, cursor)
-            if start - cue.start > CATCH_UP_LATE:
-                room = cue.start + slot_for(pos) - start
-                want = nat_dur[pos] / room if room > 0.1 else float("inf")
-                t = max(t, min(cap, fit_cap(pos), want))
-                t = t if t > 1.02 else 1.0
-            tempos[pos] = t
-            cursor = start + nat_dur[pos] / t
+            start = start_of(pos, by_index[order[pos]], cursor)
+            tempos[pos] = tempo_for(pos, cap, room_for(pos, start))
+            cursor = start + nat_dur[pos] / tempos[pos]
         return tempos, cursor
 
     def simulate(cap: float) -> float:
@@ -609,25 +624,21 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
 
     tempos = plan_tempos(cap)[0]
 
-    def decode(pos: int) -> tuple[int, bytes, bool, bool, float]:
+    def decode(pos: int) -> tuple[int, bytes, bool, float]:
         _check()
         idx = order[pos]
         tempo = tempos[pos]
         pcm = base[pos]
-        sped = False
-        if tempo > 1.0:
+        if abs(tempo - 1.0) > 1e-3:                          # nén cho vừa chỗ / chậm lại cho đều nhịp
             pcm = polish(ffmpeg.decode_pcm(paths[idx], sample_rate=SAMPLE_RATE, tempo=residual_of(idx) * tempo))
-            sped = True
-        dur = len(pcm) / _BYTES_PER_SEC
-        overflow = dur > slot_for(pos) + 0.05
-        return pos, pcm, sped, overflow, tempo
+        return pos, pcm, tempo > 1.0, tempo
 
-    decoded: dict[int, tuple[bytes, bool, bool, float]] = {}
+    decoded: dict[int, tuple[bytes, bool, float]] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futs2 = [pool.submit(decode, pos) for pos in range(len(order))]
         for n, fut in enumerate(as_completed(futs2)):
-            pos, pcm, sped, overflow, tempo = fut.result()
-            decoded[pos] = (pcm, sped, overflow, tempo)
+            pos, pcm, sped, tempo = fut.result()
+            decoded[pos] = (pcm, sped, tempo)
             if on_progress:
                 on_progress(0.85 + 0.1 * (n + 1) / len(order))
     base.clear()
@@ -640,6 +651,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
     sped_up = overflow_n = 0
     synced: list[Cue] = []
     over: list[tuple[float, int]] = []
+    rooms: dict[int, float] = {}
     report: list[dict] = []
     with wave.open(str(tmp), "wb") as wf:
         wf.setnchannels(1)
@@ -649,10 +661,12 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             _check()
             idx = order[pos]
             cue = by_index[idx]
-            pcm, sped, overflow, tempo = decoded[pos]
+            pcm, sped, tempo = decoded[pos]
             sped_up += int(sped)
-            overflow_n += int(overflow)
             start = start_of(pos, cue, cursor)
+            room = rooms[pos] = room_for(pos, start)
+            overflow = len(pcm) / _BYTES_PER_SEC > room + 0.05
+            overflow_n += int(overflow)
             pad = int(round(start * SAMPLE_RATE)) - written
             if pad > 0:
                 wf.writeframes(b"\x00\x00" * pad)
@@ -661,17 +675,17 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
             written += len(pcm) // 2
             dur = len(pcm) / _BYTES_PER_SEC
             if overflow:
-                over.append((dur - slot_for(pos), pos))
+                over.append((dur - room, pos))
             synced.append(Cue(len(synced) + 1, start, start + max(0.3, dur), cue.text, dict(cue.meta)))
             cursor = start + dur
             eng, vid, _sp, _pt = plan[idx]
             mark = quality.read_mark(paths[idx]) or {}
             report.append({"cau": int(cue.meta.get("src_idx", idx)) + 1, "bat_dau": round(start, 3),
-                           "ket_thuc": round(start + dur, 3), "khung": round(slot_for(pos), 3),
-                           "tran": round(max(0.0, dur - slot_for(pos)), 3) if overflow else 0.0,
+                           "ket_thuc": round(start + dur, 3), "khung": round(room, 3),
+                           "tran": round(max(0.0, dur - room), 3) if overflow else 0.0,
                            "engine": eng.name, "giong": vid, "tempo": round(residual_of(idx) * tempo, 3),
                            "so_lan_doc": int(mark.get("tries", 1)), "loi_qc": "; ".join(mark.get("problems") or []),
-                           "du_phong": idx in fallback_used, "chu": cue.plain})
+                           "du_phong": idx in fallback_used, "phu_de_het": round(cue.end, 3), "chu": cue.plain})
     tmp.replace(out_wav)
     if on_progress:
         on_progress(1.0)
@@ -686,7 +700,7 @@ def generate_voice_track(cues: list[Cue], cfg: TTSConfig, settings: Settings, ff
         if fit_duration and cursor > fit_duration + 0.5:
             log(f"⚠ Giọng dài hơn video {cursor - fit_duration:.1f}s dù đã nén tối đa (tổng ≤ ×{total_cap:.2f}) — "
                 "video sẽ giữ khung cuối cho đủ giọng (không cắt). Nên rút gọn bản dịch.")
-    overflow_cues = [(int(by_index[order[pos]].meta.get("src_idx", order[pos])), round(d, 3), round(slot_for(pos), 3))
+    overflow_cues = [(int(by_index[order[pos]].meta.get("src_idx", order[pos])), round(d, 3), round(rooms[pos], 3))
                      for d, pos in sorted(over, key=lambda x: x[1])]
     if keep_subs:
         synced += [Cue(0, c.start, c.end, c.text, dict(c.meta)) for c in keep_subs]

@@ -678,7 +678,7 @@ class Pipeline:
             except OSError:
                 multi = prio
         raw = "|".join(str(x) for x in (
-            "v2", t.tts_provider, t.edge_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo, t.min_gap,
+            "v3", t.tts_provider, t.edge_voice, t.vieneu_voice, t.tts_speed, t.tts_pitch, t.max_tempo, t.min_gap,
             srt_path, mtime, extra_key, post_signature(self.state.settings),
             self.state.video.speed)                # track dựng theo mốc video ra → phụ thuộc tốc độ video
             + ((multi,) if multi else ()) + ((f"noread{noread}",) if noread else ()))
@@ -804,6 +804,17 @@ class Pipeline:
             return [(int(a), float(b), float(c)) for a, b, c in data.get("overflow_cues") or [] if int(a) not in tried]
         except (OSError, ValueError, TypeError):
             return []
+
+    @staticmethod
+    def _voice_meta(voice: Path | None) -> dict:
+        """.json đi kèm track giọng (câu tràn, câu đã nhờ AI chỉnh…) — lỗi / chưa có thì {}."""
+        try:
+            import json as _json
+
+            data = _json.loads(Path(voice).with_suffix(".json").read_text(encoding="utf-8")) if voice else {}
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
 
     @staticmethod
     def mark_shortened(voice: Path | None, idxs) -> None:
@@ -1321,32 +1332,49 @@ class Pipeline:
                        if (b := int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9)) >= 6}
             # bản dịch đã gộp / xoá câu (số câu khác bản gốc) → chỉ số câu không khớp, không rút gọn từng câu
             same_count = bool(cues_tr) and len(cues_tr) == len(cues_orig)
-            # «Đến lời gốc»: bạn tự dịch bên ngoài → không nhờ AI rút gọn bản dịch của bạn
-            if (budgets and same_count and use_tr and preview_out is None and st.settings.prepare_until != "source"
-                    and item.srt_path and Path(item.srt_path).exists()):
-                # đã nén tới trần mà vẫn tràn → câu dịch quá dài: AI rút gọn đúng các câu đó (một lượt) rồi đọc lại
-                from app.services.translate_router import SHORTEN_REQUEST
+            # «Đến lời gốc»: bạn tự dịch bên ngoài → không nhờ AI chỉnh bản dịch của bạn
+            auto_ok = (same_count and use_tr and preview_out is None and st.settings.prepare_until != "source"
+                       and bool(item.srt_path) and Path(item.srt_path).exists())
+            # giọng đọc xong sớm, để trống trong lúc người nói gốc còn nói → nói đầy đủ hơn cho kín (chỗ video gốc tự
+            # ngừng nói thì giữ — nền dâng lên lấp, xem ``render_pipeline.orig_swell``)
+            from app.services import line_qa
 
-                log(f"{len(budgets)} câu đọc tràn khung dù đã nén tối đa → AI rút gọn bản dịch rồi đọc lại…")
+            loose = {} if not auto_ok else {
+                i: want for i, (_gap, want) in line_qa.loose_lines(line_qa.voice_report(voice_path)).items()
+                if i < len(cues_tr) and i not in cut_idx and i not in budgets
+                and not (i < len(cues_orig) and self.line_key(cues_orig[i].plain) in held)
+                and i not in {int(x) for x in self._voice_meta(voice_path).get("shortened") or []}}
+            if (budgets or loose) and auto_ok:
+                # một lượt AI chỉnh độ dài cho mọi câu cần (rút gọn câu tràn, nói đầy đủ hơn câu xong sớm) rồi đọc lại
+                from app.services.translate_router import fix_lines
+
+                tasks = {**{i: (["short"], b) for i, b in budgets.items()}, **{i: (["long"], w) for i, w in loose.items()}}
+                log(" · ".join(x for x in (f"{len(budgets)} câu đọc tràn khung" if budgets else "",
+                                            f"{len(loose)} câu đọc xong sớm (để trống)" if loose else ""))
+                    + " → AI chỉnh độ dài rồi đọc lại…")
                 try:
-                    new = self.retranslate(item, sorted(budgets), instruction=SHORTEN_REQUEST, budgets=budgets,
-                                           log=log, cancel=cancel)
+                    new = fix_lines([c.plain for c in cues_tr], [c.plain for c in cues_orig], tasks,
+                                    settings=st.settings, target=scfg.translate_target, style=scfg.translate_style,
+                                    brief=self.load_brief(item), log=log, cancel=cancel)
                 except RenderCancelled:
                     raise
                 except Exception as exc:
                     new = None
-                    log(f"⚠ Không rút gọn được bản dịch ({str(exc)[:120]}) — giữ giọng hiện tại.")
+                    log(f"⚠ Không chỉnh được độ dài câu ({str(exc)[:120]}) — giữ giọng hiện tại.")
                 if new and item.srt_translated_path:
+                    save_srt([Cue(c.index, c.start, c.end, wrap_lines(new[i]) if i in new else c.text, dict(c.meta))
+                              for i, c in enumerate(cues_tr)], item.srt_translated_path)
                     cues_tr = load_srt(item.srt_translated_path)
                     force_voice = False                       # SRT vừa đổi → chữ ký mới, khỏi ép đọc lại lần hai
                     voice_path = build_voice(cues_tr)
                     left = [o for o in self.voice_overflow(voice_path) if o[1] > 0.15]
-                    log(f"Đã rút gọn {len(new)} câu · còn {len(left)} câu tràn khung"
+                    log(f"Đã chỉnh {len(new)} câu (rút gọn {len(set(new) & set(budgets))} · nói đầy đủ hơn "
+                        f"{len(set(new) & set(loose))}) · còn {len(left)} câu tràn khung"
                         + (" (video giữ khung cuối cho đủ giọng nếu cần)" if left else ""))
                 if new is not None:                 # lỗi mạng → lần sau thử lại; đã gọi được → không gọi lại
-                    self.mark_shortened(voice_path, budgets)
+                    self.mark_shortened(voice_path, tasks)
                     self.add_line_locks(item.srt_translated_path, "shortened",
-                                        [cues_orig[i].plain for i in budgets if i < len(cues_orig)])
+                                        [cues_orig[i].plain for i in tasks if i < len(cues_orig)])
             on_update(item)
             if voice_path is not None and sub_on and scfg.karaoke:
                 # chữ nổi: căn mốc từng chữ theo giọng một lần (lưu cạnh track) → khung xem trước cũng khớp

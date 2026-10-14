@@ -40,6 +40,10 @@ DUCK_DB = -15.0         # nhạc nền / âm gốc hạ bấy nhiêu dB khi có 
 DUCK_HOLD = 1.0         # khoảng nghỉ giữa hai câu ngắn hơn → giữ nguyên mức hạ (không «bơm» theo từng câu)
 DUCK_ATTACK = 0.15      # bắt đầu hạ trước câu
 DUCK_RELEASE = 0.40     # trả lại sau câu
+#: chỗ không có giọng lâu hơn ``DUCK_HOLD`` (video gốc tự ngừng nói, đầu / cuối video) âm gốc dâng tới ×3 mức đặt (5 % →
+#: 15 %), tối đa 25 %: nhạc / tiếng động lấp chỗ trống như dựng tay, dưới giọng vẫn hạ như cũ. Âm gốc 0 % = tắt hẳn
+SWELL = 3.0
+SWELL_MAX = 25.0
 
 
 def _even(n: float) -> int:
@@ -418,11 +422,22 @@ def voice_timeline_speed(voice: Path | str | None) -> float:
         return 1.0
 
 
-def duck_envelope(voice: Path, out: Path, *, duration: float, tempo: float = 1.0, depth_db: float = DUCK_DB) -> Path | None:
+def orig_swell(cfg: VideoConfig) -> float:
+    """Hệ số dâng âm gốc ở chỗ không có giọng (``SWELL``) — 1 = không dâng (âm gốc tắt, đã to, hay tắt tự hạ nền)."""
+    level = max(0.0, cfg.original_volume)
+    if level <= 0 or not cfg.adaptive_ducking or not cfg.keep_original_audio or cfg.mute:
+        return 1.0
+    return max(1.0, min(SWELL, SWELL_MAX / level))
+
+
+def duck_envelope(voice: Path, out: Path, *, duration: float, tempo: float = 1.0, depth_db: float = DUCK_DB,
+                  swell: float = 1.0) -> Path | None:
     """Đường bao hạ nhạc nền / âm gốc theo chỗ có giọng (WAV stereo 8 kHz, giá trị mẫu = hệ số nhân, dùng với
     ``amultiply``): hạ từ ``DUCK_ATTACK`` giây trước câu, trả lại trong ``DUCK_RELEASE`` giây sau câu, giữ nguyên mức
     hạ qua khoảng nghỉ < ``DUCK_HOLD`` → nền không nhấp nhô theo từng câu như sidechaincompress.
-    ``tempo``: atempo sẽ áp cho giọng khi render (track cũ theo mốc nguồn) — mốc giọng ÷ tempo = mốc video ra."""
+    ``tempo``: atempo sẽ áp cho giọng khi render (track cũ theo mốc nguồn) — mốc giọng ÷ tempo = mốc video ra.
+    ``swell`` > 1: đường bao riêng cho âm gốc đã đặt to lên ×swell — có giọng thì nhân 1/swell (về đúng mức đặt rồi hạ
+    như cũ), chỗ không có giọng giữ ×1 (dâng lên); hệ số luôn ≤ 1 nên vẫn ghi được vào WAV."""
     import numpy as np
 
     from app.services.tts import postprocess
@@ -459,6 +474,8 @@ def duck_envelope(voice: Path, out: Path, *, duration: float, tempo: float = 1.0
         a = np.minimum(0.5 - 0.5 * np.cos(np.pi * up), 0.5 - 0.5 * np.cos(np.pi * down))
         np.maximum(act, a, out=act)
     gain = 10 ** (depth_db * act / 20)
+    if swell > 1.0:
+        gain = gain * (1 / swell + (1 - 1 / swell) * (1 - act))
     n8 = int(duration * 8000)
     g8 = (np.clip(np.interp(np.arange(n8) / 8000, t, gain), 0, 32767 / 32768) * 32768).astype("<i2")
     with wave.open(str(out), "wb") as wf:
@@ -473,6 +490,7 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
                       voice_label: str | None, extras: list[AudioExtra] | None = None,
                       duration: float = 0.0, orig_filters: list[str] | None = None,
                       voice_tempo: float | None = None, duck_label: str | None = None,
+                      orig_duck_label: str | None = None, orig_swell: float = 1.0,
                       preview_loudness: float | None = None) -> str | None:
     """Thêm nhánh audio vào ``g``; trả về nhãn ra (hoặc None nếu không có audio). Chưa chuẩn hoá độ to — bản render
     làm 2 lượt riêng ở ``master_audio``.
@@ -480,7 +498,8 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
     ``voice_tempo``: atempo cho giọng (None = theo tốc độ video, track cũ dựng theo mốc nguồn); track mới đã dựng theo
     mốc video ra → 1.0 (không time-stretch lần hai). ``duck_label``: đường bao ``duck_envelope`` (48 kHz stereo) —
     có thì hạ âm gốc / nhạc nền theo đó, không có thì sidechaincompress như trước. ``preview_loudness``: phát xem
-    trước — chuẩn hoá nhanh 1 lượt cho gần độ to bản render."""
+    trước — chuẩn hoá nhanh 1 lượt cho gần độ to bản render. ``orig_duck_label`` + ``orig_swell``: đường bao riêng của
+    âm gốc (``duck_envelope(swell=)``) — âm gốc đặt to ×swell, đường bao đưa về mức đặt khi có giọng."""
     speed = max(0.25, min(4.0, cfg.speed / 100.0))
     use_orig = bool(audio_src) and cfg.keep_original_audio and not cfg.mute
     use_voice = bool(voice_label) and not cfg.mute
@@ -490,6 +509,7 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
 
     tracks: list[str] = []
     orig = voice = None
+    own = bool(orig_duck_label and use_orig and use_voice and cfg.adaptive_ducking)   # âm gốc có đường bao riêng
     if use_orig:
         f = ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"]
         if cfg.vocal_filter:
@@ -497,7 +517,7 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
         if abs(speed - 1.0) > 0.001:
             f.append(atempo_chain(speed))
         f.extend(orig_filters or [])
-        f.append(f"volume={max(0.0, cfg.original_volume) / 100:.3f}")
+        f.append(f"volume={max(0.0, cfg.original_volume) * (orig_swell if own else 1.0) / 100:.3f}")
         orig = g.chain(audio_src, f, "[orig]")
     if use_voice:
         vt = speed if voice_tempo is None else voice_tempo
@@ -512,13 +532,16 @@ def build_audio_graph(g: Graph, info: MediaInfo, cfg: VideoConfig, *, audio_src:
     duck_orig = bool(orig and voice and cfg.adaptive_ducking)
     ducked = [i for i, ex in enumerate(extras) if ex.duck] if (orig or voice) else []
     envs: list[str] = []
-    if duck_label and voice and (duck_orig or ducked):
-        n = int(duck_orig) + len(ducked)
+    if duck_label and voice and ((duck_orig and not own) or ducked):
+        n = int(duck_orig and not own) + len(ducked)
         envs = [f"[duk{k}]" for k in range(n)]
         g.add(f"{duck_label}asplit={n}{''.join(envs)}" if n > 1 else f"{duck_label}anull{envs[0]}")
 
     if orig and voice:
-        if duck_orig and envs:
+        if own:
+            g.add(f"{orig}{orig_duck_label}amultiply[ducked]")
+            orig = "[ducked]"
+        elif duck_orig and envs:
             g.add(f"{orig}{envs.pop(0)}amultiply[ducked]")
             orig = "[ducked]"
         elif duck_orig:
@@ -822,18 +845,25 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
         a_src = f"[{ga.add_input(['-i', str(audio_override)])}:a]"
     voice_label = f"[{ga.add_input(['-i', str(voice_path)])}:a]" if voice_path is not None else None
     extras = audio_extras(ga, vg.ctx) if audio_extras else []
-    duck = None
-    wants_duck = voice_path is not None and not vcfg.mute and (
-        (vcfg.adaptive_ducking and vcfg.keep_original_audio and a_src is not None) or any(ex.duck for ex in extras))
+    duck = duck_o = None
+    duck_orig = vcfg.adaptive_ducking and vcfg.keep_original_audio and a_src is not None
+    wants_duck = voice_path is not None and not vcfg.mute and (duck_orig or any(ex.duck for ex in extras))
+    swell = orig_swell(vcfg) if duck_orig and voice_path is not None else 1.0
     if wants_duck:
-        env = duck_envelope(voice_path, job_dir / "duck.wav", duration=dur,
-                            tempo=speed if voice_tempo is None else voice_tempo)
-        if env is not None:
-            duck = ga.chain(f"[{ga.add_input(['-i', str(env)])}:a]",
-                            ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckenv]")
+        vt = speed if voice_tempo is None else voice_tempo
+        if any(ex.duck for ex in extras) or swell <= 1.0:
+            env = duck_envelope(voice_path, job_dir / "duck.wav", duration=dur, tempo=vt)
+            if env is not None:
+                duck = ga.chain(f"[{ga.add_input(['-i', str(env)])}:a]",
+                                ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckenv]")
+        if swell > 1.0:                               # âm gốc: dâng ở chỗ không có giọng
+            env = duck_envelope(voice_path, job_dir / "duck_goc.wav", duration=dur, tempo=vt, swell=swell)
+            if env is not None:
+                duck_o = ga.chain(f"[{ga.add_input(['-i', str(env)])}:a]",
+                                  ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"], "[duckgoc]")
     mix = build_audio_graph(ga, eff_info if looped else info, vcfg, audio_src=a_src, voice_label=voice_label,
                             extras=extras, duration=dur, orig_filters=audio_orig_filters, voice_tempo=voice_tempo,
-                            duck_label=duck)
+                            duck_label=duck, orig_duck_label=duck_o, orig_swell=swell)
     audio_cmd = mix_path = master_path = None
     if mix:
         ga.add(f"{mix}apad=whole_dur={dur:.3f},atrim=end={dur:.3f},asetpts=PTS-STARTPTS[am]")

@@ -5,6 +5,8 @@
 - đọc quá nhanh (nén gần trần cho vừa khung) / vẫn tràn khung;
 - câu dịch còn chữ gốc (Hán / Kana / Hangul), chưa dịch (y nguyên lời gốc) hoặc trống;
 - xưng hô lệch hồ sơ kịch bản (vd hồ sơ chốt «tao – mày» mà câu dùng «tôi» / «bạn»);
+- giọng đọc xong sớm, để trống trong lúc người nói gốc còn nói (``loose_lines`` — nói đầy đủ hơn cho kín; chỗ video
+  gốc tự ngừng nói thì không tính: giữ nhịp video);
 - câu vừa sửa (giọng chưa đọc lại) ước lượng dài quá khung — ``FitModel``: tốc độ đọc đo từ track giọng của chính
   video, khung từng câu như lúc tạo giọng; cũng cho giới hạn ký tự khi nhờ AI dịch lại / rút gọn.
 
@@ -30,6 +32,10 @@ _NOUN_AFTER = {"bạn": re.compile(r"(?:mày|tao|tôi|tớ|cậu|nó|bè|thân|g
 #: chưa có giọng để đo: ký tự / giây ở tốc độ gốc của giọng (VieNeu đo được ~20–21) — để thấp cho chắc
 DEFAULT_CPS = 19.0
 TEMPO_CAP = 1.25                 # = ``generator.MAX_TOTAL_TEMPO`` (không nạp generator: kéo theo numpy ~1 s)
+#: giọng đọc xong trước khi người nói gốc hết câu quá ngần này (giây) → nói đầy đủ hơn cho kín (đo video chó: câu 11, 14
+#: xong sớm 1,1 s); chừa ``KEEP_PAUSE`` nghỉ tự nhiên trước câu sau
+LOOSE = 0.6
+KEEP_PAUSE = 0.45
 MIN_SPOKEN = 0.55                # câu ngắn nhất cũng đọc mất chừng này (đo VieNeu: «Thế con» 0,7 s)
 _PERSON = re.compile(r"^-\s*(?P<name>[^(:]+?)\s*(?:\([^)]*\))?\s*:(?P<rest>.*)$")
 _QUOTED = re.compile(r"«([^»]+)»")
@@ -37,12 +43,14 @@ _QUOTED = re.compile(r"«([^»]+)»")
 
 @dataclass(frozen=True)
 class Flag:
-    kind: str        # voice · fast · src · pronoun · empty
+    kind: str        # voice · fast · src · pronoun · empty · gap
     short: str       # chữ ngắn trên dòng câu
     detail: str      # giải thích (tooltip / báo cáo)
+    budget: int = 0  # gap: số ký tự nên có cho kín chỗ
 
 
-_KIND_NAMES = {"voice": "giọng đọc", "fast": "đọc nhanh", "src": "chưa dịch", "pronoun": "xưng hô", "empty": "trống"}
+_KIND_NAMES = {"voice": "giọng đọc", "fast": "đọc nhanh", "src": "chưa dịch", "pronoun": "xưng hô", "empty": "trống",
+               "gap": "xong sớm"}
 #: lỗi giọng đọc do CHỮ (đổi cách nói thì đỡ) — khác lỗi âm thanh («vào đột ngột», «chữ đầu nghe thành…»: Whisper hay
 #: nghe nhầm), sửa chữ không giúp gì
 _WORD_PROBLEMS = ("đọc sai chữ", "đọc lặp", "không nghe ra lời", "nuốt chữ")
@@ -85,6 +93,31 @@ class FitModel:
     def too_short(self, i: int) -> bool:
         """Khung quá ngắn: một chữ cũng không đọc kịp (vd câu 0,3 s bị tách đôi) — rút gọn kiểu gì cũng không vừa."""
         return self.floor / self.cap > self.slots[i] + OVER
+
+
+def loose_lines(report: dict[int, dict] | None, texts: list[str] | None = None) -> dict[int, tuple[float, int]]:
+    """Câu giọng đọc xong sớm, để trống trong lúc người nói gốc còn nói → {chỉ số: (giây trống, số ký tự nên có)}. Trống
+    tính tới khi người nói gốc hết câu (``phu_de_het`` trong báo cáo), không quá mốc câu sau trừ ``KEEP_PAUSE`` — chỗ
+    video gốc tự ngừng nói không tính. Nói đầy đủ hơn tối đa +40 %, ít nhất +8 ký tự mới đáng sửa. ``texts``: chỉ tính
+    câu giọng đọc đúng chữ đang thấy."""
+    rows = sorted((report or {}).items(), key=lambda x: float(x[1].get("bat_dau") or 0))
+    out: dict[int, tuple[float, int]] = {}
+    for k, (i, r) in enumerate(rows):
+        try:
+            s, e, end = float(r["bat_dau"]), float(r["ket_thuc"]), float(r["phu_de_het"])
+            nxt = float(rows[k + 1][1]["bat_dau"]) - KEEP_PAUSE if k + 1 < len(rows) else end
+        except (KeyError, TypeError, ValueError):
+            continue
+        chu = _norm(r.get("chu", ""))
+        if texts is not None and (i >= len(texts) or _norm(texts[i]) != chu):
+            continue
+        early, dur = min(end, nxt) - e, e - s
+        if early < LOOSE or dur <= 0.3 or len(chu.split()) < 4:
+            continue
+        want = min(int(len(chu) * 1.4), int(len(chu) * (dur + early) / dur))
+        if want - len(chu) >= 8:
+            out[i] = (round(early, 2), want)
+    return out
 
 
 def fit_model(cues: list, report: dict[int, dict] | None = None, *, min_gap: float = 0.1, cap: float = 1.25,
@@ -182,6 +215,7 @@ def review_flags(texts: list[str], sources: list[str] | None = None, *, cjk_ok: 
     pron = brief_pronouns(brief)
     every = set().union(*pron.values()) if pron else set()
     fast = max(FAST, base_speed * 1.08)
+    loose = loose_lines(report, texts) if report else {}
     out: dict[int, list[Flag]] = {}
     for i, raw in enumerate(texts):
         t = _norm(raw)
@@ -217,6 +251,11 @@ def review_flags(texts: list[str], sources: list[str] | None = None, *, cjk_ok: 
                 flags.append(Flag("fast", "sẽ đọc nhanh",
                                   f"Ước lượng: phải đọc nhanh ~×{need:.2f} cho vừa khung — bấm ✂ để AI rút gọn "
                                   f"(≤ {fit.budget(i, t)} ký tự)."))
+        if i in loose:
+            early, want = loose[i]
+            flags.append(Flag("gap", f"xong sớm {early:.1f}s",
+                              f"Giọng đọc xong trước khi người nói gốc hết câu {early:.1f}s (để trống) — bấm «Tự sửa» để AI "
+                              f"nói đầy đủ hơn (~{want} ký tự) cho kín chỗ.", want))
         if voiced and r:                                       # giọng đọc đúng chữ đang thấy (chưa sửa sau khi đọc)
             problems = str(r.get("loi_qc") or "").strip()
             tries = int(float(r.get("so_lan_doc") or 1))
@@ -239,8 +278,9 @@ def review_flags(texts: list[str], sources: list[str] | None = None, *, cjk_ok: 
 def fix_tasks(flags: dict[int, list[Flag]], texts: list[str], fit: FitModel | None = None,
               has_source: bool = True) -> tuple[dict[int, tuple[list[str], int | None]], list[int]]:
     """Câu ⚠ AI sửa được → ({chỉ số: ([việc], giới hạn ký tự)}, [câu bỏ qua: khung quá ngắn]). Việc: ``short`` (rút
-    gọn cho vừa khung) · ``translate`` (còn chữ gốc / chưa dịch / trống) · ``pronoun:<lý do>`` · ``voice`` (giọng đọc
-    sai chữ — đổi cách nói). Lỗi âm thanh thuần (vào đột ngột, giọng dự phòng) bỏ qua: sửa chữ không giúp gì."""
+    gọn cho vừa khung) · ``long`` (giọng xong sớm: nói đầy đủ hơn, tới ``budget`` ký tự) · ``translate`` (còn chữ gốc /
+    chưa dịch / trống) · ``pronoun:<lý do>`` · ``voice`` (giọng đọc sai chữ — đổi cách nói). Lỗi âm thanh thuần (vào đột
+    ngột, giọng dự phòng) bỏ qua: sửa chữ không giúp gì."""
     tasks: dict[int, tuple[list[str], int | None]] = {}
     skipped: list[int] = []
     for i, fs in sorted(flags.items()):
@@ -255,6 +295,9 @@ def fix_tasks(flags: dict[int, list[Flag]], texts: list[str], fit: FitModel | No
                     continue
                 todo.append("short")
                 budget = b
+            elif f.kind == "gap" and f.budget and "long" not in todo and "short" not in todo:
+                todo.append("long")
+                budget = f.budget
             elif f.kind in ("src", "empty") and has_source and "translate" not in todo:
                 todo.append("translate")
             elif f.kind == "pronoun":

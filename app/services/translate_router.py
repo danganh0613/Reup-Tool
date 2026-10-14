@@ -655,6 +655,11 @@ def _task_text(task: str, budget: int | None, target: str) -> str:
                 "meaning, the names and the speaker's pronouns, natural spoken style; keep its slang, nicknames and "
                 "playful spellings word for word and shorten by dropping other words (filler words, repetitions, less "
                 "important details); never cut a phrase off mid-way, no abbreviations or symbols (it is read aloud)")
+    if task == "long":
+        return (f"the voice finishes too early and leaves dead air while the original speaker is still talking — say it "
+                f"a little more fully, about {budget} characters (not more): add a natural connector or spell out what "
+                "the SOURCE implies; keep the meaning, slang, names and pronouns; never add new facts, filler words or "
+                "repetition")
     if task == "translate":
         return (f"not translated yet (empty, or still the source text / source-language characters) — translate the "
                 f"SOURCE line fully into {target}")
@@ -727,6 +732,8 @@ def fix_lines(current: list[str], source: list[str] | None, tasks: dict[int, tup
                 continue
             if "short" in tasks[i][0] and (len(t) >= len(old) or cut_off(t, old)):
                 continue                                 # «rút gọn» mà không ngắn hơn / chỉ cắt cụt → giữ câu cũ
+            if "long" in tasks[i][0] and not len(old) < len(t) <= (tasks[i][1] or len(t)) * 1.15:
+                continue                                 # «nói đầy đủ hơn» mà không dài hơn / dài quá chỗ → giữ câu cũ
             out[i] = t
     if log:
         log(f"Tự sửa câu ⚠: AI sửa {len(out)}/{len(idxs)} câu ({router.current.provider}/{router.current.model})")
