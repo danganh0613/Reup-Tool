@@ -1351,7 +1351,7 @@ class Pipeline:
 
                 tasks = {**{i: (["short"], b) for i, b in budgets.items()}, **{i: (["long"], w) for i, w in loose.items()}}
                 log(" · ".join(x for x in (f"{len(budgets)} câu đọc tràn khung" if budgets else "",
-                                            f"{len(loose)} câu đọc xong sớm (để trống)" if loose else ""))
+                                            f"{len(loose)} câu đọc xong sớm (để trống)" if loose else "") if x)
                     + " → AI chỉnh độ dài rồi đọc lại…")
                 try:
                     new = fix_lines([c.plain for c in cues_tr], [c.plain for c in cues_orig], tasks,
