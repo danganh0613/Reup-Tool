@@ -480,7 +480,9 @@
       Đo lại: câu nhanh bất thường 2 → 0, lặng giữa câu dài nhất 1,10 → 0,54 s, tràn 1 → 0.
     - Chuẩn bị: một lượt AI chỉnh độ dài (`fix_lines`, thay `retranslate(SHORTEN_REQUEST)`) — rút gọn câu tràn + nói đầy
       đủ hơn câu xong sớm (`line_qa.loose_lines`: xong trước khi người nói gốc hết câu ≥ 0,6 s, chừa 0,45 s nghỉ, ≤ +40 %);
-      bỏ câu người dùng sửa / đã chỉnh (`locks`), «Đến lời gốc». ⚠ «xong sớm» + «Tự sửa» (việc `long`) cho câu bị khoá.
+      bỏ câu người dùng sửa / đã chỉnh (`locks`). Chạy cả ở «Đến lời gốc» (bản dịch dán từ AI ngoài — trước đây bước rút
+      gọn tự động bỏ qua chế độ này, mà người dùng làm chủ yếu bằng chế độ này). ⚠ «xong sớm» + «Tự sửa» (việc `long`)
+      cho câu bị khoá.
     - Âm gốc dâng ở chỗ không có giọng ≥ `DUCK_HOLD` (`render_pipeline.orig_swell`: ×3 mức đặt, tối đa 25 %; 0 % / tắt tự
       hạ nền thì không) — đường bao riêng của âm gốc (`duck_envelope(swell=)`: hệ số ≤ 1, âm gốc đặt to ×swell), nhạc nền
       giữ đường bao thường. Bản render + xem trước (`live_preview`).

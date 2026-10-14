@@ -1332,9 +1332,10 @@ class Pipeline:
                        if (b := int(len(cues_tr[i].plain) * slot / (slot + d) * 0.9)) >= 6}
             # bản dịch đã gộp / xoá câu (số câu khác bản gốc) → chỉ số câu không khớp, không rút gọn từng câu
             same_count = bool(cues_tr) and len(cues_tr) == len(cues_orig)
-            # «Đến lời gốc»: bạn tự dịch bên ngoài → không nhờ AI chỉnh bản dịch của bạn
-            auto_ok = (same_count and use_tr and preview_out is None and st.settings.prepare_until != "source"
-                       and bool(item.srt_path) and Path(item.srt_path).exists())
+            # cả bản dịch dán từ AI ngoài («Đến lời gốc») cũng chỉnh độ dài — AI giữ chữ, chỉ rút / nói đầy đủ hơn; câu
+            # bạn tự sửa (khoá «edited») thì không đụng
+            auto_ok = (same_count and use_tr and preview_out is None and bool(item.srt_path)
+                       and Path(item.srt_path).exists())
             # giọng đọc xong sớm, để trống trong lúc người nói gốc còn nói → nói đầy đủ hơn cho kín (chỗ video gốc tự
             # ngừng nói thì giữ — nền dâng lên lấp, xem ``render_pipeline.orig_swell``)
             from app.services import line_qa
