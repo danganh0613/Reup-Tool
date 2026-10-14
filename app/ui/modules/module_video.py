@@ -405,14 +405,17 @@ class VideoModule(BaseModule):
         short = {"720p": 720, "1080p": 1080, "1440p": 1440, "4K": 2160}.get(cfg.resolution) or (
             min(it.width, it.height) if it is not None and it.width and it.height else 1080)
         fps = float(cfg.fps) if str(cfg.fps).isdigit() else (it.fps if it is not None and it.fps else 30.0)
-        cap = bitrate_cap(cfg, short, short, fps)
+        src = (it.width, it.height) if it is not None and it.width and it.height else None
+        cap = bitrate_cap(cfg, short, short, fps, source=src)
+        low = src is not None and min(src) < short             # video gốc nhỏ hơn khung ra → trần theo gốc
         if cap is None:
             text = "Không giới hạn bitrate — thường 60–90 MB mỗi phút ở 1080p (gấp 3–4 lần video tải về)."
             sub = "tối đa"
         else:
             mb = (cap + int(audio_bitrate(cfg).rstrip("k")) / 1000) * 60 / 8
             codec = "H.265" if cfg.size_mode == "small" or cfg.video_codec == VIDEO_CODECS[1] else "H.264"
-            text = (f"{codec} · tối đa {cap:g} Mbps ở {short}p · ≈ {mb:.0f} MB mỗi phút (cảnh tĩnh nhẹ hơn)."
+            at = f"video gốc {min(src)}p" if low else f"{short}p"
+            text = (f"{codec} · tối đa {cap:g} Mbps ({at}) · ≈ {mb:.0f} MB mỗi phút (cảnh tĩnh nhẹ hơn)."
                     + (" «Nhẹ nhất» luôn dùng H.265 (bỏ qua «Chuẩn nén»)." if cfg.size_mode == "small" else ""))
             sub = f"≈ {mb:.0f} MB / phút"
         self.size_hint.configure(text=text)

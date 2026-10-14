@@ -444,6 +444,9 @@
     - `pick_encoder(cap=)`: NVENC / CPU thêm trần; QSV (ICQ) và AMF (CQP) không nhận trần → có trần thì chạy VBR
       (`-b:v` 0,8 × trần); VideoToolbox có trần → `-b:v`. Nhật ký xuất ghi «Dung lượng file: trần hình … · tiếng …».
     - Tab Video: khối «Dung lượng file xuất» (sau Khung hình) — «Xuất để» + ước lượng MB mỗi phút; agent `settings(size)`.
+    - Trần theo cả video GỐC (`bitrate_cap(source=)`): gốc nhỏ hơn khung ra (576p phóng lên 1080p) thì tính theo cạnh
+      ngắn của gốc — đo video chó 576×1024 → 1080×1920 (`audit_out/bitrate/probe_lowres.py`): 3,5 Mbps VMAF 95,8 so với
+      bản 6 Mbps, 40 so với 71 MB (2,5 Mbps: VMAF 90,8 — thấp quá). Nhật ký ghi «— theo video gốc 576p».
 
 52. **Tự sửa câu lỗi (A–D)** (test `test_autofix.py` 34; người dùng: «tự chỉnh / phụ đề lỗi thì tool có tự fix không»):
     - `line_qa.FitModel` / `fit_model`: khung từng câu như lúc tạo giọng (`khung` trong `.cues.csv`, chưa có thì tới câu

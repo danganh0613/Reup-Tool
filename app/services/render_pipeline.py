@@ -654,12 +654,17 @@ _CAP_H264 = ((720, 3.5), (1080, 6.0), (1440, 10.0), (100000, 20.0))
 AUDIO_SOCIAL, AUDIO_MAX = "128k", "192k"
 
 
-def bitrate_cap(cfg: VideoConfig, width: int, height: int, fps: float = 30.0) -> float | None:
-    """Trần bitrate hình (Mbps) theo «Dung lượng file xuất»; None = không giới hạn (giữ chất lượng tối đa)."""
+def bitrate_cap(cfg: VideoConfig, width: int, height: int, fps: float = 30.0,
+                source: tuple[int, int] | None = None) -> float | None:
+    """Trần bitrate hình (Mbps) theo «Dung lượng file xuất»; None = không giới hạn (giữ chất lượng tối đa).
+    ``source``: khung video gốc — gốc nhỏ hơn khung ra (576p phóng lên 1080p) thì chi tiết chỉ tới độ phân giải gốc,
+    trần tính theo gốc (đo video chó 576×1024 → 1080×1920: 3,5 Mbps VMAF 95,8 so với bản 6 Mbps, 40 so với 71 MB)."""
     mode = getattr(cfg, "size_mode", "social")
     if mode == "max":
         return None
     short = min(width, height) if width and height else 1080
+    if source and all(source):
+        short = min(short, min(source))
     cap = next(c for s, c in _CAP_H264 if short <= s)
     if fps and fps > 31:
         cap *= 1.5
@@ -867,11 +872,14 @@ def plan_render(item: VideoItem, info: MediaInfo, vcfg: VideoConfig, *, ffmpeg: 
     tail = ["-g", str(int(vcfg.gop_size)), "-keyint_min", str(max(1, int(vcfg.gop_size) // 2))]         if vcfg.gop_size and vcfg.gop_size > 0 else []
     tail += ["-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_path)]
     fps_out = float(vcfg.fps) if str(vcfg.fps).isdigit() else (info.fps or 30.0)
-    cap = bitrate_cap(vcfg, vg.ctx.width, vg.ctx.height, fps_out)        # «Dung lượng file xuất»
+    src = (info.width, info.height)
+    cap = bitrate_cap(vcfg, vg.ctx.width, vg.ctx.height, fps_out, source=src)        # «Dung lượng file xuất»
     enc = pick_encoder(ffmpeg, vcfg, log, cap=cap)
     if log and cap:
+        low = all(src) and min(src) < min(vg.ctx.width, vg.ctx.height)
         log(f"Dung lượng file: trần hình {cap:g} Mbps · tiếng {audio_bitrate(vcfg)} "
-            f"({'nhẹ nhất, H.265' if vcfg.size_mode == 'small' else 'đăng mạng xã hội'})")
+            f"({'nhẹ nhất, H.265' if vcfg.size_mode == 'small' else 'đăng mạng xã hội'})"
+            + (f" — theo video gốc {min(src)}p" if low else ""))
     cpu_cmd = None
     if hw_encoder_of(enc):
         from dataclasses import replace as _replace
