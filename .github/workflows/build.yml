@@ -148,8 +148,17 @@ jobs:
       - name: Cài thư viện
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt av pyinstaller
+          # thư viện chính (bắt buộc): phần trên dòng «Tuỳ chọn» của requirements.txt — như tools/build_mac.sh
+          sed '/Tuỳ chọn/,$d' requirements.txt > req-core.txt
+          pip install -r req-core.txt av pyinstaller
           python -c "import tkinter, platform; print('Tk', tkinter.TkVersion, platform.machine()); assert platform.machine() == '${{ matrix.arch }}'"
+
+      - name: Thư viện tuỳ chọn (nhận diện tiếng Trung, đọc chữ in sẵn) — gói nào không có bản Mac thì bỏ qua
+        run: |
+          sed -n '/Tuỳ chọn/,$p' requirements.txt | sed 's/#.*//' | while read -r pkg; do
+            [ -n "$pkg" ] || continue
+            pip install "$pkg" || echo "::warning::Bỏ qua $pkg — app vẫn chạy, thiếu phần dùng gói này"
+          done
 
       - name: Cài VieNeu (TTS tiếng Việt local, tuỳ chọn)
         continue-on-error: true
